@@ -1,0 +1,418 @@
+:root {
+  --bg: #f1f1f3;
+  --body-top: #e9e9ee;
+  --body-bottom: #dedee4;
+  --key-top: #fdfdfe;
+  --key-bottom: #f3f3f6;
+  --key-dark-top: #e7e7ec;
+  --key-dark-bot: #dbdbe2;
+  --rim: rgba(255, 255, 255, 0.9);
+  --text: #16161a;
+  --text-muted: #a8a8b0;
+  --glow-core: #fff6de;
+  --glow-mid: #ffd9a0;
+  --glow-edge: #f3b27c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--bg);
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.aura-page {
+  position: relative;
+  display: grid;
+  min-height: 100svh;
+  grid-template-rows: minmax(280px, 58svh) auto minmax(16px, 1fr);
+  place-items: center;
+  overflow: hidden;
+  background: var(--bg);
+  isolation: isolate;
+}
+
+.aura-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.seed-entry {
+  position: absolute;
+  top: 36%;
+  left: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  transition:
+    opacity 420ms ease,
+    transform 420ms ease;
+}
+
+.seed-entry.is-hidden {
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -54%);
+}
+
+.seed-entry input {
+  width: auto;
+  max-width: min(82vw, 720px);
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: rgba(22, 22, 26, 0.84);
+  caret-color: rgba(22, 22, 26, 0.44);
+  font-size: clamp(38px, 8vw, 78px);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.instrument-zone {
+  position: relative;
+  z-index: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 0 16px;
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 620ms ease,
+    transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.is-committed .instrument-zone {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.instrument-body {
+  position: relative;
+  width: min(680px, calc(100vw - 32px));
+  aspect-ratio: 680 / 310;
+  padding: clamp(17px, 3.5vw, 24px);
+  border-radius: clamp(26px, 5vw, 34px);
+  background: linear-gradient(180deg, var(--body-top), var(--body-bottom));
+  box-shadow:
+    0 2px 4px rgba(70, 70, 90, 0.04),
+    0 12px 28px rgba(70, 70, 90, 0.09),
+    0 40px 80px rgba(70, 70, 90, 0.06);
+  corner-shape: squircle;
+}
+
+.instrument-body::before,
+.transport-button::before,
+.piano-key::before {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--rim) 0%, rgba(255, 255, 255, 0) 52%);
+}
+
+.instrument-header {
+  position: relative;
+  display: grid;
+  grid-template-columns: 13px auto minmax(40px, 1fr) auto auto;
+  align-items: center;
+  gap: 16px;
+  height: clamp(44px, 8.2vw, 56px);
+}
+
+.power-led {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 44% 38%, var(--glow-core) 0 23%, var(--glow-mid) 49%, var(--glow-edge) 100%);
+  box-shadow: 0 0 12px 2px rgba(255, 190, 120, 0.55);
+  animation: ledPulse 2.6s ease-in-out infinite alternate;
+}
+
+.device-label {
+  color: var(--text-muted);
+  font-size: 20px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+
+.seed-id {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  opacity: 0.86;
+  white-space: nowrap;
+}
+
+.header-rule {
+  height: 1px;
+  margin: 0 4px;
+  background: rgba(168, 168, 176, 0.3);
+}
+
+.transport {
+  display: flex;
+  gap: 10px;
+}
+
+.transport-button {
+  position: relative;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--body-top), var(--body-bottom));
+  box-shadow:
+    0 1px 2px rgba(70, 70, 90, 0.05),
+    0 4px 10px rgba(70, 70, 90, 0.07);
+  cursor: pointer;
+  transition:
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 220ms ease;
+}
+
+.transport-button:active {
+  transform: translateY(1px);
+  box-shadow:
+    0 1px 1px rgba(70, 70, 90, 0.035),
+    0 2px 6px rgba(70, 70, 90, 0.045);
+}
+
+.triangle {
+  width: 0;
+  height: 0;
+  opacity: 0.82;
+}
+
+.triangle.is-left {
+  border-top: 5px solid transparent;
+  border-right: 7px solid var(--text-muted);
+  border-bottom: 5px solid transparent;
+  transform: translateX(-1px);
+}
+
+.triangle.is-right {
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid var(--text-muted);
+  transform: translateX(1px);
+}
+
+.keybed {
+  position: relative;
+  height: calc(100% - clamp(44px, 8.2vw, 56px) - clamp(10px, 2vw, 16px));
+  margin-top: clamp(10px, 2vw, 16px);
+}
+
+.white-keys {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  height: 100%;
+  grid-template-columns: repeat(14, 1fr);
+  gap: 5px;
+}
+
+.piano-key {
+  position: relative;
+  border: 0;
+  cursor: pointer;
+  touch-action: none;
+  transition:
+    transform 320ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 320ms ease,
+    background 320ms ease,
+    filter 320ms ease;
+}
+
+.piano-key::after {
+  position: absolute;
+  inset: -18px -12px;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  content: "";
+  background: radial-gradient(circle at 50% 42%, rgba(255, 246, 222, 0.68), rgba(255, 217, 160, 0.36) 48%, rgba(243, 178, 124, 0) 74%);
+  filter: blur(14px);
+  opacity: 0;
+  transition: opacity 320ms ease;
+}
+
+.white-key {
+  height: 100%;
+  border-radius: 0 0 10px 10px;
+  background: linear-gradient(180deg, var(--key-top), var(--key-bottom));
+  box-shadow:
+    0 1px 2px rgba(70, 70, 90, 0.05),
+    0 4px 10px rgba(70, 70, 90, 0.07);
+}
+
+.upper-key {
+  --upper-key-width: calc(((100% - 65px) / 14) * 0.58);
+  position: absolute;
+  top: 0;
+  left: calc(var(--upper-left) - (var(--upper-key-width) / 2));
+  z-index: 3;
+  width: var(--upper-key-width);
+  height: 62%;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(180deg, var(--key-dark-top), var(--key-dark-bot));
+  box-shadow:
+    0 2px 5px rgba(70, 70, 90, 0.09),
+    0 10px 18px rgba(70, 70, 90, 0.08);
+}
+
+.piano-key.is-active {
+  transform: translateY(2px);
+  background: radial-gradient(circle at 50% 42%, var(--glow-core) 0%, var(--glow-mid) 55%, var(--glow-edge) 100%);
+  box-shadow:
+    0 0 24px 6px rgba(255, 200, 140, 0.45),
+    0 0 60px 20px rgba(255, 190, 120, 0.22);
+  filter: blur(0.3px);
+  transition-duration: 120ms;
+}
+
+.piano-key.is-active::after {
+  opacity: 1;
+  transition-duration: 120ms;
+}
+
+.instrument-zone h1 {
+  margin: 24px 0 0;
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1;
+  text-align: center;
+}
+
+.save-aura {
+  height: 32px;
+  margin-top: 18px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  pointer-events: none;
+  text-transform: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 360ms ease,
+    transform 360ms ease;
+}
+
+.save-aura.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+@keyframes ledPulse {
+  from {
+    opacity: 0.85;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 620px) {
+  .aura-page {
+    grid-template-rows: minmax(250px, 55svh) auto minmax(12px, 1fr);
+  }
+
+  .instrument-header {
+    grid-template-columns: 13px auto minmax(18px, 1fr) auto;
+    gap: 12px;
+  }
+
+  .seed-id {
+    display: none;
+  }
+
+  .transport {
+    gap: 8px;
+  }
+
+  .transport-button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .white-keys {
+    gap: 4px;
+  }
+
+  .upper-key {
+    --upper-key-width: calc(((100% - 52px) / 14) * 0.58);
+  }
+}
+
+@media (max-width: 420px) {
+  .instrument-body {
+    padding: 15px;
+  }
+
+  .device-label {
+    font-size: 18px;
+  }
+
+  .instrument-zone h1 {
+    margin-top: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+
+  .power-led {
+    animation: none;
+  }
+}
