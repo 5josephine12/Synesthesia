@@ -2,6 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Download,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  X,
+} from "lucide-react";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
 
 type Color = {
@@ -21,7 +31,7 @@ type Mapping = {
   pitches: Color[];
 };
 
-type AuraShape = "bloom" | "ribbon" | "beam" | "arc" | "prism" | "veil";
+type AuraShape = "bloom" | "ribbon" | "beam" | "arc" | "prism" | "veil" | "wave" | "halo" | "flare" | "mesh";
 
 type BlobParticle = {
   id: number;
@@ -120,31 +130,31 @@ const COMPOSITION_ANCHORS = [
 
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
   piano: {
-    shapes: ["ribbon", "bloom", "arc", "prism", "veil", "beam"],
+    shapes: ["ribbon", "bloom", "wave", "arc", "mesh", "halo", "prism", "veil", "flare", "beam"],
     accentOffset: 18,
     angleBias: -0.08,
     softness: 0.62,
   },
   glass: {
-    shapes: ["prism", "beam", "arc", "bloom", "ribbon", "veil"],
+    shapes: ["prism", "flare", "mesh", "beam", "halo", "arc", "bloom", "wave", "ribbon", "veil"],
     accentOffset: -20,
     angleBias: -0.34,
     softness: 0.38,
   },
   pad: {
-    shapes: ["veil", "bloom", "ribbon", "arc", "prism", "beam"],
+    shapes: ["veil", "bloom", "halo", "wave", "ribbon", "mesh", "arc", "flare", "prism", "beam"],
     accentOffset: 12,
     angleBias: 0.14,
     softness: 0.9,
   },
   pluck: {
-    shapes: ["beam", "prism", "arc", "ribbon", "bloom", "veil"],
+    shapes: ["beam", "flare", "prism", "wave", "arc", "mesh", "ribbon", "halo", "bloom", "veil"],
     accentOffset: -14,
     angleBias: 0.44,
     softness: 0.32,
   },
   organ: {
-    shapes: ["arc", "ribbon", "veil", "bloom", "beam", "prism"],
+    shapes: ["arc", "halo", "ribbon", "wave", "veil", "bloom", "mesh", "flare", "beam", "prism"],
     accentOffset: 22,
     angleBias: 0,
     softness: 0.7,
@@ -533,6 +543,114 @@ function drawAuraParticle(
     context.fill();
   }
 
+  if (blob.shape === "wave") {
+    const length = radius * blob.stretch * 1.3;
+    const amplitude = radius * (0.22 + blob.thickness * 0.48);
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    for (let track = -1; track <= 1; track += 1) {
+      context.beginPath();
+      for (let step = 0; step <= 32; step += 1) {
+        const progress = step / 32;
+        const x = -length / 2 + length * progress;
+        const y =
+          Math.sin(progress * Math.PI * (2.4 + Math.abs(blob.curvature)) + blob.repeat * 0.72 + track * 0.58) *
+            amplitude +
+          track * radius * 0.18;
+        if (step === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      }
+      context.strokeStyle =
+        track === 0
+          ? `rgba(255, 255, 255, ${alpha * 0.24})`
+          : makeLinearAuraGradient(context, blob, length, alpha * 0.68, track > 0);
+      context.lineWidth = radius * (track === 0 ? 0.035 : 0.11 + blob.thickness * 0.08);
+      context.stroke();
+      context.shadowBlur = 0;
+    }
+  }
+
+  if (blob.shape === "halo") {
+    context.save();
+    context.scale(1.15 + blob.stretch * 0.3, 0.74 + blob.thickness * 0.25);
+    context.lineCap = "round";
+    for (let ring = 0; ring < 3; ring += 1) {
+      const ringRadius = radius * (0.48 + ring * 0.24);
+      context.beginPath();
+      context.arc(0, 0, ringRadius, -Math.PI * (0.86 - ring * 0.05), Math.PI * (0.96 + ring * 0.08));
+      context.strokeStyle =
+        ring === 1
+          ? `rgba(255, 255, 255, ${alpha * 0.22})`
+          : colorToHslar(ring === 0 ? blob.accent : blob.color, alpha * (0.62 - ring * 0.12));
+      context.lineWidth = radius * (0.055 + blob.thickness * 0.055);
+      context.stroke();
+      context.shadowBlur = 0;
+    }
+    context.restore();
+  }
+
+  if (blob.shape === "flare") {
+    const rayCount = 7 + (blob.repeat % 5);
+    context.lineCap = "round";
+    for (let ray = 0; ray < rayCount; ray += 1) {
+      const rayAngle = (ray / rayCount) * Math.PI * 2 + blob.curvature * 0.18;
+      const inner = radius * (0.12 + (ray % 2) * 0.08);
+      const outer = radius * (0.7 + ((ray * 7 + blob.repeat) % 5) * 0.15) * (0.72 + blob.stretch * 0.2);
+      context.beginPath();
+      context.moveTo(Math.cos(rayAngle) * inner, Math.sin(rayAngle) * inner);
+      context.lineTo(Math.cos(rayAngle) * outer, Math.sin(rayAngle) * outer);
+      context.strokeStyle = ray % 3 === 0 ? `rgba(255, 255, 255, ${alpha * 0.24})` : colorToHslar(blob.color, alpha * 0.5);
+      context.lineWidth = radius * (0.025 + blob.thickness * 0.035);
+      context.stroke();
+      context.shadowBlur = 0;
+    }
+    const core = context.createRadialGradient(0, 0, 0, 0, 0, radius * 0.36);
+    core.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.3})`);
+    core.addColorStop(0.28, colorToHslar(blob.accent, alpha * 0.72));
+    core.addColorStop(1, colorToHslar(blob.color, 0));
+    context.fillStyle = core;
+    context.beginPath();
+    context.arc(0, 0, radius * 0.36, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  if (blob.shape === "mesh") {
+    const length = radius * blob.stretch * 1.15;
+    const height = radius * (0.85 + blob.thickness * 1.2);
+    const points = [
+      [-0.5, -0.08],
+      [-0.25, -0.5],
+      [0.18, -0.36],
+      [0.5, -0.06],
+      [0.31, 0.48],
+      [-0.18, 0.37],
+      [-0.44, 0.18],
+    ] as const;
+    context.fillStyle = makeLinearAuraGradient(context, blob, length, alpha * 0.48);
+    context.beginPath();
+    points.forEach(([x, y], index) => {
+      const px = x * length;
+      const py = (y + Math.sin(index + blob.repeat) * 0.05 * blob.curvature) * height;
+      if (index === 0) context.moveTo(px, py);
+      else context.lineTo(px, py);
+    });
+    context.closePath();
+    context.fill();
+    context.shadowBlur = 0;
+    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.42);
+    context.lineWidth = Math.max(0.6, radius * 0.018);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(points[0][0] * length, points[0][1] * height);
+    context.lineTo(points[3][0] * length, points[3][1] * height);
+    context.moveTo(points[1][0] * length, points[1][1] * height);
+    context.lineTo(points[4][0] * length, points[4][1] * height);
+    context.moveTo(points[6][0] * length, points[6][1] * height);
+    context.lineTo(points[2][0] * length, points[2][1] * height);
+    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.2})`;
+    context.stroke();
+  }
+
   context.restore();
 }
 
@@ -604,8 +722,6 @@ export function AuraToy() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
-  const soundPickerRef = useRef<HTMLDivElement | null>(null);
-  const soundTriggerRef = useRef<HTMLButtonElement | null>(null);
   const blobsRef = useRef<BlobParticle[]>([]);
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
@@ -636,7 +752,6 @@ export function AuraToy() {
   const [octave, setOctave] = useState(BASE_OCTAVE);
   const [resetting, setResetting] = useState(false);
   const [soundMode, setSoundMode] = useState<SoundModeId>(DEFAULT_SOUND_MODE);
-  const [soundMenuOpen, setSoundMenuOpen] = useState(false);
   const [layerCount, setLayerCount] = useState(0);
   const [exportState, setExportState] = useState<ExportState>("idle");
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
@@ -655,28 +770,6 @@ export function AuraToy() {
   useEffect(() => {
     soundModeRef.current = soundMode;
   }, [soundMode]);
-
-  useEffect(() => {
-    if (!soundMenuOpen) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!soundPickerRef.current?.contains(event.target as Node)) {
-        setSoundMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setSoundMenuOpen(false);
-      soundTriggerRef.current?.focus();
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [soundMenuOpen]);
 
   const disposeToneEngine = useCallback(() => {
     audioGenerationRef.current += 1;
@@ -819,6 +912,10 @@ export function AuraToy() {
       arc: 0.14,
       prism: 0.11,
       veil: 0.17,
+      wave: 0.1,
+      halo: 0.13,
+      flare: 0.12,
+      mesh: 0.12,
     };
     const repeatScale = 0.92 + repeatRng() * 0.2 + Math.min(repeat, 7) * 0.025;
     const radius = baseRadius[shape] * (0.84 + identityRng() * 0.56) * (0.82 + velocity * 0.38) * repeatScale;
@@ -829,6 +926,10 @@ export function AuraToy() {
       arc: [1.1, 2.2],
       prism: [1.3, 3.2],
       veil: [1.8, 4.2],
+      wave: [2.2, 4.8],
+      halo: [0.9, 2.1],
+      flare: [0.8, 1.8],
+      mesh: [1.2, 2.7],
     };
     const [minimumStretch, maximumStretch] = stretchByShape[shape];
     const stretch = lerp(minimumStretch, maximumStretch, identityRng()) * (0.9 + repeatRng() * 0.22);
@@ -1313,6 +1414,17 @@ export function AuraToy() {
     [selectSoundMode],
   );
 
+  useEffect(() => {
+    const handleModeKeyboard = (event: KeyboardEvent) => {
+      if (previewKind || event.metaKey || event.altKey || event.ctrlKey || event.repeat) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      cycleSoundMode(event.key === "ArrowUp" ? -1 : 1);
+    };
+    window.addEventListener("keydown", handleModeKeyboard);
+    return () => window.removeEventListener("keydown", handleModeKeyboard);
+  }, [cycleSoundMode, previewKind]);
+
   const resetAura = useCallback(() => {
     visualGenerationRef.current += 1;
     releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -1327,7 +1439,6 @@ export function AuraToy() {
     setOctave(BASE_OCTAVE);
     soundModeRef.current = DEFAULT_SOUND_MODE;
     setSoundMode(DEFAULT_SOUND_MODE);
-    setSoundMenuOpen(false);
     setPreviewKind(null);
     setLayerCount(0);
     setExportState("idle");
@@ -1339,8 +1450,6 @@ export function AuraToy() {
   }, [disposeToneEngine]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
-  const activeSoundModeIndex = SOUND_MODES.findIndex(({ id }) => id === soundMode);
-
   return (
     <main className={`aura-page ${resetting ? "is-resetting" : ""}`}>
       <canvas ref={canvasRef} className="aura-canvas" aria-hidden="true" />
@@ -1356,41 +1465,23 @@ export function AuraToy() {
               onClick={resetAura}
             />
             <div
-              ref={soundPickerRef}
-              className="sound-picker"
+              className="mode-dial"
               style={{ "--mode-length": activeSoundMode.label.length } as CSSProperties}
               onWheel={(event) => {
                 event.preventDefault();
                 if (dialWheelTimerRef.current !== null || event.deltaY === 0) return;
                 const direction = event.deltaY > 0 ? 1 : -1;
                 cycleSoundMode(direction);
-                setSoundMenuOpen(true);
                 dialWheelTimerRef.current = window.setTimeout(() => {
                   dialWheelTimerRef.current = null;
                 }, 180);
               }}
             >
-              <button
-                ref={soundTriggerRef}
-                type="button"
+              <div
                 className="mode-screen"
+                role="status"
+                aria-live="polite"
                 aria-label={`Sound mode: ${activeSoundMode.label}`}
-                aria-haspopup="listbox"
-                aria-expanded={soundMenuOpen}
-                title="Choose sound mode"
-                onClick={() => setSoundMenuOpen((open) => !open)}
-                onKeyDown={(event) => {
-                  if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    cycleSoundMode(1);
-                    setSoundMenuOpen(true);
-                  }
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    cycleSoundMode(-1);
-                    setSoundMenuOpen(true);
-                  }
-                }}
               >
                 <span className="mode-screen-glass" aria-hidden="true">
                   <span
@@ -1400,35 +1491,27 @@ export function AuraToy() {
                     {activeSoundMode.label}
                   </span>
                 </span>
-              </button>
-              {soundMenuOpen ? (
-                <div className="sound-wheel" role="listbox" aria-label="Sound modes">
-                  <span className="sound-wheel-focus" aria-hidden="true" />
-                  {SOUND_MODES.map((mode, index) => {
-                    let offset = index - activeSoundModeIndex;
-                    if (offset > SOUND_MODES.length / 2) offset -= SOUND_MODES.length;
-                    if (offset < -SOUND_MODES.length / 2) offset += SOUND_MODES.length;
-                    return (
-                      <button
-                        key={mode.id}
-                        type="button"
-                        role="option"
-                        aria-selected={mode.id === soundMode}
-                        className={`sound-wheel-option ${mode.id === soundMode ? "is-selected" : ""}`}
-                        style={
-                          {
-                            "--mode-offset": offset,
-                            "--mode-distance": Math.abs(offset),
-                          } as CSSProperties
-                        }
-                        onClick={() => selectSoundMode(mode.id)}
-                      >
-                        {mode.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
+              </div>
+              <div className="mode-stepper" aria-label="Sound mode controls">
+                <button
+                  type="button"
+                  className="mode-step-button"
+                  aria-label="Previous sound mode"
+                  title="Previous sound mode"
+                  onClick={() => cycleSoundMode(-1)}
+                >
+                  <ChevronUp size={11} strokeWidth={1.6} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="mode-step-button"
+                  aria-label="Next sound mode"
+                  title="Next sound mode"
+                  onClick={() => cycleSoundMode(1)}
+                >
+                  <ChevronDown size={11} strokeWidth={1.6} aria-hidden="true" />
+                </button>
+              </div>
             </div>
             <span className="header-rule" aria-hidden="true" />
             <div className="transport" aria-label="Octave controls">
@@ -1440,7 +1523,7 @@ export function AuraToy() {
                 disabled={octave === MIN_OCTAVE}
                 onClick={() => shiftOctave(-1)}
               >
-                <span className="triangle is-left" aria-hidden="true" />
+                <ChevronLeft className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -1450,7 +1533,7 @@ export function AuraToy() {
                 disabled={octave === MAX_OCTAVE}
                 onClick={() => shiftOctave(1)}
               >
-                <span className="triangle is-right" aria-hidden="true" />
+                <ChevronRight className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -1502,7 +1585,7 @@ export function AuraToy() {
           disabled={layerCount === 0 || exportState !== "idle"}
           onClick={() => setPreviewKind("image")}
         >
-          <span className="export-icon is-still" aria-hidden="true" />
+          <ImageIcon className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -1512,7 +1595,7 @@ export function AuraToy() {
           disabled={layerCount === 0 || exportState !== "idle"}
           onClick={() => setPreviewKind("video")}
         >
-          <span className="export-icon is-video" aria-hidden="true" />
+          <VideoIcon className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
         </button>
         <span className="sr-only" aria-live="polite">
           {exportState === "video" ? "Rendering Aura video" : ""}
@@ -1536,16 +1619,6 @@ export function AuraToy() {
               <span className="export-preview-label">{previewKind === "image" ? "Still" : "Motion"}</span>
               <div className="export-preview-actions">
                 <button
-                  type="button"
-                  className="preview-control"
-                  aria-label="Close export preview"
-                  title="Close preview"
-                  disabled={exportState !== "idle"}
-                  onClick={() => setPreviewKind(null)}
-                >
-                  <span className="close-icon" aria-hidden="true" />
-                </button>
-                <button
                   ref={previewDownloadRef}
                   type="button"
                   className={`preview-control ${exportState === "video" ? "is-exporting" : ""}`}
@@ -1557,7 +1630,17 @@ export function AuraToy() {
                     else void downloadVideo();
                   }}
                 >
-                  <span className="download-icon" aria-hidden="true" />
+                  <Download className="control-icon" size={15} strokeWidth={1.5} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="preview-control"
+                  aria-label="Close export preview"
+                  title="Close preview"
+                  disabled={exportState !== "idle"}
+                  onClick={() => setPreviewKind(null)}
+                >
+                  <X className="control-icon" size={16} strokeWidth={1.5} aria-hidden="true" />
                 </button>
               </div>
             </header>

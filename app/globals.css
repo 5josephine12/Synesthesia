@@ -167,11 +167,15 @@ button {
   box-shadow: 0 0 8px 1px rgba(255, 208, 162, 0.4);
 }
 
-.sound-picker {
+.mode-dial {
   --mode-width: clamp(72px, calc(42px + var(--mode-length) * 7px), 112px);
   position: relative;
   z-index: 5;
-  width: var(--mode-width);
+  display: grid;
+  width: calc(var(--mode-width) + 20px);
+  grid-template-columns: var(--mode-width) 14px;
+  align-items: center;
+  gap: 6px;
   margin-right: var(--header-rule-gap);
   margin-left: clamp(16px, 2.67vw, 32px);
   transition: width 360ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -191,7 +195,6 @@ button {
     inset 0 2px 5px rgba(70, 70, 90, 0.11),
     inset 0 -1px 1px rgba(255, 255, 255, 0.52),
     0 1px rgba(255, 255, 255, 0.28);
-  cursor: pointer;
 }
 
 .mode-screen::after {
@@ -201,11 +204,6 @@ button {
   content: "";
   pointer-events: none;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 48%, rgba(92, 91, 101, 0.035));
-}
-
-.mode-screen:focus-visible {
-  outline: 1px solid rgba(126, 125, 134, 0.32);
-  outline-offset: 3px;
 }
 
 .mode-screen-glass {
@@ -226,7 +224,7 @@ button {
 .mode-readout {
   display: block;
   color: #78777f;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: inherit;
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0;
@@ -244,94 +242,46 @@ button {
   animation: dialRollBackward 360ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.sound-wheel {
-  position: absolute;
-  top: calc(100% + 9px);
-  left: 50%;
-  width: max(116px, calc(var(--mode-width) + 28px));
-  height: 130px;
-  overflow: hidden;
-  border: 1px solid rgba(126, 125, 134, 0.11);
-  border-radius: 8px;
-  background: rgba(224, 223, 227, 0.97);
-  box-shadow:
-    inset 0 3px 8px rgba(70, 70, 90, 0.12),
-    inset 0 -2px 4px rgba(255, 255, 255, 0.5),
-    0 8px 20px rgba(70, 70, 90, 0.11);
-  transform: translateX(-50%);
-  backdrop-filter: blur(12px);
-}
-
-.sound-wheel::before,
-.sound-wheel::after {
-  position: absolute;
-  right: 0;
-  left: 0;
-  z-index: 3;
-  height: 40px;
-  content: "";
-  pointer-events: none;
-}
-
-.sound-wheel::before {
-  top: 0;
-  background: linear-gradient(180deg, #e0dfe3 12%, rgba(224, 223, 227, 0));
-}
-
-.sound-wheel::after {
-  bottom: 0;
-  background: linear-gradient(0deg, #e0dfe3 12%, rgba(224, 223, 227, 0));
-}
-
-.sound-wheel-focus {
-  position: absolute;
-  top: 50%;
-  right: 9px;
-  left: 9px;
+.mode-stepper {
+  display: grid;
   height: 30px;
-  border-top: 1px solid rgba(255, 255, 255, 0.46);
-  border-bottom: 1px solid rgba(102, 101, 111, 0.09);
-  border-radius: 5px;
-  pointer-events: none;
-  transform: translateY(-50%);
+  align-content: space-between;
 }
 
-.sound-wheel-option {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  z-index: 2;
-  width: calc(100% - 20px);
-  height: 28px;
-  padding: 0 8px;
+.mode-step-button {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  place-items: center;
   border: 0;
-  background: transparent;
-  color: rgba(112, 111, 120, calc(0.78 - var(--mode-distance) * 0.2));
+  border-radius: 50%;
+  background: var(--control-surface);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    0 1px 2px rgba(70, 70, 90, 0.2),
+    0 3px 7px rgba(70, 70, 90, 0.09);
+  color: #8d8c94;
   cursor: pointer;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 10px;
-  font-weight: 400;
-  letter-spacing: 0;
-  text-align: center;
-  text-transform: uppercase;
-  transform:
-    translate(-50%, calc(-50% + var(--mode-offset) * 30px))
-    scale(calc(1 - var(--mode-distance) * 0.07));
   transition:
-    color 320ms ease,
-    transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
-  white-space: nowrap;
+    color 160ms ease,
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 180ms ease;
 }
 
-.sound-wheel-option:hover,
-.sound-wheel-option:focus-visible {
-  outline: 0;
-  color: #55545c;
+.mode-step-button:hover,
+.mode-step-button:focus-visible {
+  color: #5d5c64;
 }
 
-.sound-wheel-option.is-selected {
-  color: #414047;
-  font-weight: 500;
+.mode-step-button:focus-visible {
+  outline: 1px solid rgba(126, 125, 134, 0.34);
+  outline-offset: 2px;
+}
+
+.mode-step-button:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 2px rgba(70, 70, 90, 0.11);
 }
 
 .header-rule {
@@ -356,6 +306,7 @@ button {
   border-radius: 50%;
   background: var(--control-surface);
   box-shadow: var(--control-depth-shadow);
+  color: var(--text-muted);
   cursor: pointer;
   transition:
     transform 120ms cubic-bezier(0.4, 0, 0.2, 1),
@@ -374,24 +325,10 @@ button {
   cursor: default;
 }
 
-.triangle {
-  width: 0;
-  height: 0;
-  opacity: 0.82;
-}
-
-.triangle.is-left {
-  border-top: 5px solid transparent;
-  border-right: 7px solid var(--text-muted);
-  border-bottom: 5px solid transparent;
-  transform: translateX(-1px);
-}
-
-.triangle.is-right {
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
-  border-left: 7px solid var(--text-muted);
-  transform: translateX(1px);
+.control-icon {
+  display: block;
+  flex: none;
+  stroke: currentColor;
 }
 
 .keybed {
@@ -446,22 +383,6 @@ button {
   border-radius: 4px 4px 14px 14px;
   background: var(--control-surface);
   box-shadow: var(--key-depth-shadow);
-}
-
-.white-key::before {
-  position: absolute;
-  top: 14%;
-  right: 0;
-  left: 0;
-  z-index: 1;
-  height: 2px;
-  content: "";
-  pointer-events: none;
-  background: #f5f5f7;
-}
-
-.white-key.is-active::before {
-  opacity: 0;
 }
 
 .white-key:first-child {
@@ -602,59 +523,7 @@ button {
   transform: none;
 }
 
-.export-icon {
-  position: relative;
-  display: block;
-  width: 14px;
-  height: 12px;
-}
-
-.export-icon.is-still {
-  border: 1px solid currentColor;
-  border-radius: 2px;
-}
-
-.export-icon.is-still::before {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 2px;
-  height: 2px;
-  border-radius: 50%;
-  background: currentColor;
-  content: "";
-}
-
-.export-icon.is-still::after {
-  position: absolute;
-  right: 1px;
-  bottom: 1px;
-  width: 8px;
-  height: 5px;
-  clip-path: polygon(0 100%, 38% 34%, 58% 62%, 76% 18%, 100% 100%);
-  background: currentColor;
-  content: "";
-}
-
-.export-icon.is-video {
-  border: 1px solid currentColor;
-  border-radius: 2px;
-}
-
-.export-icon.is-video::after {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-top: 3px solid transparent;
-  border-bottom: 3px solid transparent;
-  border-left: 5px solid currentColor;
-  content: "";
-  transform: translate(-38%, -50%);
-}
-
-.export-button.is-exporting .export-icon {
+.export-button.is-exporting .control-icon {
   animation: exportPulse 760ms ease-in-out infinite alternate;
 }
 
@@ -693,7 +562,7 @@ button {
 
 .export-preview-label {
   color: #85848c;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: inherit;
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0;
@@ -728,64 +597,7 @@ button {
   max-height: calc(100dvh - 126px);
 }
 
-.close-icon,
-.download-icon {
-  position: relative;
-  display: block;
-  width: 13px;
-  height: 13px;
-}
-
-.close-icon::before,
-.close-icon::after {
-  position: absolute;
-  top: 6px;
-  left: 1px;
-  width: 11px;
-  height: 1px;
-  border-radius: 1px;
-  background: currentColor;
-  content: "";
-}
-
-.close-icon::before {
-  transform: rotate(45deg);
-}
-
-.close-icon::after {
-  transform: rotate(-45deg);
-}
-
-.download-icon::before {
-  position: absolute;
-  top: 0;
-  left: 6px;
-  width: 1px;
-  height: 8px;
-  background: currentColor;
-  content: "";
-}
-
-.download-icon::after {
-  position: absolute;
-  right: 1px;
-  bottom: 0;
-  left: 1px;
-  height: 5px;
-  border-right: 1px solid currentColor;
-  border-bottom: 1px solid currentColor;
-  border-left: 1px solid currentColor;
-  border-radius: 0 0 2px 2px;
-  content: "";
-}
-
-.preview-control .download-icon {
-  background:
-    linear-gradient(45deg, transparent 45%, currentColor 46% 54%, transparent 55%) 3px 4px / 5px 5px no-repeat,
-    linear-gradient(-45deg, transparent 45%, currentColor 46% 54%, transparent 55%) 6px 4px / 5px 5px no-repeat;
-}
-
-.preview-control.is-exporting .download-icon {
+.preview-control.is-exporting .control-icon {
   animation: exportPulse 760ms ease-in-out infinite alternate;
 }
 
@@ -889,7 +701,7 @@ button {
 }
 
 @media (max-width: 420px) {
-  .sound-picker {
+  .mode-dial {
     --mode-width: clamp(64px, calc(36px + var(--mode-length) * 6px), 96px);
   }
 

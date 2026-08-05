@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Aura",
-  description: "A synesthesia simulator that turns a word and a melody into a luminous aura.",
+  description: "A synesthesia simulator that turns melody into a luminous visual composition.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
