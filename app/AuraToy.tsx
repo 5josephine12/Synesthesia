@@ -127,31 +127,31 @@ const COMPOSITION_ANCHORS = [
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
   piano: {
     shapes: ["ribbon", "bloom", "wave", "arc", "mesh", "halo", "prism", "veil", "flare", "beam"],
-    accentOffset: 18,
+    accentOffset: 42,
     angleBias: -0.08,
     softness: 0.62,
   },
   glass: {
     shapes: ["prism", "flare", "mesh", "beam", "halo", "arc", "bloom", "wave", "ribbon", "veil"],
-    accentOffset: -20,
+    accentOffset: -52,
     angleBias: -0.34,
     softness: 0.38,
   },
   pad: {
     shapes: ["veil", "bloom", "halo", "wave", "ribbon", "mesh", "arc", "flare", "prism", "beam"],
-    accentOffset: 12,
+    accentOffset: 30,
     angleBias: 0.14,
     softness: 0.9,
   },
   pluck: {
     shapes: ["beam", "flare", "prism", "wave", "arc", "mesh", "ribbon", "halo", "bloom", "veil"],
-    accentOffset: -14,
+    accentOffset: -36,
     angleBias: 0.44,
     softness: 0.32,
   },
   organ: {
     shapes: ["arc", "halo", "ribbon", "wave", "veil", "bloom", "mesh", "flare", "beam", "prism"],
-    accentOffset: 22,
+    accentOffset: 58,
     angleBias: 0,
     softness: 0.7,
   },
@@ -313,8 +313,8 @@ function spectralColor(index: number, rng: () => number, pale = false): Color {
   const hue = modulo(SPECTRAL_HUES[modulo(index, SPECTRAL_HUES.length)] + (rng() - 0.5) * 16, 360);
   return {
     h: hue,
-    s: pale ? 68 + rng() * 14 : 80 + rng() * 16,
-    l: pale ? 62 + rng() * 8 : 50 + rng() * 14,
+    s: pale ? 72 + rng() * 14 : 88 + rng() * 12,
+    l: pale ? 61 + rng() * 8 : 45 + rng() * 13,
   };
 }
 
@@ -392,15 +392,148 @@ function makeLinearAuraGradient(
 ) {
   const primary = reverse ? blob.accent : blob.color;
   const accent = reverse ? blob.color : blob.accent;
+  const spectralLift = {
+    h: modulo(lerp(primary.h, accent.h, 0.5), 360),
+    s: clamp(lerp(primary.s, accent.s, 0.5) - 8, 58, 88),
+    l: clamp(lerp(primary.l, accent.l, 0.5) + 18, 66, 78),
+  };
   const gradient = context.createLinearGradient(-length / 2, 0, length / 2, 0);
   gradient.addColorStop(0, colorToHslar(primary, 0));
   gradient.addColorStop(0.18, colorToHslar(primary, alpha * 0.46));
   gradient.addColorStop(0.47, colorToHslar(accent, alpha * 0.88));
-  gradient.addColorStop(0.53, `rgba(255, 255, 255, ${alpha * 0.24})`);
+  gradient.addColorStop(0.53, colorToHslar(spectralLift, alpha * 0.36));
   gradient.addColorStop(0.62, colorToHslar(accent, alpha));
   gradient.addColorStop(0.78, colorToHslar(primary, alpha * 0.58));
   gradient.addColorStop(1, colorToHslar(accent, 0));
   return gradient;
+}
+
+function traceOrganicSheet(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  curvature: number,
+  phase: number,
+) {
+  const bend = curvature * height * 0.34;
+  const shoulder = Math.sin(phase * 1.73) * height * 0.16;
+  context.beginPath();
+  context.moveTo(-width * 0.52, -height * 0.08);
+  context.bezierCurveTo(
+    -width * 0.36,
+    -height * 0.58 + shoulder,
+    width * 0.05,
+    -height * 0.44 - bend,
+    width * 0.5,
+    -height * 0.16,
+  );
+  context.bezierCurveTo(
+    width * 0.38,
+    height * 0.42 + shoulder,
+    -width * 0.08,
+    height * 0.58 + bend,
+    -width * 0.48,
+    height * 0.22,
+  );
+  context.closePath();
+}
+
+function drawSpectralField(
+  context: CanvasRenderingContext2D,
+  blob: BlobParticle,
+  radius: number,
+  alpha: number,
+) {
+  const fieldWidth = radius * (1.7 + Math.min(blob.stretch, 5.4) * 0.42);
+  const fieldHeight = radius * (1.35 + blob.softness * 1.2 + blob.thickness * 0.42);
+  const fieldColor = {
+    h: modulo(blob.color.h + (blob.repeat % 2 === 0 ? 10 : -8), 360),
+    s: clamp(blob.color.s + 7, 0, 100),
+    l: clamp(blob.color.l + 2, 0, 68),
+  };
+
+  context.save();
+  context.globalCompositeOperation = "multiply";
+  context.filter = `blur(${Math.max(5, radius * (0.1 + blob.softness * 0.13))}px)`;
+
+  const field = context.createRadialGradient(
+    -fieldWidth * 0.18,
+    -fieldHeight * 0.12,
+    radius * 0.05,
+    0,
+    0,
+    Math.max(fieldWidth, fieldHeight),
+  );
+  field.addColorStop(0, colorToHslar(blob.accent, alpha * 0.44));
+  field.addColorStop(0.28, colorToHslar(fieldColor, alpha * 0.32));
+  field.addColorStop(0.7, colorToHslar(blob.color, alpha * 0.14));
+  field.addColorStop(1, colorToHslar(blob.color, 0));
+  context.fillStyle = field;
+  context.beginPath();
+  context.ellipse(0, 0, fieldWidth, fieldHeight, blob.curvature * 0.08, 0, Math.PI * 2);
+  context.fill();
+
+  const fluorescentBand = context.createLinearGradient(
+    -fieldWidth * 0.55,
+    fieldHeight * 0.28,
+    fieldWidth * 0.48,
+    -fieldHeight * 0.24,
+  );
+  fluorescentBand.addColorStop(0, colorToHslar(blob.color, 0));
+  fluorescentBand.addColorStop(0.24, colorToHslar(blob.color, alpha * 0.18));
+  fluorescentBand.addColorStop(0.56, colorToHslar(blob.accent, alpha * 0.38));
+  fluorescentBand.addColorStop(0.82, colorToHslar(fieldColor, alpha * 0.24));
+  fluorescentBand.addColorStop(1, colorToHslar(blob.accent, 0));
+  context.fillStyle = fluorescentBand;
+  traceOrganicSheet(context, fieldWidth * 1.18, fieldHeight * 0.82, blob.curvature, blob.id * 0.31);
+  context.fill();
+  context.restore();
+}
+
+function drawRadiographicChain(
+  context: CanvasRenderingContext2D,
+  blob: BlobParticle,
+  radius: number,
+  alpha: number,
+  length: number,
+  segmentCount: number,
+) {
+  const liftedColor = {
+    h: modulo(blob.accent.h + 4, 360),
+    s: clamp(blob.accent.s - 14, 52, 88),
+    l: clamp(blob.accent.l + 16, 64, 78),
+  };
+
+  context.save();
+  context.globalCompositeOperation = "multiply";
+  for (let index = 0; index < segmentCount; index += 1) {
+    const progress = segmentCount === 1 ? 0.5 : index / (segmentCount - 1);
+    const x = lerp(-length * 0.5, length * 0.5, progress);
+    const wave = Math.sin(progress * Math.PI * 1.24 + blob.curvature * 0.8 + blob.repeat * 0.38);
+    const y = wave * radius * (0.28 + Math.abs(blob.curvature) * 0.12);
+    const nextWave = Math.cos(progress * Math.PI * 1.24 + blob.curvature * 0.8 + blob.repeat * 0.38);
+    const segmentWidth = radius * (0.32 + ((index + blob.id) % 3) * 0.055);
+    const segmentHeight = radius * (0.2 + blob.thickness * 0.18 + (index % 2) * 0.035);
+
+    context.save();
+    context.translate(x, y);
+    context.rotate(Math.atan2(nextWave * radius * 0.32, length / Math.max(2, segmentCount - 1)) + Math.PI * 0.5);
+    const segmentGradient = context.createLinearGradient(0, -segmentHeight, 0, segmentHeight);
+    segmentGradient.addColorStop(0, colorToHslar(liftedColor, alpha * 0.38));
+    segmentGradient.addColorStop(0.42, colorToHslar(blob.accent, alpha * 0.56));
+    segmentGradient.addColorStop(1, colorToHslar(blob.color, alpha * 0.18));
+    context.fillStyle = segmentGradient;
+    context.shadowColor = colorToHslar(blob.color, alpha * 0.28);
+    context.shadowBlur = radius * 0.1;
+    traceOrganicSheet(context, segmentWidth, segmentHeight, blob.curvature * 0.34, index + blob.id * 0.17);
+    context.fill();
+    context.shadowBlur = 0;
+    context.strokeStyle = colorToHslar(blob.color, alpha * 0.48);
+    context.lineWidth = Math.max(0.55, radius * 0.014);
+    context.stroke();
+    context.restore();
+  }
+  context.restore();
 }
 
 function drawAuraParticle(
@@ -414,6 +547,8 @@ function drawAuraParticle(
   context.save();
   context.translate(centerX, centerY);
   context.rotate(blob.angle);
+  drawSpectralField(context, blob, radius, alpha);
+  context.globalCompositeOperation = "multiply";
   context.shadowColor = colorToHslar(blob.color, alpha * 0.42);
   context.shadowBlur = radius * (0.16 + blob.softness * 0.34);
 
@@ -431,7 +566,17 @@ function drawAuraParticle(
     context.fill();
 
     const nucleus = context.createRadialGradient(radius * 0.12, -radius * 0.08, 0, radius * 0.12, -radius * 0.08, radius * 0.34);
-    nucleus.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.34})`);
+    nucleus.addColorStop(
+      0,
+      colorToHslar(
+        {
+          h: modulo(blob.accent.h + 12, 360),
+          s: clamp(blob.accent.s - 18, 54, 84),
+          l: clamp(blob.accent.l + 18, 66, 78),
+        },
+        alpha * 0.42,
+      ),
+    );
     nucleus.addColorStop(0.2, colorToHslar(blob.accent, alpha * 0.9));
     nucleus.addColorStop(1, colorToHslar(blob.accent, 0));
     context.fillStyle = nucleus;
@@ -457,26 +602,33 @@ function drawAuraParticle(
     context.stroke();
 
     context.shadowBlur = 0;
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.28})`;
+    context.strokeStyle = colorToHslar(
+      {
+        h: modulo(blob.accent.h + 10, 360),
+        s: clamp(blob.accent.s - 20, 50, 82),
+        l: clamp(blob.accent.l + 20, 68, 80),
+      },
+      alpha * 0.36,
+    );
     context.lineWidth *= 0.16;
     traceRibbon();
     context.stroke();
+    drawRadiographicChain(context, blob, radius, alpha * 0.72, length * 0.82, 5 + (blob.id % 3));
   }
 
   if (blob.shape === "beam") {
     const length = radius * blob.stretch;
     const height = radius * (0.24 + blob.thickness * 0.5);
     context.fillStyle = makeLinearAuraGradient(context, blob, length, alpha * 0.9);
-    context.beginPath();
-    context.roundRect(-length / 2, -height / 2, length, height, height / 2);
+    traceOrganicSheet(context, length, height, blob.curvature * 0.38, blob.id * 0.27);
     context.fill();
 
     context.shadowBlur = 0;
     const core = makeLinearAuraGradient(context, blob, length * 0.72, alpha, true);
     context.fillStyle = core;
-    context.beginPath();
-    context.roundRect(-length * 0.36, -height * 0.1, length * 0.72, height * 0.2, height * 0.1);
+    traceOrganicSheet(context, length * 0.72, height * 0.24, -blob.curvature * 0.25, blob.id * 0.41);
     context.fill();
+    drawRadiographicChain(context, blob, radius, alpha * 0.56, length * 0.72, 4 + (blob.id % 3));
   }
 
   if (blob.shape === "arc") {
@@ -492,31 +644,44 @@ function drawAuraParticle(
     context.stroke();
 
     context.shadowBlur = 0;
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.26})`;
+    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.34);
     context.lineWidth *= 0.14;
     context.beginPath();
     context.arc(0, 0, radius, startAngle + 0.08, endAngle - 0.08);
     context.stroke();
     context.restore();
+    drawRadiographicChain(
+      context,
+      blob,
+      radius,
+      alpha * 0.88,
+      radius * blob.stretch * 1.18,
+      7 + (blob.id % 4),
+    );
   }
 
   if (blob.shape === "prism") {
     const length = radius * blob.stretch;
     const height = radius * (0.7 + blob.thickness * 0.9);
-    context.fillStyle = makeLinearAuraGradient(context, blob, length, alpha * 0.86);
-    context.beginPath();
-    context.moveTo(-length / 2, -height * 0.18);
-    context.lineTo(-length * 0.12, -height / 2);
-    context.lineTo(length / 2, -height * 0.12);
-    context.lineTo(length * 0.3, height / 2);
-    context.lineTo(-length * 0.42, height * 0.3);
-    context.closePath();
-    context.fill();
-
-    context.shadowBlur = 0;
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.24})`;
-    context.lineWidth = Math.max(0.5, radius * 0.025);
-    context.stroke();
+    for (let plate = -1; plate <= 1; plate += 1) {
+      context.save();
+      context.translate(plate * length * 0.09, plate * height * 0.16);
+      context.rotate(plate * 0.08 + blob.curvature * 0.035);
+      context.fillStyle = makeLinearAuraGradient(context, blob, length, alpha * (0.62 - Math.abs(plate) * 0.08), plate > 0);
+      traceOrganicSheet(
+        context,
+        length * (0.82 + (plate + 1) * 0.08),
+        height * (0.7 + Math.abs(plate) * 0.16),
+        blob.curvature * (plate === 0 ? 0.6 : -0.4),
+        blob.id * 0.21 + plate,
+      );
+      context.fill();
+      context.shadowBlur = 0;
+      context.strokeStyle = colorToHslar(plate === 0 ? blob.accent : blob.color, alpha * 0.38);
+      context.lineWidth = Math.max(0.5, radius * 0.018);
+      context.stroke();
+      context.restore();
+    }
   }
 
   if (blob.shape === "veil") {
@@ -528,14 +693,12 @@ function drawAuraParticle(
     gradient.addColorStop(0.72, colorToHslar(blob.accent, alpha * 0.55));
     gradient.addColorStop(1, colorToHslar(blob.color, 0));
     context.fillStyle = gradient;
-    context.beginPath();
-    context.roundRect(-length / 2, -height / 2, length, height, Math.min(radius * 0.36, height / 2));
+    traceOrganicSheet(context, length, height, blob.curvature, blob.repeat * 0.43);
     context.fill();
 
     context.shadowBlur = 0;
     context.fillStyle = makeLinearAuraGradient(context, blob, length * 0.84, alpha * 0.46);
-    context.beginPath();
-    context.roundRect(-length * 0.42, -height * 0.06, length * 0.84, height * 0.12, height * 0.06);
+    traceOrganicSheet(context, length * 0.84, height * 0.22, -blob.curvature, blob.repeat * 0.73 + 1);
     context.fill();
   }
 
@@ -558,7 +721,7 @@ function drawAuraParticle(
       }
       context.strokeStyle =
         track === 0
-          ? `rgba(255, 255, 255, ${alpha * 0.24})`
+          ? colorToHslar(blob.accent, alpha * 0.34)
           : makeLinearAuraGradient(context, blob, length, alpha * 0.68, track > 0);
       context.lineWidth = radius * (track === 0 ? 0.035 : 0.11 + blob.thickness * 0.08);
       context.stroke();
@@ -576,7 +739,7 @@ function drawAuraParticle(
       context.arc(0, 0, ringRadius, -Math.PI * (0.86 - ring * 0.05), Math.PI * (0.96 + ring * 0.08));
       context.strokeStyle =
         ring === 1
-          ? `rgba(255, 255, 255, ${alpha * 0.22})`
+          ? colorToHslar(blob.accent, alpha * 0.34)
           : colorToHslar(ring === 0 ? blob.accent : blob.color, alpha * (0.62 - ring * 0.12));
       context.lineWidth = radius * (0.055 + blob.thickness * 0.055);
       context.stroke();
@@ -595,13 +758,23 @@ function drawAuraParticle(
       context.beginPath();
       context.moveTo(Math.cos(rayAngle) * inner, Math.sin(rayAngle) * inner);
       context.lineTo(Math.cos(rayAngle) * outer, Math.sin(rayAngle) * outer);
-      context.strokeStyle = ray % 3 === 0 ? `rgba(255, 255, 255, ${alpha * 0.24})` : colorToHslar(blob.color, alpha * 0.5);
+      context.strokeStyle = colorToHslar(ray % 3 === 0 ? blob.accent : blob.color, alpha * (ray % 3 === 0 ? 0.36 : 0.5));
       context.lineWidth = radius * (0.025 + blob.thickness * 0.035);
       context.stroke();
       context.shadowBlur = 0;
     }
     const core = context.createRadialGradient(0, 0, 0, 0, 0, radius * 0.36);
-    core.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.3})`);
+    core.addColorStop(
+      0,
+      colorToHslar(
+        {
+          h: modulo(blob.accent.h + 8, 360),
+          s: clamp(blob.accent.s - 18, 54, 84),
+          l: clamp(blob.accent.l + 18, 66, 78),
+        },
+        alpha * 0.4,
+      ),
+    );
     core.addColorStop(0.28, colorToHslar(blob.accent, alpha * 0.72));
     core.addColorStop(1, colorToHslar(blob.color, 0));
     context.fillStyle = core;
@@ -643,8 +816,9 @@ function drawAuraParticle(
     context.lineTo(points[4][0] * length, points[4][1] * height);
     context.moveTo(points[6][0] * length, points[6][1] * height);
     context.lineTo(points[2][0] * length, points[2][1] * height);
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.2})`;
+    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.32);
     context.stroke();
+    drawRadiographicChain(context, blob, radius, alpha * 0.5, length * 0.72, 4 + (blob.id % 4));
   }
 
   context.restore();
@@ -689,7 +863,7 @@ function drawAuraComposition(
     const age = replayProgress === undefined ? Math.max(0, now - blob.createdAt) : replayAge * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
-    const alpha = clamp((0.24 + blob.velocity * 0.31) * Math.min(1, replayAge), 0, 0.56);
+    const alpha = clamp((0.2 + blob.velocity * 0.27) * Math.min(1, replayAge), 0, 0.47);
 
     drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha);
   });
@@ -1172,12 +1346,12 @@ export function AuraToy() {
 
       context.save();
       context.globalCompositeOperation = "source-over";
-      context.filter = reducedMotionRef.current ? "blur(3px)" : "blur(5px)";
+      context.filter = reducedMotionRef.current ? "blur(1.5px)" : "blur(2.2px)";
       context.drawImage(offscreen, 0, 0, width, height);
       context.restore();
 
       if (grainRef.current) {
-        drawGrain(context, width, height, grainRef.current, 0.055);
+        drawGrain(context, width, height, grainRef.current, 0.076);
       }
 
       const hasArrivingBlob =
@@ -1228,7 +1402,7 @@ export function AuraToy() {
       replayProgress,
     );
     if (grainRef.current) {
-      drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
+      drawGrain(outputContext, output.width, output.height, grainRef.current, 0.052);
     }
   }, []);
 
@@ -1350,7 +1524,7 @@ export function AuraToy() {
             replayProgress,
           );
           if (grainRef.current) {
-            drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
+            drawGrain(outputContext, output.width, output.height, grainRef.current, 0.052);
           }
 
           if (elapsed < revealDuration + holdDuration) {
