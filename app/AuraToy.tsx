@@ -5,9 +5,12 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
   Download,
   Image as ImageIcon,
+  Mic,
+  MicOff,
   Video as VideoIcon,
   X,
 } from "lucide-react";
+import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
 
 type Color = {
@@ -99,6 +102,37 @@ type VisualMode = {
 
 type ExportState = "idle" | "video";
 type ExportKind = "image" | "video";
+type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsupported";
+type ScaleMode = "major" | "minor";
+
+type HarmonicContext = {
+  root: number;
+  mode: ScaleMode;
+  confidence: number;
+};
+
+type MicrophoneRuntime = {
+  stream: MediaStream;
+  context: AudioContext;
+  source: MediaStreamAudioSourceNode;
+  analyser: AnalyserNode;
+  detector: PitchDetector<Float32Array>;
+  timeDomain: Float32Array;
+  frequencyData: Float32Array;
+  previousSpectrum: Float32Array;
+  chroma: Float32Array;
+  animationFrame: number;
+  lastAnalysisAt: number;
+  lastVisualAt: number;
+  lastBeatAt: number;
+  lastValidPitchAt: number;
+  lastMidi: number | null;
+  candidateMidi: number | null;
+  candidateFrames: number;
+  noiseFloor: number;
+  smoothedEnergy: number;
+  smoothedFlux: number;
+};
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const BASE_OCTAVE = 4;
@@ -107,8 +141,12 @@ const MAX_OCTAVE = 7;
 const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
 const MAX_MIDI = (MAX_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
+const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 24;
+const MICROPHONE_FFT_SIZE = 4096;
 const DEFAULT_SOUND_MODE: SoundModeId = "piano";
 const RADIOGRAPHIC_HUES = [338, 322, 300, 282, 260, 238, 220, 10, 18, 348, 312, 248] as const;
+const MAJOR_SCALE_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88] as const;
+const MINOR_SCALE_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17] as const;
 const COMPOSITION_ANCHORS = [
   [0.14, 0.3],
   [0.82, 0.2],
@@ -358,6 +396,118 @@ function createMapping(): Mapping {
 }
 
 const AURA_MAPPING = createMapping();
+
+function frequencyToMidi(frequency: number) {
+  return 69 + 12 * Math.log2(frequency / 440);
+}
+
+function calculateRms(samples: Float32Array) {
+  let energy = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    energy += samples[index] * samples[index];
+  }
+  return Math.sqrt(energy / samples.length);
+}
+
+function updateSpectrumAnalysis(
+  frequencyData: Float32Array,
+  previousSpectrum: Float32Array,
+  chroma: Float32Array,
+  sampleRate: number,
+  fftSize: number,
+) {
+  for (let pitchClass = 0; pitchClass < chroma.length; pitchClass += 1) {
+    chroma[pitchClass] *= 0.965;
+  }
+
+  const minimumBin = Math.max(1, Math.ceil((45 * fftSize) / sampleRate));
+  const maximumBin = Math.min(frequencyData.length - 1, Math.floor((4200 * fftSize) / sampleRate));
+  let spectralFlux = 0;
+  let peakDecibels = -Infinity;
+  let peakFrequency = 0;
+
+  for (let bin = minimumBin; bin <= maximumBin; bin += 1) {
+    const decibels = frequencyData[bin];
+    const amplitude = Number.isFinite(decibels) ? Math.pow(10, decibels / 20) : 0;
+    const previousAmplitude = previousSpectrum[bin];
+    if (amplitude > previousAmplitude) spectralFlux += amplitude - previousAmplitude;
+    previousSpectrum[bin] = amplitude;
+
+    if (decibels < -82) continue;
+    const frequency = (bin * sampleRate) / fftSize;
+    const midi = Math.round(frequencyToMidi(frequency));
+    if (midi < MIN_MIDI || midi > MAX_MIDI) continue;
+    chroma[modulo(midi, 12)] += amplitude / Math.sqrt(1 + frequency / 700);
+    if (decibels > peakDecibels) {
+      peakDecibels = decibels;
+      peakFrequency = frequency;
+    }
+  }
+
+  const dominantMidi = peakFrequency > 0 ? Math.round(frequencyToMidi(peakFrequency)) : null;
+  return {
+    spectralFlux,
+    dominantMidi:
+      dominantMidi !== null && dominantMidi >= MIN_MIDI && dominantMidi <= MAX_MIDI ? dominantMidi : null,
+  };
+}
+
+function detectHarmonicContext(chroma: Float32Array): HarmonicContext | null {
+  const total = chroma.reduce((sum, value) => sum + value, 0);
+  if (total < 0.0001) return null;
+
+  let best: HarmonicContext & { score: number } = { root: 0, mode: "major", confidence: 0, score: -Infinity };
+  let secondScore = -Infinity;
+  for (let root = 0; root < 12; root += 1) {
+    for (const [mode, profile] of [
+      ["major", MAJOR_SCALE_PROFILE],
+      ["minor", MINOR_SCALE_PROFILE],
+    ] as const) {
+      let score = 0;
+      for (let degree = 0; degree < 12; degree += 1) {
+        score += (chroma[modulo(root + degree, 12)] / total) * profile[degree];
+      }
+      if (score > best.score) {
+        secondScore = best.score;
+        best = { root, mode, confidence: 0, score };
+      } else if (score > secondScore) {
+        secondScore = score;
+      }
+    }
+  }
+
+  return {
+    root: best.root,
+    mode: best.mode,
+    confidence: clamp(((best.score - secondScore) / Math.max(0.001, best.score)) * 5, 0, 1),
+  };
+}
+
+function blendHue(from: number, to: number, amount: number) {
+  const difference = modulo(to - from + 180, 360) - 180;
+  return modulo(from + difference * amount, 360);
+}
+
+function microphoneColor(base: Color, harmonicContext: HarmonicContext | null) {
+  if (!harmonicContext || harmonicContext.confidence <= 0.08) return base;
+  const tonic = AURA_MAPPING.pitches[harmonicContext.root];
+  const confidence = (harmonicContext.confidence - 0.08) / 0.92;
+  const amount = confidence * 0.14;
+  return {
+    h: blendHue(base.h, tonic.h, amount),
+    s: clamp(base.s + confidence * 3, 0, 100),
+    l: clamp(base.l + (harmonicContext.mode === "major" ? 2 : -1) * confidence, 0, 72),
+  };
+}
+
+function disposeMicrophoneRuntime(runtime: MicrophoneRuntime | null) {
+  if (!runtime) return;
+  window.cancelAnimationFrame(runtime.animationFrame);
+  runtime.source.disconnect();
+  runtime.analyser.disconnect();
+  runtime.stream.getTracks().forEach((track) => track.stop());
+  void runtime.context.close().catch(() => undefined);
+}
 
 function colorToHslar(color: Color, alpha: number) {
   return `hsla(${Math.round(color.h)}, ${Math.round(color.s)}%, ${Math.round(color.l)}%, ${alpha})`;
@@ -791,6 +941,7 @@ export function AuraToy() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
+  const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
   const blobIdRef = useRef(1);
@@ -799,6 +950,8 @@ export function AuraToy() {
   const reducedMotionRef = useRef(false);
   const audioGenerationRef = useRef(0);
   const visualGenerationRef = useRef(0);
+  const microphoneGenerationRef = useRef(0);
+  const microphoneRef = useRef<MicrophoneRuntime | null>(null);
   const resetFrameRef = useRef<number | null>(null);
   const previewFrameRef = useRef<number | null>(null);
   const dialWheelTimerRef = useRef<number | null>(null);
@@ -826,6 +979,9 @@ export function AuraToy() {
   const [exportState, setExportState] = useState<ExportState>("idle");
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
+  const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
+  const [microphoneMidi, setMicrophoneMidi] = useState<number | null>(null);
+  const [microphoneReading, setMicrophoneReading] = useState("Listening");
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -876,6 +1032,9 @@ export function AuraToy() {
       if (dialWheelTimerRef.current !== null) window.clearTimeout(dialWheelTimerRef.current);
       releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       releaseTimersRef.current.clear();
+      microphoneGenerationRef.current += 1;
+      disposeMicrophoneRuntime(microphoneRef.current);
+      microphoneRef.current = null;
       disposeToneEngine();
     },
     [disposeToneEngine],
@@ -1057,6 +1216,207 @@ export function AuraToy() {
     setLayerCount(blobsRef.current.length);
     wakeRendererRef.current?.();
   }, []);
+
+  const stopMicrophone = useCallback(() => {
+    microphoneGenerationRef.current += 1;
+    disposeMicrophoneRuntime(microphoneRef.current);
+    microphoneRef.current = null;
+    microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
+    setMicrophoneState("idle");
+    setMicrophoneMidi(null);
+    setMicrophoneReading("Listening");
+  }, []);
+
+  const startMicrophone = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicrophoneState("unsupported");
+      return;
+    }
+
+    const AudioContextConstructor =
+      window.AudioContext ??
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) {
+      setMicrophoneState("unsupported");
+      return;
+    }
+
+    const generation = microphoneGenerationRef.current + 1;
+    microphoneGenerationRef.current = generation;
+    setMicrophoneState("requesting");
+    setMicrophoneReading("Listening");
+
+    let stream: MediaStream | null = null;
+    let audioContext: AudioContext | null = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: false,
+          echoCancellation: false,
+          noiseSuppression: false,
+        },
+      });
+      if (generation !== microphoneGenerationRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
+      if (audioContext.state === "suspended") await audioContext.resume();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = MICROPHONE_FFT_SIZE;
+      analyser.smoothingTimeConstant = 0.22;
+      analyser.minDecibels = -100;
+      analyser.maxDecibels = -10;
+      source.connect(analyser);
+
+      const detector = PitchDetector.forFloat32Array(MICROPHONE_FFT_SIZE);
+      detector.minVolumeDecibels = -62;
+      const startedAt = performance.now();
+      const runtime: MicrophoneRuntime = {
+        stream,
+        context: audioContext,
+        source,
+        analyser,
+        detector,
+        timeDomain: new Float32Array(MICROPHONE_FFT_SIZE),
+        frequencyData: new Float32Array(analyser.frequencyBinCount),
+        previousSpectrum: new Float32Array(analyser.frequencyBinCount),
+        chroma: new Float32Array(12),
+        animationFrame: 0,
+        lastAnalysisAt: -Infinity,
+        lastVisualAt: -Infinity,
+        lastBeatAt: startedAt,
+        lastValidPitchAt: -Infinity,
+        lastMidi: null,
+        candidateMidi: null,
+        candidateFrames: 0,
+        noiseFloor: 0.004,
+        smoothedEnergy: 0.008,
+        smoothedFlux: 0.001,
+      };
+      microphoneRef.current = runtime;
+      setMicrophoneState("listening");
+
+      const analyze = (now: number) => {
+        if (generation !== microphoneGenerationRef.current || microphoneRef.current !== runtime) return;
+        runtime.animationFrame = window.requestAnimationFrame(analyze);
+        if (now - runtime.lastAnalysisAt < MICROPHONE_ANALYSIS_INTERVAL) return;
+        runtime.lastAnalysisAt = now;
+
+        analyser.getFloatTimeDomainData(runtime.timeDomain);
+        analyser.getFloatFrequencyData(runtime.frequencyData);
+        const rms = calculateRms(runtime.timeDomain);
+        const previousEnergy = runtime.smoothedEnergy;
+        const energyRise = rms / Math.max(0.0001, previousEnergy);
+        runtime.smoothedEnergy = lerp(previousEnergy, rms, rms > previousEnergy ? 0.18 : 0.055);
+        runtime.noiseFloor = lerp(
+          runtime.noiseFloor,
+          rms,
+          rms < Math.max(0.008, previousEnergy * 1.08) ? 0.035 : 0.002,
+        );
+        const gate = Math.max(0.006, runtime.noiseFloor * 2.35);
+        const activeSignal = rms > gate;
+        const level = activeSignal ? clamp((rms - gate) / Math.max(0.018, 0.12 - gate), 0, 1) : 0;
+        microphoneButtonRef.current?.style.setProperty("--mic-level", level.toFixed(3));
+
+        const { spectralFlux, dominantMidi } = updateSpectrumAnalysis(
+          runtime.frequencyData,
+          runtime.previousSpectrum,
+          runtime.chroma,
+          audioContext.sampleRate,
+          analyser.fftSize,
+        );
+        const previousFlux = runtime.smoothedFlux;
+        runtime.smoothedFlux = lerp(previousFlux, spectralFlux, 0.085);
+        const beatDetected =
+          activeSignal &&
+          now - runtime.lastBeatAt > 165 &&
+          (energyRise > 1.34 || spectralFlux > Math.max(0.0012, previousFlux * 1.75));
+        if (beatDetected) runtime.lastBeatAt = now;
+
+        const [frequency, clarity] = detector.findPitch(runtime.timeDomain, audioContext.sampleRate);
+        const midiFloat = frequency > 0 ? frequencyToMidi(frequency) : Number.NaN;
+        const nearestMidi = Number.isFinite(midiFloat) ? Math.round(midiFloat) : null;
+        const clearPitch =
+          activeSignal &&
+          nearestMidi !== null &&
+          nearestMidi >= MIN_MIDI &&
+          nearestMidi <= MAX_MIDI &&
+          clarity >= 0.86 &&
+          Math.abs(midiFloat - nearestMidi) <= 0.48;
+
+        if (clearPitch && nearestMidi !== null) {
+          if (runtime.candidateMidi === nearestMidi) runtime.candidateFrames += 1;
+          else {
+            runtime.candidateMidi = nearestMidi;
+            runtime.candidateFrames = 1;
+          }
+        } else {
+          runtime.candidateFrames = Math.max(0, runtime.candidateFrames - 1);
+        }
+
+        let stableMidi: number | null = null;
+        let noteChanged = false;
+        if (runtime.candidateFrames >= 2 && runtime.candidateMidi !== null) {
+          stableMidi = runtime.candidateMidi;
+          noteChanged = stableMidi !== runtime.lastMidi;
+          runtime.lastMidi = stableMidi;
+          runtime.lastValidPitchAt = now;
+          if (noteChanged) setMicrophoneMidi(stableMidi);
+        } else if (now - runtime.lastValidPitchAt > 360 && runtime.lastMidi !== null) {
+          runtime.lastMidi = null;
+          runtime.candidateMidi = null;
+          runtime.candidateFrames = 0;
+          setMicrophoneMidi(null);
+        }
+
+        if (!activeSignal) return;
+        const sustainedPulse = stableMidi !== null && now - runtime.lastVisualAt > 680;
+        const beatPulse = beatDetected && now - runtime.lastVisualAt > 125;
+        if (!noteChanged && !sustainedPulse && !beatPulse) return;
+
+        const detectedMidi = stableMidi ?? runtime.lastMidi ?? dominantMidi;
+        if (detectedMidi === null) return;
+        const note = midiToNote(clamp(detectedMidi, MIN_MIDI, MAX_MIDI));
+        const harmonicContext = detectHarmonicContext(runtime.chroma);
+        const baseColor = AURA_MAPPING.pitches[note.pc];
+        const velocity = clamp(0.32 + level * 0.58 + (beatDetected ? 0.1 : 0), 0.32, 1);
+        spawnBlob(note, microphoneColor(baseColor, harmonicContext), velocity);
+        runtime.lastVisualAt = now;
+        setMicrophoneReading(
+          harmonicContext && harmonicContext.confidence > 0.08
+            ? `${note.name}, ${NOTE_NAMES[harmonicContext.root]} ${harmonicContext.mode}`
+            : note.name,
+        );
+      };
+
+      runtime.animationFrame = window.requestAnimationFrame(analyze);
+      stream.getAudioTracks().forEach((track) => {
+        track.addEventListener("ended", () => {
+          if (generation === microphoneGenerationRef.current) stopMicrophone();
+        });
+      });
+    } catch {
+      stream?.getTracks().forEach((track) => track.stop());
+      if (audioContext) void audioContext.close().catch(() => undefined);
+      if (generation !== microphoneGenerationRef.current) return;
+      microphoneRef.current = null;
+      microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
+      setMicrophoneState("error");
+      setMicrophoneMidi(null);
+      setMicrophoneReading("Microphone unavailable");
+    }
+  }, [spawnBlob, stopMicrophone]);
+
+  const toggleMicrophone = useCallback(() => {
+    if (microphoneState === "listening" || microphoneState === "requesting") {
+      stopMicrophone();
+      return;
+    }
+    void startMicrophone();
+  }, [microphoneState, startMicrophone, stopMicrophone]);
 
   const shiftedNote = useCallback(
     (key: KeySpec): NoteChoice => {
@@ -1530,6 +1890,7 @@ export function AuraToy() {
   }, [cycleSoundMode, previewKind]);
 
   const resetAura = useCallback(() => {
+    stopMicrophone();
     visualGenerationRef.current += 1;
     releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     releaseTimersRef.current.clear();
@@ -1551,9 +1912,19 @@ export function AuraToy() {
       resetFrameRef.current = null;
       setResetting(false);
     });
-  }, [disposeToneEngine]);
+  }, [disposeToneEngine, stopMicrophone]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
+  const microphoneLabel =
+    microphoneState === "listening"
+      ? `Stop microphone listening, detecting ${microphoneReading}`
+      : microphoneState === "requesting"
+        ? "Cancel microphone request"
+        : microphoneState === "error"
+          ? "Retry microphone listening"
+          : microphoneState === "unsupported"
+            ? "Microphone listening is unsupported"
+            : "Start microphone listening";
   return (
     <main className={`aura-page ${resetting ? "is-resetting" : ""}`}>
       <canvas ref={canvasRef} className="aura-canvas" aria-hidden="true" />
@@ -1647,7 +2018,9 @@ export function AuraToy() {
                 <button
                   key={key.id}
                   type="button"
-                  className={`piano-key white-key ${activeKeys.has(key.id) ? "is-active" : ""}`}
+                  className={`piano-key white-key ${
+                    activeKeys.has(key.id) || shiftedNote(key).midi === microphoneMidi ? "is-active" : ""
+                  }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
                   onPointerUp={(event) => handlePointerEnd(event, key)}
@@ -1665,7 +2038,9 @@ export function AuraToy() {
               >
                 <button
                   type="button"
-                  className={`piano-key upper-key ${activeKeys.has(key.id) ? "is-active" : ""}`}
+                  className={`piano-key upper-key ${
+                    activeKeys.has(key.id) || shiftedNote(key).midi === microphoneMidi ? "is-active" : ""
+                  }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
                   onPointerUp={(event) => handlePointerEnd(event, key)}
@@ -1678,6 +2053,28 @@ export function AuraToy() {
         </div>
 
       </section>
+
+      <div className="microphone-dock" aria-label="Microphone input">
+        <button
+          ref={microphoneButtonRef}
+          type="button"
+          className={`export-button microphone-button is-${microphoneState}`}
+          aria-label={microphoneLabel}
+          aria-pressed={microphoneState === "listening"}
+          title={microphoneLabel}
+          disabled={microphoneState === "unsupported"}
+          onClick={toggleMicrophone}
+        >
+          {microphoneState === "error" || microphoneState === "unsupported" ? (
+            <MicOff className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+          ) : (
+            <Mic className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+          )}
+        </button>
+        <span className="sr-only" role="status" aria-live="polite">
+          {microphoneState === "listening" ? microphoneReading : microphoneLabel}
+        </span>
+      </div>
 
       <div className={`export-dock ${layerCount > 0 ? "is-ready" : ""}`} aria-label="Export visual">
         <button

@@ -512,6 +512,13 @@ button {
   transform: translateY(0);
 }
 
+.microphone-dock {
+  position: absolute;
+  bottom: clamp(16px, 3vw, 32px);
+  left: clamp(16px, 3vw, 36px);
+  z-index: 4;
+}
+
 .export-button,
 .preview-control {
   position: relative;
@@ -563,6 +570,44 @@ button {
 
 .export-button.is-exporting .control-icon {
   animation: exportPulse 760ms ease-in-out infinite alternate;
+}
+
+.microphone-button {
+  --mic-level: 0;
+  isolation: isolate;
+}
+
+.microphone-button::after {
+  position: absolute;
+  inset: 4px;
+  z-index: 0;
+  border: 1px solid rgba(239, 116, 170, 0.42);
+  border-radius: 50%;
+  background: rgba(255, 212, 230, 0.18);
+  content: "";
+  opacity: calc(0.08 + var(--mic-level) * 0.72);
+  pointer-events: none;
+  transform: scale(calc(0.76 + var(--mic-level) * 0.24));
+  transition:
+    opacity 90ms linear,
+    transform 90ms linear;
+}
+
+.microphone-button .control-icon {
+  position: relative;
+  z-index: 1;
+}
+
+.microphone-button.is-listening {
+  color: rgba(177, 58, 122, 0.82);
+}
+
+.microphone-button.is-requesting .control-icon {
+  animation: exportPulse 760ms ease-in-out infinite alternate;
+}
+
+.microphone-button.is-error {
+  color: rgba(156, 84, 103, 0.76);
 }
 
 .export-preview-backdrop {
