@@ -716,6 +716,7 @@ export function AuraToy() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
+  const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
@@ -1215,16 +1216,38 @@ export function AuraToy() {
     const outputContext = output.getContext("2d", { alpha: false });
     if (!outputContext) return;
 
-    paintArtworkBackground(outputContext, output.width, output.height);
+    let auraLayer = exportLayersRef.current.get(output);
+    if (!auraLayer) {
+      auraLayer = document.createElement("canvas");
+      exportLayersRef.current.set(output, auraLayer);
+    }
+    const layerScale = 0.5;
+    const layerWidth = Math.max(1, Math.round(output.width * layerScale));
+    const layerHeight = Math.max(1, Math.round(output.height * layerScale));
+    if (auraLayer.width !== layerWidth || auraLayer.height !== layerHeight) {
+      auraLayer.width = layerWidth;
+      auraLayer.height = layerHeight;
+    }
+    const layerContext = auraLayer.getContext("2d", { alpha: true });
+    if (!layerContext) return;
+
+    layerContext.clearRect(0, 0, layerWidth, layerHeight);
     const settledAt = (blobsRef.current.at(-1)?.createdAt ?? performance.now()) + BLOB_ARRIVAL_DURATION;
     drawAuraComposition(
-      outputContext,
+      layerContext,
       blobsRef.current,
-      output.width,
-      output.height,
+      layerWidth,
+      layerHeight,
       settledAt,
       replayProgress,
     );
+
+    paintArtworkBackground(outputContext, output.width, output.height);
+    outputContext.save();
+    outputContext.globalCompositeOperation = "source-over";
+    outputContext.filter = `blur(${clamp(Math.min(output.width, output.height) * 0.011, 5, 14)}px)`;
+    outputContext.drawImage(auraLayer, 0, 0, output.width, output.height);
+    outputContext.restore();
     if (grainRef.current) {
       drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
     }
@@ -1338,18 +1361,7 @@ export function AuraToy() {
         const renderFrame = (now: number) => {
           const elapsed = now - startedAt;
           const replayProgress = clamp(elapsed / revealDuration, 0, 1);
-          paintArtworkBackground(outputContext, output.width, output.height);
-          drawAuraComposition(
-            outputContext,
-            blobsRef.current,
-            output.width,
-            output.height,
-            now,
-            replayProgress,
-          );
-          if (grainRef.current) {
-            drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
-          }
+          renderArtwork(output, replayProgress);
 
           if (elapsed < revealDuration + holdDuration) {
             window.requestAnimationFrame(renderFrame);
@@ -1368,7 +1380,7 @@ export function AuraToy() {
       stream.getTracks().forEach((track) => track.stop());
       setExportState("idle");
     }
-  }, [createExportCanvas, exportState]);
+  }, [createExportCanvas, exportState, renderArtwork]);
 
   const shiftOctave = useCallback((direction: -1 | 1) => {
     toneRef.current.synth?.releaseAll();
