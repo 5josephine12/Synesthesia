@@ -248,6 +248,8 @@ button {
 }
 
 .mode-step-button {
+  appearance: none;
+  -webkit-appearance: none;
   display: grid;
   width: 12px;
   height: 10px;
@@ -255,18 +257,22 @@ button {
   place-items: center;
   border: 0;
   border-radius: 0;
-  background: transparent;
+  background: none !important;
+  background-color: transparent !important;
+  background-image: none !important;
   box-shadow: none;
   color: #8d8c94;
   cursor: pointer;
+  opacity: 0.5;
   transition:
-    color 160ms ease,
+    opacity 160ms ease,
     transform 120ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .mode-step-button:hover,
 .mode-step-button:focus-visible {
-  color: #5d5c64;
+  background: none !important;
+  opacity: 0.92;
 }
 
 .mode-step-button:focus-visible {
@@ -275,7 +281,12 @@ button {
 }
 
 .mode-step-button:active {
+  opacity: 1;
   transform: scale(0.84);
+}
+
+.mode-step-button .filled-triangle {
+  opacity: 1;
 }
 
 .header-rule {
