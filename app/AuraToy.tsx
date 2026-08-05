@@ -111,6 +111,11 @@ type HarmonicContext = {
   confidence: number;
 };
 
+type SpectrumNote = {
+  midi: number;
+  score: number;
+};
+
 type MicrophoneRuntime = {
   stream: MediaStream;
   context: AudioContext;
@@ -121,6 +126,7 @@ type MicrophoneRuntime = {
   frequencyData: Float32Array;
   previousSpectrum: Float32Array;
   chroma: Float32Array;
+  frameChroma: Float32Array;
   animationFrame: number;
   lastAnalysisAt: number;
   lastVisualAt: number;
@@ -132,6 +138,9 @@ type MicrophoneRuntime = {
   noiseFloor: number;
   smoothedEnergy: number;
   smoothedFlux: number;
+  lastPitchClassSignature: string;
+  lastPitchClassAt: number;
+  visualCursor: number;
 };
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -413,18 +422,16 @@ function updateSpectrumAnalysis(
   frequencyData: Float32Array,
   previousSpectrum: Float32Array,
   chroma: Float32Array,
+  frameChroma: Float32Array,
   sampleRate: number,
   fftSize: number,
 ) {
-  for (let pitchClass = 0; pitchClass < chroma.length; pitchClass += 1) {
-    chroma[pitchClass] *= 0.965;
-  }
+  frameChroma.fill(0);
 
   const minimumBin = Math.max(1, Math.ceil((45 * fftSize) / sampleRate));
   const maximumBin = Math.min(frequencyData.length - 1, Math.floor((4200 * fftSize) / sampleRate));
   let spectralFlux = 0;
   let peakDecibels = -Infinity;
-  let peakFrequency = 0;
 
   for (let bin = minimumBin; bin <= maximumBin; bin += 1) {
     const decibels = frequencyData[bin];
@@ -433,22 +440,64 @@ function updateSpectrumAnalysis(
     if (amplitude > previousAmplitude) spectralFlux += amplitude - previousAmplitude;
     previousSpectrum[bin] = amplitude;
 
-    if (decibels < -82) continue;
+    if (decibels > peakDecibels) peakDecibels = decibels;
+  }
+
+  const candidateScores = new Map<number, number>();
+  const peakThreshold = Math.max(-78, peakDecibels - 30);
+  const harmonicWeights = [1, 0.5, 0.32, 0.22] as const;
+  for (let bin = minimumBin + 1; bin < maximumBin; bin += 1) {
+    const decibels = frequencyData[bin];
+    if (!Number.isFinite(decibels) || decibels < peakThreshold) continue;
+    const left = frequencyData[bin - 1];
+    const right = frequencyData[bin + 1];
+    if (decibels < left || decibels <= right) continue;
+
     const frequency = (bin * sampleRate) / fftSize;
-    const midi = Math.round(frequencyToMidi(frequency));
-    if (midi < MIN_MIDI || midi > MAX_MIDI) continue;
-    chroma[modulo(midi, 12)] += amplitude / Math.sqrt(1 + frequency / 700);
-    if (decibels > peakDecibels) {
-      peakDecibels = decibels;
-      peakFrequency = frequency;
+    const amplitude = Math.pow(10, decibels / 20);
+    const prominence = clamp((decibels - Math.max(left, right)) / 10, 0.18, 1);
+    const peakWeight = (amplitude * (0.72 + prominence * 0.28)) / Math.sqrt(1 + frequency / 1500);
+
+    for (let harmonic = 1; harmonic <= harmonicWeights.length; harmonic += 1) {
+      const fundamental = frequency / harmonic;
+      const midi = Math.round(frequencyToMidi(fundamental));
+      if (midi < MIN_MIDI || midi > MAX_MIDI) continue;
+      const score = peakWeight * harmonicWeights[harmonic - 1];
+      candidateScores.set(midi, (candidateScores.get(midi) ?? 0) + score);
+      frameChroma[modulo(midi, 12)] += score;
     }
   }
 
-  const dominantMidi = peakFrequency > 0 ? Math.round(frequencyToMidi(peakFrequency)) : null;
+  for (let pitchClass = 0; pitchClass < chroma.length; pitchClass += 1) {
+    chroma[pitchClass] = chroma[pitchClass] * 0.94 + frameChroma[pitchClass];
+  }
+
+  const rankedPitchClasses = Array.from(frameChroma, (score, pitchClass) => ({ pitchClass, score })).sort(
+    (first, second) => second.score - first.score,
+  );
+  const strongestPitchClass = rankedPitchClasses[0]?.score ?? 0;
+  const totalPitchEnergy = rankedPitchClasses.reduce((sum, candidate) => sum + candidate.score, 0);
+  const pitchClasses = rankedPitchClasses
+    .filter(
+      ({ score }) =>
+        score > 0 && score >= strongestPitchClass * 0.44 && score >= Math.max(0.000001, totalPitchEnergy * 0.1),
+    )
+    .slice(0, 3)
+    .map(({ pitchClass }) => pitchClass);
+
+  const rankedNotes = Array.from(candidateScores, ([midi, score]) => ({ midi, score })).sort(
+    (first, second) => second.score - first.score,
+  );
+  const noteCandidates: SpectrumNote[] = pitchClasses.flatMap((pitchClass) => {
+    const candidate = rankedNotes.find(({ midi }) => modulo(midi, 12) === pitchClass);
+    return candidate ? [candidate] : [];
+  });
+
   return {
     spectralFlux,
-    dominantMidi:
-      dominantMidi !== null && dominantMidi >= MIN_MIDI && dominantMidi <= MAX_MIDI ? dominantMidi : null,
+    dominantMidi: noteCandidates[0]?.midi ?? null,
+    noteCandidates,
+    pitchClasses,
   };
 }
 
@@ -981,7 +1030,7 @@ export function AuraToy() {
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
-  const [microphoneMidi, setMicrophoneMidi] = useState<number | null>(null);
+  const [microphonePitchClasses, setMicrophonePitchClasses] = useState<number[]>([]);
   const [microphoneReading, setMicrophoneReading] = useState("Listening");
   const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
 
@@ -1226,7 +1275,7 @@ export function AuraToy() {
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
     setMicrophonePromptOpen(false);
     setMicrophoneState("idle");
-    setMicrophoneMidi(null);
+    setMicrophonePitchClasses([]);
     setMicrophoneReading("Listening");
   }, []);
 
@@ -1286,6 +1335,7 @@ export function AuraToy() {
         frequencyData: new Float32Array(analyser.frequencyBinCount),
         previousSpectrum: new Float32Array(analyser.frequencyBinCount),
         chroma: new Float32Array(12),
+        frameChroma: new Float32Array(12),
         animationFrame: 0,
         lastAnalysisAt: -Infinity,
         lastVisualAt: -Infinity,
@@ -1297,6 +1347,9 @@ export function AuraToy() {
         noiseFloor: 0.0018,
         smoothedEnergy: 0.003,
         smoothedFlux: 0.001,
+        lastPitchClassSignature: "",
+        lastPitchClassAt: -Infinity,
+        visualCursor: 0,
       };
       microphoneRef.current = runtime;
       setMicrophoneState("listening");
@@ -1322,10 +1375,11 @@ export function AuraToy() {
         const level = activeSignal ? clamp((rms - gate) / Math.max(0.012, 0.09 - gate), 0, 1) : 0;
         microphoneButtonRef.current?.style.setProperty("--mic-level", level.toFixed(3));
 
-        const { spectralFlux, dominantMidi } = updateSpectrumAnalysis(
+        const { spectralFlux, dominantMidi, noteCandidates, pitchClasses } = updateSpectrumAnalysis(
           runtime.frequencyData,
           runtime.previousSpectrum,
           runtime.chroma,
+          runtime.frameChroma,
           audioContext.sampleRate,
           analyser.fftSize,
         );
@@ -1360,37 +1414,72 @@ export function AuraToy() {
         }
 
         let stableMidi: number | null = null;
-        let noteChanged = false;
         if (runtime.candidateFrames >= 2 && runtime.candidateMidi !== null) {
           stableMidi = runtime.candidateMidi;
-          noteChanged = stableMidi !== runtime.lastMidi;
           runtime.lastMidi = stableMidi;
-          if (noteChanged) setMicrophoneMidi(stableMidi);
         } else if (now - runtime.lastValidPitchAt > 260 && runtime.lastMidi !== null) {
           runtime.lastMidi = null;
           runtime.candidateMidi = null;
           runtime.candidateFrames = 0;
-          setMicrophoneMidi(null);
+        }
+
+        const monophonicFrame = clearPitch && clarity >= 0.82 && nearestMidi !== null;
+        const monophonicPitchClass = monophonicFrame ? modulo(nearestMidi, 12) : null;
+        const detectedPitchClasses = !activeSignal
+          ? []
+          : monophonicPitchClass !== null
+            ? [monophonicPitchClass]
+            : pitchClasses;
+        if (detectedPitchClasses.length > 0) {
+          runtime.lastPitchClassAt = now;
+          const pitchClassSignature = detectedPitchClasses.join(",");
+          if (pitchClassSignature !== runtime.lastPitchClassSignature) {
+            runtime.lastPitchClassSignature = pitchClassSignature;
+            setMicrophonePitchClasses(detectedPitchClasses);
+          }
+        } else if (now - runtime.lastPitchClassAt > 180 && runtime.lastPitchClassSignature !== "") {
+          runtime.lastPitchClassSignature = "";
+          setMicrophonePitchClasses([]);
         }
 
         if (!activeSignal) return;
         const recentStableMidi = now - runtime.lastValidPitchAt < 260 ? runtime.lastMidi : null;
-        const detectedMidi = stableMidi ?? (clearPitch ? nearestMidi : null) ?? recentStableMidi ?? dominantMidi;
+        const spectralMidi =
+          noteCandidates.length > 0
+            ? noteCandidates[runtime.visualCursor % noteCandidates.length].midi
+            : dominantMidi;
+        const detectedMidi = monophonicFrame
+          ? nearestMidi
+          : spectralMidi ?? stableMidi ?? (clearPitch ? nearestMidi : null) ?? recentStableMidi;
         if (detectedMidi === null) return;
         const visualInterval = beatDetected ? 60 : lerp(165, 72, level);
         if (now - runtime.lastVisualAt < visualInterval) return;
         if (!clearPitch && !beatDetected && recentStableMidi === null && level < 0.1) return;
 
-        const note = midiToNote(clamp(detectedMidi, MIN_MIDI, MAX_MIDI));
         const harmonicContext = detectHarmonicContext(runtime.chroma);
-        const baseColor = AURA_MAPPING.pitches[note.pc];
         const velocity = clamp(0.26 + level * 0.64 + (beatDetected ? 0.1 : 0), 0.26, 1);
-        spawnBlob(note, microphoneColor(baseColor, harmonicContext), velocity);
+        const beatCompanion =
+          beatDetected && !monophonicFrame && noteCandidates.length > 1
+            ? noteCandidates[(runtime.visualCursor + 1) % noteCandidates.length]?.midi
+            : null;
+        const visualMidis = beatCompanion !== null && beatCompanion !== detectedMidi
+          ? [detectedMidi, beatCompanion]
+          : [detectedMidi];
+        visualMidis.forEach((midi, index) => {
+          const note = midiToNote(clamp(midi, MIN_MIDI, MAX_MIDI));
+          const baseColor = AURA_MAPPING.pitches[note.pc];
+          spawnBlob(note, microphoneColor(baseColor, harmonicContext), velocity * (index === 0 ? 1 : 0.86));
+        });
+        runtime.visualCursor += visualMidis.length;
         runtime.lastVisualAt = now;
+        const primaryNote = midiToNote(clamp(detectedMidi, MIN_MIDI, MAX_MIDI));
+        const heardNotes = detectedPitchClasses.length > 1
+          ? detectedPitchClasses.map((pitchClass) => NOTE_NAMES[pitchClass]).join(" + ")
+          : primaryNote.name;
         setMicrophoneReading(
           harmonicContext && harmonicContext.confidence > 0.08
-            ? `${note.name}, ${NOTE_NAMES[harmonicContext.root]} ${harmonicContext.mode}`
-            : note.name,
+            ? `${heardNotes}, ${NOTE_NAMES[harmonicContext.root]} ${harmonicContext.mode}`
+            : heardNotes,
         );
       };
 
@@ -1407,7 +1496,7 @@ export function AuraToy() {
       microphoneRef.current = null;
       microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
       setMicrophoneState("error");
-      setMicrophoneMidi(null);
+      setMicrophonePitchClasses([]);
       setMicrophoneReading("Microphone unavailable");
     }
   }, [spawnBlob, stopMicrophone]);
@@ -1945,7 +2034,6 @@ export function AuraToy() {
   }, [disposeToneEngine, stopMicrophone]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
-  const microphonePitchClass = microphoneMidi === null ? null : modulo(microphoneMidi, 12);
   const microphoneLabel =
     microphoneState === "listening"
       ? `Stop microphone listening, detecting ${microphoneReading}`
@@ -2052,7 +2140,7 @@ export function AuraToy() {
                   key={key.id}
                   type="button"
                   className={`piano-key white-key ${
-                    activeKeys.has(key.id) || shiftedNote(key).pc === microphonePitchClass ? "is-active" : ""
+                    activeKeys.has(key.id) || microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-active" : ""
                   }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
@@ -2072,7 +2160,7 @@ export function AuraToy() {
                 <button
                   type="button"
                   className={`piano-key upper-key ${
-                    activeKeys.has(key.id) || shiftedNote(key).pc === microphonePitchClass ? "is-active" : ""
+                    activeKeys.has(key.id) || microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-active" : ""
                   }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
