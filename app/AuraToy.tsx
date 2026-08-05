@@ -2745,20 +2745,24 @@ export function AuraToy() {
           >
             <header className="microphone-permission-header">
               <h2 id="microphone-permission-title">Microphone</h2>
+              <span className="dialog-header-rule" aria-hidden="true" />
               <button
                 type="button"
-                className="preview-control"
+                className="preview-control dialog-close"
                 aria-label="Close microphone setup"
+                title="Close microphone setup"
                 onClick={() => setMicrophonePromptOpen(false)}
               >
                 <X className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
               </button>
             </header>
             <div className="microphone-permission-screen">
-              <span className="microphone-permission-icon" aria-hidden="true">
-                <Mic className="control-icon" size={18} strokeWidth={1.5} />
-              </span>
-              <p>Aura listens locally to pitch, rhythm, and volume. Audio is never saved.</p>
+              <div className="microphone-permission-content">
+                <span className="microphone-permission-icon" aria-hidden="true">
+                  <Mic className="control-icon" size={18} strokeWidth={1.5} />
+                </span>
+                <p>Aura listens locally to pitch, rhythm, and volume. Audio is never saved.</p>
+              </div>
             </div>
             <button
               type="button"
@@ -2816,6 +2820,7 @@ export function AuraToy() {
           >
             <header className="export-preview-header">
               <span className="export-preview-label">{previewKind === "image" ? "Still" : "Motion"}</span>
+              <span className="dialog-header-rule" aria-hidden="true" />
               <div className="export-preview-actions">
                 <button
                   ref={previewDownloadRef}
@@ -2833,7 +2838,7 @@ export function AuraToy() {
                 </button>
                 <button
                   type="button"
-                  className="preview-control"
+                  className="preview-control dialog-close"
                   aria-label="Close export preview"
                   title="Close preview"
                   disabled={exportState !== "idle"}

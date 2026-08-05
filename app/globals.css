@@ -630,29 +630,32 @@ button {
   display: grid;
   padding: 24px;
   place-items: center;
-  background: rgba(245, 245, 247, 0.62);
-  backdrop-filter: blur(16px);
+  background: rgba(245, 245, 247, 0.56);
+  backdrop-filter: blur(18px);
   animation: previewFadeIn 220ms ease-out both;
 }
 
 .microphone-permission {
-  width: min(350px, calc(100vw - 48px));
-  padding: 12px;
-  border: 1px solid rgba(126, 125, 134, 0.09);
-  border-radius: 8px;
+  width: min(380px, calc(100vw - 48px));
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(126, 125, 134, 0.075);
+  border-radius: 30px;
   background: var(--instrument-surface);
   box-shadow:
-    0 18px 44px rgba(70, 70, 90, 0.12),
-    inset 0 1px rgba(255, 255, 255, 0.36);
+    0 18px 48px rgba(70, 70, 90, 0.1),
+    inset 0 1px rgba(255, 255, 255, 0.4),
+    inset 0 -1px rgba(70, 70, 90, 0.025);
   animation: previewRiseIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .microphone-permission-header {
-  display: flex;
-  height: 40px;
+  display: grid;
+  height: 50px;
+  grid-template-columns: auto minmax(24px, 1fr) 34px;
   align-items: center;
-  justify-content: space-between;
-  padding-left: 5px;
+  gap: 14px;
+  padding: 0 2px 0 12px;
 }
 
 .microphone-permission-header h2 {
@@ -667,23 +670,30 @@ button {
 
 .microphone-permission-screen {
   display: grid;
-  min-height: 120px;
-  padding: 20px 24px;
+  min-height: 152px;
+  padding: 26px 28px;
   place-items: center;
-  border: 1px solid rgba(126, 125, 134, 0.07);
-  border-radius: 6px;
-  background: #f5f5f7;
+  overflow: hidden;
+  border: 1px solid rgba(126, 125, 134, 0.065);
+  border-radius: 20px;
+  background: rgba(247, 247, 249, 0.94);
   box-shadow:
-    inset 0 2px 7px rgba(70, 70, 90, 0.08),
-    inset 0 -1px rgba(255, 255, 255, 0.5);
+    inset 0 2px 7px rgba(70, 70, 90, 0.075),
+    inset 0 -1px rgba(255, 255, 255, 0.58),
+    0 1px rgba(255, 255, 255, 0.2);
   text-align: center;
+}
+
+.microphone-permission-content {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
 }
 
 .microphone-permission-icon {
   display: grid;
   width: 42px;
   height: 42px;
-  margin-bottom: 12px;
   place-items: center;
   border-radius: 50%;
   background: var(--control-surface);
@@ -703,10 +713,10 @@ button {
 
 .microphone-permission-action {
   width: 100%;
-  height: 38px;
-  margin-top: 10px;
+  height: 44px;
+  margin-top: 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 14px;
   background: var(--control-surface);
   box-shadow: var(--control-depth-shadow);
   color: rgba(78, 77, 85, 0.82);
@@ -744,30 +754,33 @@ button {
   display: grid;
   padding: 24px;
   place-items: center;
-  background: rgba(245, 245, 247, 0.66);
-  backdrop-filter: blur(18px);
+  background: rgba(245, 245, 247, 0.58);
+  backdrop-filter: blur(20px);
   animation: previewFadeIn 240ms ease-out both;
 }
 
 .export-preview {
   width: min(900px, calc(100vw - 48px));
   max-height: calc(100dvh - 48px);
+  padding: 14px;
   overflow: hidden;
-  border: 1px solid rgba(126, 125, 134, 0.09);
-  border-radius: 8px;
+  border: 1px solid rgba(126, 125, 134, 0.075);
+  border-radius: 32px;
   background: var(--instrument-surface);
   box-shadow:
-    0 18px 44px rgba(70, 70, 90, 0.12),
-    inset 0 1px rgba(255, 255, 255, 0.32);
+    0 20px 54px rgba(70, 70, 90, 0.105),
+    inset 0 1px rgba(255, 255, 255, 0.4),
+    inset 0 -1px rgba(70, 70, 90, 0.025);
   animation: previewRiseIn 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .export-preview-header {
-  display: flex;
+  display: grid;
   height: 52px;
+  grid-template-columns: auto minmax(24px, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 12px 0 17px;
+  gap: 16px;
+  padding: 0 2px 0 12px;
 }
 
 .export-preview-label {
@@ -781,22 +794,43 @@ button {
 
 .export-preview-actions {
   display: flex;
-  gap: 9px;
+  align-items: center;
+  gap: 12px;
+}
+
+.dialog-header-rule {
+  display: block;
+  width: 100%;
+  height: 1px;
+  background: rgba(126, 125, 134, 0.16);
+}
+
+.dialog-close {
+  flex: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dialog-close .control-icon {
+  width: 14px;
+  height: 14px;
+  margin: 0;
 }
 
 .export-preview-screen {
   display: grid;
   min-height: 180px;
-  max-height: calc(100dvh - 124px);
-  margin: 0 12px 12px;
+  max-height: calc(100dvh - 128px);
+  margin: 0;
   overflow: hidden;
   place-items: center;
-  border: 1px solid rgba(126, 125, 134, 0.07);
-  border-radius: 6px;
-  background: #f5f5f7;
+  border: 1px solid rgba(126, 125, 134, 0.065);
+  border-radius: 22px;
+  background: rgba(247, 247, 249, 0.94);
   box-shadow:
-    inset 0 2px 7px rgba(70, 70, 90, 0.08),
-    inset 0 -1px rgba(255, 255, 255, 0.5);
+    inset 0 2px 7px rgba(70, 70, 90, 0.075),
+    inset 0 -1px rgba(255, 255, 255, 0.58),
+    0 1px rgba(255, 255, 255, 0.2);
 }
 
 .export-preview-screen canvas {
@@ -804,7 +838,7 @@ button {
   width: auto;
   max-width: 100%;
   height: auto;
-  max-height: calc(100dvh - 126px);
+  max-height: calc(100dvh - 130px);
 }
 
 .preview-control.is-exporting .control-icon {
@@ -938,13 +972,32 @@ button {
     width: 96px;
   }
 
+  .microphone-permission-backdrop,
   .export-preview-backdrop {
     padding: 12px;
   }
 
+  .microphone-permission,
   .export-preview {
     width: calc(100vw - 24px);
     max-height: calc(100dvh - 24px);
+    border-radius: 26px;
+  }
+
+  .microphone-permission-header,
+  .export-preview-header {
+    grid-template-columns: auto minmax(18px, 1fr) auto;
+    gap: 12px;
+    padding-left: 10px;
+  }
+
+  .microphone-permission-screen {
+    padding: 24px 20px;
+    border-radius: 18px;
+  }
+
+  .export-preview-screen {
+    border-radius: 18px;
   }
 }
 
