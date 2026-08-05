@@ -92,7 +92,7 @@ type SoundMode = {
 
 type VisualMode = {
   shapes: readonly AuraShape[];
-  accentOffset: number;
+  accentStep: number;
   angleBias: number;
   softness: number;
 };
@@ -108,7 +108,7 @@ const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
 const MAX_MIDI = (MAX_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
 const DEFAULT_SOUND_MODE: SoundModeId = "piano";
-const SPECTRAL_HUES = [330, 286, 250, 220, 188, 156, 112, 72, 48, 24, 4, 350] as const;
+const RADIOGRAPHIC_HUES = [338, 322, 300, 282, 260, 238, 220, 10, 18, 348, 312, 248] as const;
 const COMPOSITION_ANCHORS = [
   [0.14, 0.3],
   [0.82, 0.2],
@@ -127,31 +127,31 @@ const COMPOSITION_ANCHORS = [
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
   piano: {
     shapes: ["ribbon", "bloom", "wave", "arc", "mesh", "halo", "prism", "veil", "flare", "beam"],
-    accentOffset: 18,
+    accentStep: 1,
     angleBias: -0.08,
     softness: 0.62,
   },
   glass: {
     shapes: ["prism", "flare", "mesh", "beam", "halo", "arc", "bloom", "wave", "ribbon", "veil"],
-    accentOffset: -20,
+    accentStep: 5,
     angleBias: -0.34,
     softness: 0.38,
   },
   pad: {
     shapes: ["veil", "bloom", "halo", "wave", "ribbon", "mesh", "arc", "flare", "prism", "beam"],
-    accentOffset: 12,
+    accentStep: -1,
     angleBias: 0.14,
     softness: 0.9,
   },
   pluck: {
     shapes: ["beam", "flare", "prism", "wave", "arc", "mesh", "ribbon", "halo", "bloom", "veil"],
-    accentOffset: -14,
+    accentStep: 7,
     angleBias: 0.44,
     softness: 0.32,
   },
   organ: {
     shapes: ["arc", "halo", "ribbon", "wave", "veil", "bloom", "mesh", "flare", "beam", "prism"],
-    accentOffset: 22,
+    accentStep: 3,
     angleBias: 0,
     softness: 0.7,
   },
@@ -310,11 +310,14 @@ function mulberry32(seed: number) {
 }
 
 function spectralColor(index: number, rng: () => number, pale = false): Color {
-  const hue = modulo(SPECTRAL_HUES[modulo(index, SPECTRAL_HUES.length)] + (rng() - 0.5) * 16, 360);
+  const hue = modulo(
+    RADIOGRAPHIC_HUES[modulo(index, RADIOGRAPHIC_HUES.length)] + (rng() - 0.5) * 8,
+    360,
+  );
   return {
     h: hue,
-    s: pale ? 68 + rng() * 14 : 80 + rng() * 16,
-    l: pale ? 62 + rng() * 8 : 50 + rng() * 14,
+    s: pale ? 72 + rng() * 12 : 84 + rng() * 14,
+    l: pale ? 64 + rng() * 8 : 50 + rng() * 13,
   };
 }
 
@@ -322,7 +325,7 @@ function createMapping(): Mapping {
   const seedHash = fnv1a("AURA");
   const rng = mulberry32(seedHash);
   const pitches: Color[] = [];
-  const paletteOffset = seedHash % SPECTRAL_HUES.length;
+  const paletteOffset = seedHash % RADIOGRAPHIC_HUES.length;
 
   for (let index = 0; index < 12; index += 1) {
     pitches.push(spectralColor(paletteOffset + index * 5, rng));
@@ -401,6 +404,69 @@ function makeLinearAuraGradient(
   return gradient;
 }
 
+function traceTissueLobe(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  curvature: number,
+  phase: number,
+) {
+  const upperBend = Math.sin(phase * 1.37) * height * 0.18;
+  const lowerBend = Math.cos(phase * 1.11) * height * 0.16;
+  const taper = clamp(0.38 + Math.abs(curvature) * 0.12, 0.38, 0.58);
+
+  context.beginPath();
+  context.moveTo(-width * 0.5, height * 0.06);
+  context.bezierCurveTo(
+    -width * 0.34,
+    -height * taper + upperBend,
+    width * 0.16,
+    -height * 0.48 - curvature * height * 0.12,
+    width * 0.5,
+    -height * 0.08,
+  );
+  context.bezierCurveTo(
+    width * 0.31,
+    height * 0.44 + lowerBend,
+    -width * 0.18,
+    height * 0.5 + curvature * height * 0.1,
+    -width * 0.5,
+    height * 0.06,
+  );
+  context.closePath();
+}
+
+function drawTissueWash(
+  context: CanvasRenderingContext2D,
+  blob: BlobParticle,
+  radius: number,
+  alpha: number,
+) {
+  const width = radius * (1.1 + Math.min(blob.stretch, 5.2) * 0.48);
+  const height = radius * (0.92 + blob.thickness * 0.9 + blob.softness * 0.34);
+  const phase = blob.id * 0.37 + blob.repeat * 0.68;
+
+  context.save();
+  context.filter = `blur(${Math.max(1.2, radius * 0.045)}px)`;
+  const wash = context.createLinearGradient(-width * 0.5, height * 0.2, width * 0.5, -height * 0.18);
+  wash.addColorStop(0, colorToHslar(blob.color, 0));
+  wash.addColorStop(0.2, colorToHslar(blob.color, alpha * 0.15));
+  wash.addColorStop(0.52, colorToHslar(blob.accent, alpha * 0.24));
+  wash.addColorStop(0.78, colorToHslar(blob.color, alpha * 0.12));
+  wash.addColorStop(1, colorToHslar(blob.accent, 0));
+  context.fillStyle = wash;
+  traceTissueLobe(context, width, height, blob.curvature, phase);
+  context.fill();
+
+  context.filter = "none";
+  context.shadowBlur = 0;
+  context.strokeStyle = colorToHslar(blob.accent, alpha * 0.13);
+  context.lineWidth = Math.max(0.5, radius * 0.012);
+  traceTissueLobe(context, width * 0.92, height * 0.82, -blob.curvature * 0.6, phase + 1.4);
+  context.stroke();
+  context.restore();
+}
+
 function drawAuraParticle(
   context: CanvasRenderingContext2D,
   blob: BlobParticle,
@@ -414,6 +480,7 @@ function drawAuraParticle(
   context.rotate(blob.angle);
   context.shadowColor = colorToHslar(blob.color, alpha * 0.42);
   context.shadowBlur = radius * (0.16 + blob.softness * 0.34);
+  drawTissueWash(context, blob, radius, alpha);
 
   if (blob.shape === "bloom") {
     context.save();
@@ -610,59 +677,47 @@ function drawAuraParticle(
 
   if (blob.shape === "mesh") {
     const length = radius * blob.stretch * 1.15;
-    const height = radius * (0.85 + blob.thickness * 1.2);
-    const points = [
-      [-0.5, -0.08],
-      [-0.25, -0.5],
-      [0.18, -0.36],
-      [0.5, -0.06],
-      [0.31, 0.48],
-      [-0.18, 0.37],
-      [-0.44, 0.18],
-    ] as const;
-    context.fillStyle = makeLinearAuraGradient(context, blob, length, alpha * 0.48);
-    context.beginPath();
-    points.forEach(([x, y], index) => {
-      const px = x * length;
-      const py = (y + Math.sin(index + blob.repeat) * 0.05 * blob.curvature) * height;
-      if (index === 0) context.moveTo(px, py);
-      else context.lineTo(px, py);
-    });
-    context.closePath();
-    context.fill();
-    context.shadowBlur = 0;
-    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.42);
-    context.lineWidth = Math.max(0.6, radius * 0.018);
-    context.stroke();
-    context.beginPath();
-    context.moveTo(points[0][0] * length, points[0][1] * height);
-    context.lineTo(points[3][0] * length, points[3][1] * height);
-    context.moveTo(points[1][0] * length, points[1][1] * height);
-    context.lineTo(points[4][0] * length, points[4][1] * height);
-    context.moveTo(points[6][0] * length, points[6][1] * height);
-    context.lineTo(points[2][0] * length, points[2][1] * height);
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.2})`;
-    context.stroke();
+    const height = radius * (0.8 + blob.thickness * 0.9);
+    const segmentCount = 5 + modulo(blob.id + blob.repeat, 3);
+    context.shadowBlur = radius * 0.12;
+    for (let index = 0; index < segmentCount; index += 1) {
+      const progress = segmentCount === 1 ? 0.5 : index / (segmentCount - 1);
+      const x = lerp(-length * 0.5, length * 0.5, progress);
+      const phase = progress * Math.PI * 1.18 + blob.curvature * 0.8;
+      const y = Math.sin(phase) * height * 0.22;
+      const lobeWidth = radius * (0.34 + (index % 3) * 0.045);
+      const lobeHeight = radius * (0.56 + blob.thickness * 0.28);
+
+      context.save();
+      context.translate(x, y);
+      context.rotate(Math.cos(phase) * 0.24 + Math.PI * 0.5);
+      const segment = context.createLinearGradient(0, -lobeHeight * 0.5, 0, lobeHeight * 0.5);
+      segment.addColorStop(0, colorToHslar(blob.color, alpha * 0.28));
+      segment.addColorStop(0.48, colorToHslar(blob.accent, alpha * 0.66));
+      segment.addColorStop(1, colorToHslar(blob.color, alpha * 0.18));
+      context.fillStyle = segment;
+      traceTissueLobe(context, lobeWidth, lobeHeight, blob.curvature * 0.28, index + blob.id * 0.21);
+      context.fill();
+      context.shadowBlur = 0;
+      context.strokeStyle = colorToHslar(blob.accent, alpha * 0.34);
+      context.lineWidth = Math.max(0.5, radius * 0.014);
+      context.stroke();
+      context.restore();
+    }
   }
 
   context.restore();
 }
 
 function paintArtworkBackground(context: CanvasRenderingContext2D, width: number, height: number) {
-  context.fillStyle = "#f5f5f7";
+  context.fillStyle = "#f3f5fa";
   context.fillRect(0, 0, width, height);
 
-  const wash = context.createRadialGradient(
-    width * 0.5,
-    height * 0.3,
-    0,
-    width * 0.5,
-    height * 0.3,
-    Math.max(width, height) * 0.62,
-  );
-  wash.addColorStop(0, "rgba(255, 250, 238, 0.22)");
-  wash.addColorStop(0.58, "rgba(246, 244, 248, 0.1)");
-  wash.addColorStop(1, "rgba(245, 245, 247, 0)");
+  const wash = context.createLinearGradient(0, 0, width, height);
+  wash.addColorStop(0, "rgba(255, 255, 255, 0.28)");
+  wash.addColorStop(0.46, "rgba(222, 229, 246, 0.12)");
+  wash.addColorStop(0.74, "rgba(246, 225, 240, 0.08)");
+  wash.addColorStop(1, "rgba(255, 255, 255, 0.2)");
   context.fillStyle = wash;
   context.fillRect(0, 0, width, height);
 }
@@ -928,10 +983,14 @@ export function AuraToy() {
     };
     const [minimumStretch, maximumStretch] = stretchByShape[shape];
     const stretch = lerp(minimumStretch, maximumStretch, identityRng()) * (0.9 + repeatRng() * 0.22);
+    const paletteOffset = AURA_MAPPING.seedHash % RADIOGRAPHIC_HUES.length;
+    const accentHue = RADIOGRAPHIC_HUES[
+      modulo(paletteOffset + note.pc * 5 + profile.accentStep, RADIOGRAPHIC_HUES.length)
+    ];
     const accent = {
-      h: modulo(color.h + profile.accentOffset + (identityRng() - 0.5) * 8, 360),
-      s: clamp(color.s + 4 + identityRng() * 6, 0, 100),
-      l: clamp(color.l + 3 + identityRng() * 6, 0, 69),
+      h: modulo(accentHue + (identityRng() - 0.5) * 7, 360),
+      s: clamp(86 + identityRng() * 13, 0, 100),
+      l: clamp(51 + identityRng() * 14, 0, 69),
     };
 
     blobsRef.current.push({
@@ -1107,9 +1166,9 @@ export function AuraToy() {
     const drawEmptyAura = () => {
       if (blobsRef.current.length > 0) return;
       const gradient = context.createRadialGradient(width * 0.5, height * 0.28, 0, width * 0.5, height * 0.28, width * 0.34);
-      gradient.addColorStop(0, "rgba(255, 246, 222, 0.054)");
-      gradient.addColorStop(0.54, "rgba(255, 217, 160, 0.025)");
-      gradient.addColorStop(1, "rgba(245, 245, 247, 0)");
+      gradient.addColorStop(0, "rgba(230, 234, 250, 0.06)");
+      gradient.addColorStop(0.54, "rgba(235, 220, 244, 0.028)");
+      gradient.addColorStop(1, "rgba(243, 245, 250, 0)");
       context.fillStyle = gradient;
       context.fillRect(0, 0, width, height);
     };
@@ -1171,7 +1230,7 @@ export function AuraToy() {
 
       context.save();
       context.globalCompositeOperation = "lighter";
-      context.filter = reducedMotionRef.current ? "blur(6px)" : "blur(10px)";
+      context.filter = reducedMotionRef.current ? "blur(4px)" : "blur(7px)";
       context.drawImage(offscreen, 0, 0, width, height);
       context.restore();
 
@@ -1245,7 +1304,7 @@ export function AuraToy() {
     paintArtworkBackground(outputContext, output.width, output.height);
     outputContext.save();
     outputContext.globalCompositeOperation = "source-over";
-    outputContext.filter = `blur(${clamp(Math.min(output.width, output.height) * 0.011, 5, 14)}px)`;
+    outputContext.filter = `blur(${clamp(Math.min(output.width, output.height) * 0.008, 4, 10)}px)`;
     outputContext.drawImage(auraLayer, 0, 0, output.width, output.height);
     outputContext.restore();
     if (grainRef.current) {
