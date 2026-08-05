@@ -138,6 +138,15 @@ type MicrophoneRuntime = {
   noiseFloor: number;
   smoothedEnergy: number;
   smoothedFlux: number;
+  beatBandEnergy: number;
+  beatInterval: number;
+  beatConfidence: number;
+  nextBeatAt: number;
+  lastOnsetAt: number;
+  previousOnsetStrength: number;
+  onsetRising: boolean;
+  onsetBaseline: number;
+  onsetDeviation: number;
   melodyPitchClass: number | null;
   melodyCandidatePitchClass: number | null;
   melodyCandidateFrames: number;
@@ -419,6 +428,140 @@ function calculateRms(samples: Float32Array) {
     energy += samples[index] * samples[index];
   }
   return Math.sqrt(energy / samples.length);
+}
+
+function calculateBandEnergy(
+  frequencyData: Float32Array,
+  sampleRate: number,
+  fftSize: number,
+  minimumFrequency: number,
+  maximumFrequency: number,
+) {
+  const minimumBin = Math.max(1, Math.ceil((minimumFrequency * fftSize) / sampleRate));
+  const maximumBin = Math.min(
+    frequencyData.length - 1,
+    Math.floor((maximumFrequency * fftSize) / sampleRate),
+  );
+  let energy = 0;
+  let sampleCount = 0;
+
+  for (let bin = minimumBin; bin <= maximumBin; bin += 1) {
+    const decibels = frequencyData[bin];
+    const amplitude = Number.isFinite(decibels) ? Math.pow(10, decibels / 20) : 0;
+    energy += amplitude * amplitude;
+    sampleCount += 1;
+  }
+
+  return sampleCount > 0 ? Math.sqrt(energy / sampleCount) : 0;
+}
+
+function normalizeBeatInterval(interval: number) {
+  // Fold fast subdivisions and slow bar accents into a deliberate quarter-note pulse.
+  let normalized = interval;
+  while (normalized < 360) normalized *= 2;
+  while (normalized > 760) normalized /= 2;
+  return clamp(normalized, 360, 760);
+}
+
+function trackMicrophoneBeat(
+  runtime: MicrophoneRuntime,
+  now: number,
+  activeSignal: boolean,
+  energyRise: number,
+  spectralFlux: number,
+  beatBandEnergy: number,
+) {
+  const bandRise = beatBandEnergy / Math.max(0.000001, runtime.beatBandEnergy);
+  const fluxRise = spectralFlux / Math.max(0.00001, runtime.smoothedFlux);
+  const onsetStrength =
+    Math.max(0, bandRise - 1) * 1.6 +
+    Math.max(0, energyRise - 1) * 0.78 +
+    Math.max(0, fluxRise - 1) * 0.14;
+  const onsetThreshold = Math.max(0.16, runtime.onsetBaseline + runtime.onsetDeviation * 1.9);
+  const onsetPeak =
+    activeSignal &&
+    runtime.onsetRising &&
+    runtime.previousOnsetStrength >= onsetThreshold &&
+    onsetStrength < runtime.previousOnsetStrength * 0.9;
+
+  const baselineDifference = Math.abs(onsetStrength - runtime.onsetBaseline);
+  runtime.onsetBaseline = lerp(runtime.onsetBaseline, onsetStrength, 0.035);
+  runtime.onsetDeviation = lerp(runtime.onsetDeviation, baselineDifference, 0.045);
+  runtime.onsetRising =
+    onsetStrength > runtime.previousOnsetStrength + 0.008
+      ? true
+      : onsetStrength < runtime.previousOnsetStrength * 0.92
+        ? false
+        : runtime.onsetRising;
+  runtime.previousOnsetStrength = onsetStrength;
+  runtime.beatBandEnergy = lerp(
+    runtime.beatBandEnergy,
+    beatBandEnergy,
+    beatBandEnergy > runtime.beatBandEnergy ? 0.035 : 0.12,
+  );
+
+  let beatDetected = false;
+  if (onsetPeak) {
+    const onsetAt = now - MICROPHONE_ANALYSIS_INTERVAL;
+    const rawInterval = onsetAt - runtime.lastOnsetAt;
+    if (rawInterval > Math.max(1800, runtime.beatInterval * 3)) {
+      runtime.beatInterval = 500;
+      runtime.beatConfidence = 0;
+      runtime.nextBeatAt = Infinity;
+    } else if (Number.isFinite(runtime.lastOnsetAt)) {
+      if (rawInterval >= 150 && rawInterval <= 1520) {
+        const candidateInterval = normalizeBeatInterval(rawInterval);
+        const intervalDifference = Math.abs(candidateInterval - runtime.beatInterval) / runtime.beatInterval;
+
+        if (runtime.beatConfidence === 0) {
+          runtime.beatInterval = candidateInterval;
+          runtime.beatConfidence = 1;
+        } else if (intervalDifference <= 0.22) {
+          runtime.beatInterval = lerp(runtime.beatInterval, candidateInterval, 0.18);
+          runtime.beatConfidence = Math.min(5, runtime.beatConfidence + 0.75);
+        } else if (intervalDifference <= 0.36 && runtime.beatConfidence < 2) {
+          runtime.beatInterval = lerp(runtime.beatInterval, candidateInterval, 0.28);
+          runtime.beatConfidence = Math.max(0.5, runtime.beatConfidence - 0.1);
+        } else {
+          runtime.beatConfidence = Math.max(0, runtime.beatConfidence - 0.45);
+        }
+      }
+    }
+    runtime.lastOnsetAt = onsetAt;
+
+    const sinceLastBeat = onsetAt - runtime.lastBeatAt;
+    const beatMultiple = Math.max(1, Math.round(sinceLastBeat / runtime.beatInterval));
+    const phaseError = Math.abs(sinceLastBeat - beatMultiple * runtime.beatInterval);
+    const phaseWindow = Math.max(70, runtime.beatInterval * 0.18);
+    const minimumSpacing = Math.max(300, runtime.beatInterval * 0.58);
+    const isOnGrid = phaseError <= phaseWindow;
+    const isOverdue = sinceLastBeat >= runtime.beatInterval * 1.6;
+
+    if (
+      !Number.isFinite(runtime.lastBeatAt) ||
+      (sinceLastBeat >= minimumSpacing && (runtime.beatConfidence < 1.5 || isOnGrid || isOverdue))
+    ) {
+      beatDetected = true;
+      runtime.lastBeatAt = onsetAt;
+      runtime.nextBeatAt = onsetAt + runtime.beatInterval;
+    }
+  }
+
+  const hasRecentPulse = now - runtime.lastOnsetAt <= runtime.beatInterval * 2.2;
+  // A confident tempo can carry one acoustically soft beat without chasing every transient.
+  if (
+    !beatDetected &&
+    activeSignal &&
+    runtime.beatConfidence >= 2 &&
+    hasRecentPulse &&
+    now >= runtime.nextBeatAt
+  ) {
+    beatDetected = true;
+    runtime.lastBeatAt = runtime.nextBeatAt;
+    runtime.nextBeatAt += runtime.beatInterval;
+  }
+
+  return beatDetected;
 }
 
 function updateSpectrumAnalysis(
@@ -1358,6 +1501,15 @@ export function AuraToy() {
         noiseFloor: 0.0018,
         smoothedEnergy: 0.003,
         smoothedFlux: 0.001,
+        beatBandEnergy: 0.0002,
+        beatInterval: 500,
+        beatConfidence: 0,
+        nextBeatAt: Infinity,
+        lastOnsetAt: -Infinity,
+        previousOnsetStrength: 0,
+        onsetRising: false,
+        onsetBaseline: 0.05,
+        onsetDeviation: 0.04,
         melodyPitchClass: null,
         melodyCandidatePitchClass: null,
         melodyCandidateFrames: 0,
@@ -1397,13 +1549,23 @@ export function AuraToy() {
           audioContext.sampleRate,
           analyser.fftSize,
         );
+        const beatBandEnergy = calculateBandEnergy(
+          runtime.frequencyData,
+          audioContext.sampleRate,
+          analyser.fftSize,
+          45,
+          240,
+        );
+        const beatDetected = trackMicrophoneBeat(
+          runtime,
+          now,
+          activeSignal,
+          energyRise,
+          spectralFlux,
+          beatBandEnergy,
+        );
         const previousFlux = runtime.smoothedFlux;
         runtime.smoothedFlux = lerp(previousFlux, spectralFlux, 0.085);
-        const beatDetected =
-          activeSignal &&
-          now - runtime.lastBeatAt > 125 &&
-          (energyRise > 1.08 || spectralFlux > Math.max(0.00025, previousFlux * 1.18));
-        if (beatDetected) runtime.lastBeatAt = now;
 
         const [frequency, clarity] = detector.findPitch(runtime.timeDomain, audioContext.sampleRate);
         const midiFloat = frequency > 0 ? frequencyToMidi(frequency) : Number.NaN;
@@ -1507,6 +1669,7 @@ export function AuraToy() {
 
         if (
           beatDetected &&
+          runtime.beatConfidence >= 1.5 &&
           runtime.melodyPitchClass !== null &&
           now - runtime.melodyStableSince >= 450
         ) {
