@@ -91,7 +91,7 @@ type SoundMode = {
 };
 
 type VisualMode = {
-  shapes: readonly AuraShape[];
+  shapeBands: readonly [readonly AuraShape[], readonly AuraShape[], readonly AuraShape[]];
   accentStep: number;
   angleBias: number;
   softness: number;
@@ -126,31 +126,51 @@ const COMPOSITION_ANCHORS = [
 
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
   piano: {
-    shapes: ["ribbon", "bloom", "wave", "arc", "mesh", "halo", "prism", "veil", "flare", "beam"],
+    shapeBands: [
+      ["veil", "bloom", "arc"],
+      ["mesh", "ribbon", "wave"],
+      ["halo", "prism", "flare"],
+    ],
     accentStep: 1,
     angleBias: -0.08,
     softness: 0.62,
   },
   glass: {
-    shapes: ["prism", "flare", "mesh", "beam", "halo", "arc", "bloom", "wave", "ribbon", "veil"],
+    shapeBands: [
+      ["arc", "halo"],
+      ["prism", "mesh"],
+      ["flare", "beam"],
+    ],
     accentStep: 5,
     angleBias: -0.34,
     softness: 0.38,
   },
   pad: {
-    shapes: ["veil", "bloom", "halo", "wave", "ribbon", "mesh", "arc", "flare", "prism", "beam"],
+    shapeBands: [
+      ["veil", "bloom"],
+      ["ribbon", "wave", "arc"],
+      ["halo", "mesh"],
+    ],
     accentStep: -1,
     angleBias: 0.14,
     softness: 0.9,
   },
   pluck: {
-    shapes: ["beam", "flare", "prism", "wave", "arc", "mesh", "ribbon", "halo", "bloom", "veil"],
+    shapeBands: [
+      ["beam", "arc"],
+      ["wave", "ribbon", "prism"],
+      ["flare", "beam"],
+    ],
     accentStep: 7,
     angleBias: 0.44,
     softness: 0.32,
   },
   organ: {
-    shapes: ["arc", "halo", "ribbon", "wave", "veil", "bloom", "mesh", "flare", "beam", "prism"],
+    shapeBands: [
+      ["arc", "veil", "bloom"],
+      ["halo", "ribbon", "mesh"],
+      ["wave", "prism"],
+    ],
     accentStep: 3,
     angleBias: 0,
     softness: 0.7,
@@ -940,7 +960,6 @@ export function AuraToy() {
 
     const identitySeed = fnv1a(identity);
     const identityRng = mulberry32(identitySeed);
-    const repeatRng = mulberry32(identitySeed ^ Math.imul(repeat + 1, 0x9e3779b1));
     const pitchNorm = clamp((note.midi - MIN_MIDI) / (MAX_MIDI - MIN_MIDI), 0, 1);
     const anchor = COMPOSITION_ANCHORS[
       modulo(note.pc * 7 + Math.floor(note.midi / 12) * 3 + modeIndex * 5 + identitySeed, COMPOSITION_ANCHORS.length)
@@ -949,12 +968,28 @@ export function AuraToy() {
     const pitchY = 0.1 + (1 - pitchNorm) * 0.76;
     const baseX = clamp(lerp(pitchX, anchor[0], 0.38) + (identityRng() - 0.5) * 0.04, 0.05, 0.95);
     const baseY = clamp(lerp(pitchY, anchor[1], 0.24) + (identityRng() - 0.5) * 0.035, 0.05, 0.88);
-    const orbit = repeat === 0 ? 0 : Math.min(0.024 + repeat * 0.008, 0.105);
-    const orbitAngle = repeat * 2.399963 + identityRng() * Math.PI * 2;
-    const x = clamp(baseX + Math.cos(orbitAngle) * orbit * (0.72 + repeatRng() * 0.5), 0.035, 0.965);
-    const y = clamp(baseY + Math.sin(orbitAngle) * orbit * (0.58 + repeatRng() * 0.45), 0.04, 0.9);
-    const primaryShapeIndex = Math.floor(identityRng() * profile.shapes.length);
-    const shape = profile.shapes[modulo(primaryShapeIndex + repeat, profile.shapes.length)];
+    const baseAngle =
+      profile.angleBias + (identityRng() - 0.5) * Math.PI * 0.82 + (note.pc - 5.5) * 0.045;
+    const trailDirection = baseAngle + (modeIndex - 2) * 0.12;
+    const trailDistance = repeat === 0 ? 0 : Math.min(0.012 + repeat * 0.012, 0.115);
+    const trailBend = repeat === 0 ? 0 : Math.sin(repeat * 0.62) * Math.min(0.006 + repeat * 0.0015, 0.018);
+    const x = clamp(
+      baseX + Math.cos(trailDirection) * trailDistance + Math.cos(trailDirection + Math.PI / 2) * trailBend,
+      0.035,
+      0.965,
+    );
+    const y = clamp(
+      baseY +
+        Math.sin(trailDirection) * trailDistance * 0.74 +
+        Math.sin(trailDirection + Math.PI / 2) * trailBend * 0.74,
+      0.04,
+      0.9,
+    );
+    const registerBand = pitchNorm < 0.34 ? 0 : pitchNorm < 0.68 ? 1 : 2;
+    const shapeBand = profile.shapeBands[registerBand];
+    const shape = shapeBand[
+      modulo(note.pc * 2 + Math.floor(note.midi / 12) + modeIndex, shapeBand.length)
+    ];
     const baseRadius: Record<AuraShape, number> = {
       bloom: 0.13,
       ribbon: 0.1,
@@ -967,8 +1002,14 @@ export function AuraToy() {
       flare: 0.12,
       mesh: 0.12,
     };
-    const repeatScale = 0.92 + repeatRng() * 0.2 + Math.min(repeat, 7) * 0.025;
-    const radius = baseRadius[shape] * (0.84 + identityRng() * 0.56) * (0.82 + velocity * 0.38) * repeatScale;
+    const repeatScale = 0.96 + Math.min(repeat, 9) * 0.055;
+    const registerScale = lerp(1.16, 0.86, pitchNorm);
+    const radius =
+      baseRadius[shape] *
+      (0.88 + identityRng() * 0.46) *
+      (0.82 + velocity * 0.38) *
+      repeatScale *
+      registerScale;
     const stretchByShape: Record<AuraShape, [number, number]> = {
       bloom: [0.7, 2.2],
       ribbon: [2.4, 5.4],
@@ -982,7 +1023,9 @@ export function AuraToy() {
       mesh: [1.2, 2.7],
     };
     const [minimumStretch, maximumStretch] = stretchByShape[shape];
-    const stretch = lerp(minimumStretch, maximumStretch, identityRng()) * (0.9 + repeatRng() * 0.22);
+    const stretch =
+      lerp(minimumStretch, maximumStretch, identityRng()) *
+      (0.96 + Math.min(repeat, 8) * 0.018);
     const paletteOffset = AURA_MAPPING.seedHash % RADIOGRAPHIC_HUES.length;
     const accentHue = RADIOGRAPHIC_HUES[
       modulo(paletteOffset + note.pc * 5 + profile.accentStep, RADIOGRAPHIC_HUES.length)
@@ -1002,14 +1045,10 @@ export function AuraToy() {
       x,
       y,
       radius,
-      angle:
-        profile.angleBias +
-        (identityRng() - 0.5) * Math.PI * 1.15 +
-        (note.pc - 5.5) * 0.045 +
-        (repeatRng() - 0.5) * 0.22,
+      angle: baseAngle + Math.sin(repeat * 0.62) * 0.055,
       stretch,
-      thickness: 0.2 + identityRng() * 0.42 + velocity * 0.12 + repeatRng() * 0.08,
-      curvature: (identityRng() - 0.5) * 1.65 + (repeatRng() - 0.5) * 0.28,
+      thickness: 0.2 + identityRng() * 0.42 + velocity * 0.12 + Math.min(repeat, 8) * 0.012,
+      curvature: (identityRng() - 0.5) * 1.65 + Math.sin(repeat * 0.62) * 0.14,
       velocity,
       softness: clamp(profile.softness + (identityRng() - 0.5) * 0.18, 0.24, 0.98),
       createdAt: now,
