@@ -1945,6 +1945,7 @@ export function AuraToy() {
   }, [disposeToneEngine, stopMicrophone]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
+  const microphonePitchClass = microphoneMidi === null ? null : modulo(microphoneMidi, 12);
   const microphoneLabel =
     microphoneState === "listening"
       ? `Stop microphone listening, detecting ${microphoneReading}`
@@ -2051,7 +2052,7 @@ export function AuraToy() {
                   key={key.id}
                   type="button"
                   className={`piano-key white-key ${
-                    activeKeys.has(key.id) || shiftedNote(key).midi === microphoneMidi ? "is-active" : ""
+                    activeKeys.has(key.id) || shiftedNote(key).pc === microphonePitchClass ? "is-active" : ""
                   }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
@@ -2071,7 +2072,7 @@ export function AuraToy() {
                 <button
                   type="button"
                   className={`piano-key upper-key ${
-                    activeKeys.has(key.id) || shiftedNote(key).midi === microphoneMidi ? "is-active" : ""
+                    activeKeys.has(key.id) || shiftedNote(key).pc === microphonePitchClass ? "is-active" : ""
                   }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
