@@ -2249,29 +2249,18 @@ export function AuraToy() {
   }, [cycleSoundMode, previewKind]);
 
   const resetAura = useCallback(() => {
-    stopMicrophone();
-    visualGenerationRef.current += 1;
-    releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    releaseTimersRef.current.clear();
-    disposeToneEngine();
     blobsRef.current = [];
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
     if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
     setResetting(true);
-    setActiveKeys(new Set());
-    setOctave(BASE_OCTAVE);
-    soundModeRef.current = DEFAULT_SOUND_MODE;
-    setSoundMode(DEFAULT_SOUND_MODE);
-    setPreviewKind(null);
     setLayerCount(0);
-    setExportState("idle");
     wakeRendererRef.current?.();
     resetFrameRef.current = window.requestAnimationFrame(() => {
       resetFrameRef.current = null;
       setResetting(false);
     });
-  }, [disposeToneEngine, stopMicrophone]);
+  }, []);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
   const microphoneLabel =
