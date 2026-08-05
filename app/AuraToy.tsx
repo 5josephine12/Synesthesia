@@ -148,8 +148,6 @@ type MicrophoneRuntime = {
   onsetRising: boolean;
   onsetBaseline: number;
   onsetDeviation: number;
-  keyPitchConfidence: Float32Array;
-  keyPitchLastSeenAt: Float64Array;
   highlightedPitchClasses: number[];
   lastKeyBeatAt: number;
   melodyPitchClass: number | null;
@@ -157,6 +155,10 @@ type MicrophoneRuntime = {
   melodyCandidateFrames: number;
   melodyLastSeenAt: number;
   melodyStableSince: number;
+  harmonyPitchClasses: number[];
+  harmonyCandidatePitchClasses: number[];
+  harmonyCandidateFrames: number;
+  harmonyLastSeenAt: number;
   visualCursor: number;
 };
 
@@ -373,6 +375,10 @@ function midiToNote(midi: number): NoteChoice {
 
 function modulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
+}
+
+function pitchClassesMatch(first: number[], second: number[]) {
+  return first.length === second.length && first.every((pitchClass, index) => pitchClass === second[index]);
 }
 
 function fnv1a(value: string) {
@@ -1519,8 +1525,6 @@ export function AuraToy() {
         onsetRising: false,
         onsetBaseline: 0.05,
         onsetDeviation: 0.04,
-        keyPitchConfidence: new Float32Array(12),
-        keyPitchLastSeenAt: new Float64Array(12).fill(-Infinity),
         highlightedPitchClasses: [],
         lastKeyBeatAt: -Infinity,
         melodyPitchClass: null,
@@ -1528,6 +1532,10 @@ export function AuraToy() {
         melodyCandidateFrames: 0,
         melodyLastSeenAt: -Infinity,
         melodyStableSince: -Infinity,
+        harmonyPitchClasses: [],
+        harmonyCandidatePitchClasses: [],
+        harmonyCandidateFrames: 0,
+        harmonyLastSeenAt: -Infinity,
         visualCursor: 0,
       };
       microphoneRef.current = runtime;
@@ -1641,7 +1649,7 @@ export function AuraToy() {
             pitchClass: modulo(candidate.midi, 12),
             score:
               candidate.score *
-              (1 + clamp((candidate.midi - MIN_MIDI) / (MAX_MIDI - MIN_MIDI), 0, 1) * 0.18),
+              (1 + clamp((candidate.midi - MIN_MIDI) / (MAX_MIDI - MIN_MIDI), 0, 1) * 0.32),
           }))
           .sort((first, second) => second.score - first.score);
         const melodyLeader = rankedMelodyNotes[0] ?? null;
@@ -1651,7 +1659,7 @@ export function AuraToy() {
         const melodyPitchClass = !activeSignal
           ? null
           : monophonicPitchClass ??
-            (currentMelody && melodyLeader && currentMelody.score >= melodyLeader.score * 0.68
+            (currentMelody && melodyLeader && currentMelody.score >= melodyLeader.score * 0.54
               ? currentMelody.pitchClass
               : melodyLeader?.pitchClass ?? null);
 
@@ -1668,8 +1676,17 @@ export function AuraToy() {
               runtime.melodyCandidateFrames = 1;
             }
 
-            const confirmationFrames = monophonicFrame ? 2 : runtime.melodyPitchClass === null ? 2 : 5;
-            if (runtime.melodyCandidateFrames >= confirmationFrames) {
+            const minimumNoteDuration = now - runtime.melodyStableSince >= 190;
+            const confirmationFrames =
+              runtime.melodyPitchClass === null
+                ? 3
+                : monophonicFrame || now - runtime.lastBeatAt <= 140
+                  ? 4
+                  : 8;
+            if (
+              runtime.melodyCandidateFrames >= confirmationFrames &&
+              (runtime.melodyPitchClass === null || minimumNoteDuration)
+            ) {
               runtime.melodyPitchClass = melodyPitchClass;
               runtime.melodyLastSeenAt = now;
               runtime.melodyStableSince = now;
@@ -1677,7 +1694,7 @@ export function AuraToy() {
               runtime.melodyCandidateFrames = 0;
             }
           }
-        } else if (now - runtime.melodyLastSeenAt > 700 && runtime.melodyPitchClass !== null) {
+        } else if (now - runtime.melodyLastSeenAt > 420 && runtime.melodyPitchClass !== null) {
           runtime.melodyPitchClass = null;
           runtime.melodyCandidatePitchClass = null;
           runtime.melodyCandidateFrames = 0;
@@ -1685,77 +1702,63 @@ export function AuraToy() {
         }
 
         const hasRecentMelody =
-          runtime.melodyPitchClass !== null && now - runtime.melodyLastSeenAt <= 320;
-        const primaryPitchClass = activeSignal
-          ? (runtime.melodyPitchClass ??
-            monophonicPitchClass ??
-            (detectedMidi !== null ? modulo(detectedMidi, 12) : null))
-          : hasRecentMelody
-            ? runtime.melodyPitchClass
-            : null;
-        const supportingPitchClasses =
-          activeSignal && !monophonicFrame && melodyLeader
+          runtime.melodyPitchClass !== null && now - runtime.melodyLastSeenAt <= 380;
+        const primaryPitchClass = hasRecentMelody ? runtime.melodyPitchClass : null;
+        const harmonyCandidate =
+          activeSignal && !monophonicFrame && melodyLeader && primaryPitchClass !== null
             ? rankedMelodyNotes
                 .filter(
                   ({ pitchClass, score }) =>
-                    pitchClass !== primaryPitchClass && score >= melodyLeader.score * 0.64,
+                    pitchClass !== primaryPitchClass && score >= melodyLeader.score * 0.72,
                 )
                 .sort((first, second) => second.midi - first.midi)
                 .slice(0, 2)
                 .map(({ pitchClass }) => pitchClass)
+                .sort((first, second) => first - second)
             : [];
 
-        // Read the spectrum like a restrained right-hand transcription: the lead
-        // enters quickly, while harmony tones must persist before joining it.
-        for (let pitchClass = 0; pitchClass < 12; pitchClass += 1) {
-          const isPrimary = pitchClass === primaryPitchClass;
-          const isSupporting = supportingPitchClasses.includes(pitchClass);
-          const confidenceDelta = isPrimary
-            ? activeSignal
-              ? 1.15
-              : -0.12
-            : isSupporting
-              ? 0.38
-              : activeSignal
-                ? -0.22
-                : -0.46;
-          runtime.keyPitchConfidence[pitchClass] = clamp(
-            runtime.keyPitchConfidence[pitchClass] + confidenceDelta,
-            0,
-            3,
-          );
-          if (isPrimary || isSupporting) runtime.keyPitchLastSeenAt[pitchClass] = now;
+        if (harmonyCandidate.length > 0) {
+          if (pitchClassesMatch(harmonyCandidate, runtime.harmonyPitchClasses)) {
+            runtime.harmonyLastSeenAt = now;
+            runtime.harmonyCandidatePitchClasses = [];
+            runtime.harmonyCandidateFrames = 0;
+          } else {
+            if (pitchClassesMatch(harmonyCandidate, runtime.harmonyCandidatePitchClasses)) {
+              runtime.harmonyCandidateFrames += 1;
+            } else {
+              runtime.harmonyCandidatePitchClasses = harmonyCandidate;
+              runtime.harmonyCandidateFrames = 1;
+            }
+
+            const harmonyConfirmationFrames =
+              runtime.harmonyPitchClasses.length === 0
+                ? 7
+                : now - runtime.lastBeatAt <= 140
+                  ? 6
+                  : 10;
+            if (runtime.harmonyCandidateFrames >= harmonyConfirmationFrames) {
+              runtime.harmonyPitchClasses = harmonyCandidate;
+              runtime.harmonyLastSeenAt = now;
+              runtime.harmonyCandidatePitchClasses = [];
+              runtime.harmonyCandidateFrames = 0;
+            } else if (now - runtime.harmonyLastSeenAt > 280) {
+              runtime.harmonyPitchClasses = [];
+            }
+          }
+        } else if (now - runtime.harmonyLastSeenAt > 280) {
+          runtime.harmonyPitchClasses = [];
+          runtime.harmonyCandidatePitchClasses = [];
+          runtime.harmonyCandidateFrames = 0;
         }
 
-        const nextHighlightedPitchClasses: number[] = [];
-        if (
-          primaryPitchClass !== null &&
-          (runtime.keyPitchConfidence[primaryPitchClass] >= 0.8 ||
-            runtime.highlightedPitchClasses.includes(primaryPitchClass))
-        ) {
-          nextHighlightedPitchClasses.push(primaryPitchClass);
-        }
-
-        const stableHarmonyPitchClasses = Array.from(
-          { length: 12 },
-          (_, pitchClass) => pitchClass,
-        )
-          .filter((pitchClass) => {
-            if (pitchClass === primaryPitchClass) return false;
-            const wasHighlighted = runtime.highlightedPitchClasses.includes(pitchClass);
-            return (
-              runtime.keyPitchConfidence[pitchClass] >= 1.55 ||
-              (wasHighlighted &&
-                now - runtime.keyPitchLastSeenAt[pitchClass] <= 420 &&
-                runtime.keyPitchConfidence[pitchClass] >= 0.62)
-            );
-          })
-          .sort(
-            (first, second) =>
-              runtime.keyPitchConfidence[second] - runtime.keyPitchConfidence[first],
-          )
-          .slice(0, 2);
-        nextHighlightedPitchClasses.push(...stableHarmonyPitchClasses);
+        const nextHighlightedPitchClasses = primaryPitchClass === null
+          ? []
+          : [
+              primaryPitchClass,
+              ...runtime.harmonyPitchClasses.filter(
+                (pitchClass) => pitchClass !== primaryPitchClass,
+              ),
+            ].slice(0, 3);
         nextHighlightedPitchClasses.sort((first, second) => first - second);
 
         const highlightsChanged =
@@ -1774,7 +1777,7 @@ export function AuraToy() {
           now - runtime.lastBeatAt <= 240;
         if (
           hasPendingKeyBeat &&
-          runtime.beatConfidence >= 1.5 &&
+          runtime.beatConfidence >= 2 &&
           runtime.highlightedPitchClasses.length > 0
         ) {
           if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
