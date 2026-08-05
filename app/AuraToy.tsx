@@ -2745,7 +2745,6 @@ export function AuraToy() {
           >
             <header className="microphone-permission-header">
               <h2 id="microphone-permission-title">Microphone</h2>
-              <span className="dialog-header-rule" aria-hidden="true" />
               <button
                 type="button"
                 className="preview-control dialog-close"
@@ -2820,7 +2819,6 @@ export function AuraToy() {
           >
             <header className="export-preview-header">
               <span className="export-preview-label">{previewKind === "image" ? "Still" : "Motion"}</span>
-              <span className="dialog-header-rule" aria-hidden="true" />
               <div className="export-preview-actions">
                 <button
                   ref={previewDownloadRef}
