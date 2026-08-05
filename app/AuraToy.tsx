@@ -147,6 +147,9 @@ type MicrophoneRuntime = {
   onsetRising: boolean;
   onsetBaseline: number;
   onsetDeviation: number;
+  keyPitchConfidence: Float32Array;
+  keyPitchLastSeenAt: Float64Array;
+  highlightedPitchClasses: number[];
   melodyPitchClass: number | null;
   melodyCandidatePitchClass: number | null;
   melodyCandidateFrames: number;
@@ -1177,8 +1180,8 @@ export function AuraToy() {
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
-  const [microphoneMelodyPitchClass, setMicrophoneMelodyPitchClass] = useState<number | null>(null);
-  const [microphoneBeatPitchClass, setMicrophoneBeatPitchClass] = useState<number | null>(null);
+  const [microphonePitchClasses, setMicrophonePitchClasses] = useState<number[]>([]);
+  const [microphoneBeatPitchClasses, setMicrophoneBeatPitchClasses] = useState<number[]>([]);
   const [microphoneReading, setMicrophoneReading] = useState("Listening");
   const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
 
@@ -1428,8 +1431,8 @@ export function AuraToy() {
     }
     setMicrophonePromptOpen(false);
     setMicrophoneState("idle");
-    setMicrophoneMelodyPitchClass(null);
-    setMicrophoneBeatPitchClass(null);
+    setMicrophonePitchClasses([]);
+    setMicrophoneBeatPitchClasses([]);
     setMicrophoneReading("Listening");
   }, []);
 
@@ -1510,6 +1513,9 @@ export function AuraToy() {
         onsetRising: false,
         onsetBaseline: 0.05,
         onsetDeviation: 0.04,
+        keyPitchConfidence: new Float32Array(12),
+        keyPitchLastSeenAt: new Float64Array(12).fill(-Infinity),
+        highlightedPitchClasses: [],
         melodyPitchClass: null,
         melodyCandidatePitchClass: null,
         melodyCandidateFrames: 0,
@@ -1599,13 +1605,53 @@ export function AuraToy() {
           runtime.candidateFrames = 0;
         }
 
-        const monophonicFrame = clearPitch && clarity >= 0.82 && nearestMidi !== null;
+        const monophonicFrame =
+          clearPitch && clarity >= 0.82 && nearestMidi !== null && pitchClasses.length <= 1;
         const monophonicPitchClass = monophonicFrame ? modulo(nearestMidi, 12) : null;
         const detectedPitchClasses = !activeSignal
           ? []
           : monophonicPitchClass !== null
             ? [monophonicPitchClass]
             : pitchClasses;
+
+        // Confirm chord tones across several frames, then release them gently to avoid key flicker.
+        for (let pitchClass = 0; pitchClass < 12; pitchClass += 1) {
+          const isPresent = detectedPitchClasses.includes(pitchClass);
+          runtime.keyPitchConfidence[pitchClass] = clamp(
+            runtime.keyPitchConfidence[pitchClass] +
+              (isPresent ? (monophonicFrame ? 0.95 : 0.72) : -0.34),
+            0,
+            3,
+          );
+          if (isPresent) runtime.keyPitchLastSeenAt[pitchClass] = now;
+        }
+
+        const nextHighlightedPitchClasses = Array.from({ length: 12 }, (_, pitchClass) => pitchClass)
+          .filter((pitchClass) => {
+            const wasHighlighted = runtime.highlightedPitchClasses.includes(pitchClass);
+            const entryThreshold = monophonicFrame ? 1.2 : 1.45;
+            return (
+              runtime.keyPitchConfidence[pitchClass] >= entryThreshold ||
+              (wasHighlighted &&
+                now - runtime.keyPitchLastSeenAt[pitchClass] <= 420 &&
+                runtime.keyPitchConfidence[pitchClass] >= 0.28)
+            );
+          })
+          .sort(
+            (first, second) =>
+              runtime.keyPitchConfidence[second] - runtime.keyPitchConfidence[first],
+          )
+          .slice(0, 3)
+          .sort((first, second) => first - second);
+        const highlightsChanged =
+          nextHighlightedPitchClasses.length !== runtime.highlightedPitchClasses.length ||
+          nextHighlightedPitchClasses.some(
+            (pitchClass, index) => pitchClass !== runtime.highlightedPitchClasses[index],
+          );
+        if (highlightsChanged) {
+          runtime.highlightedPitchClasses = nextHighlightedPitchClasses;
+          setMicrophonePitchClasses(nextHighlightedPitchClasses);
+        }
 
         const rankedMelodyNotes = noteCandidates
           .map((candidate) => ({
@@ -1650,8 +1696,7 @@ export function AuraToy() {
                 window.clearTimeout(microphoneBeatTimerRef.current);
                 microphoneBeatTimerRef.current = null;
               }
-              setMicrophoneBeatPitchClass(null);
-              setMicrophoneMelodyPitchClass(melodyPitchClass);
+              setMicrophoneBeatPitchClasses([]);
             }
           }
         } else if (now - runtime.melodyLastSeenAt > 700 && runtime.melodyPitchClass !== null) {
@@ -1663,8 +1708,7 @@ export function AuraToy() {
             window.clearTimeout(microphoneBeatTimerRef.current);
             microphoneBeatTimerRef.current = null;
           }
-          setMicrophoneBeatPitchClass(null);
-          setMicrophoneMelodyPitchClass(null);
+          setMicrophoneBeatPitchClasses([]);
         }
 
         if (
@@ -1674,10 +1718,14 @@ export function AuraToy() {
           now - runtime.melodyStableSince >= 450
         ) {
           if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
-          setMicrophoneBeatPitchClass(runtime.melodyPitchClass);
+          setMicrophoneBeatPitchClasses(
+            runtime.highlightedPitchClasses.length > 0
+              ? [...runtime.highlightedPitchClasses]
+              : [runtime.melodyPitchClass],
+          );
           microphoneBeatTimerRef.current = window.setTimeout(() => {
             microphoneBeatTimerRef.current = null;
-            setMicrophoneBeatPitchClass(null);
+            setMicrophoneBeatPitchClasses([]);
           }, 105);
         }
 
@@ -1735,8 +1783,8 @@ export function AuraToy() {
       microphoneRef.current = null;
       microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
       setMicrophoneState("error");
-      setMicrophoneMelodyPitchClass(null);
-      setMicrophoneBeatPitchClass(null);
+      setMicrophonePitchClasses([]);
+      setMicrophoneBeatPitchClasses([]);
       setMicrophoneReading("Microphone unavailable");
     }
   }, [spawnBlob, stopMicrophone]);
@@ -2369,8 +2417,8 @@ export function AuraToy() {
                   key={key.id}
                   type="button"
                   className={`piano-key white-key ${activeKeys.has(key.id) ? "is-active" : ""} ${
-                    shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-detected" : ""
-                  } ${shiftedNote(key).pc === microphoneBeatPitchClass ? "is-microphone-beat" : ""}`}
+                    microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-detected" : ""
+                  } ${microphoneBeatPitchClasses.includes(shiftedNote(key).pc) ? "is-microphone-beat" : ""}`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
                   onPointerUp={(event) => handlePointerEnd(event, key)}
@@ -2389,8 +2437,8 @@ export function AuraToy() {
                 <button
                   type="button"
                   className={`piano-key upper-key ${activeKeys.has(key.id) ? "is-active" : ""} ${
-                    shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-detected" : ""
-                  } ${shiftedNote(key).pc === microphoneBeatPitchClass ? "is-microphone-beat" : ""}`}
+                    microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-detected" : ""
+                  } ${microphoneBeatPitchClasses.includes(shiftedNote(key).pc) ? "is-microphone-beat" : ""}`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
                   onPointerUp={(event) => handlePointerEnd(event, key)}
