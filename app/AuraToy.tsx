@@ -17,11 +17,8 @@ type NoteChoice = {
 };
 
 type Mapping = {
-  word: string;
   seedHash: number;
-  letters: Color[];
   pitches: Color[];
-  letterNotes: NoteChoice[];
 };
 
 type AuraShape = "bloom" | "ribbon" | "beam" | "arc" | "prism" | "veil";
@@ -51,7 +48,6 @@ type KeySpec = NoteChoice & {
 };
 
 type AuraSynth = {
-  triggerAttackRelease: (note: string, duration: string, time?: number, velocity?: number) => void;
   triggerAttack: (note: string, time?: number, velocity?: number) => void;
   triggerRelease: (note: string, time?: number) => void;
   releaseAll: () => void;
@@ -96,10 +92,9 @@ type VisualMode = {
 };
 
 type ExportState = "idle" | "video";
+type ExportKind = "image" | "video";
 
-const STORAGE_KEY = "aura.seed.v1";
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const BASE_OCTAVE = 4;
 const MIN_OCTAVE = 1;
 const MAX_OCTAVE = 7;
@@ -125,31 +120,31 @@ const COMPOSITION_ANCHORS = [
 
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
   piano: {
-    shapes: ["ribbon", "bloom", "arc"],
+    shapes: ["ribbon", "bloom", "arc", "prism", "veil", "beam"],
     accentOffset: 18,
     angleBias: -0.08,
     softness: 0.62,
   },
   glass: {
-    shapes: ["prism", "beam", "arc"],
+    shapes: ["prism", "beam", "arc", "bloom", "ribbon", "veil"],
     accentOffset: -20,
     angleBias: -0.34,
     softness: 0.38,
   },
   pad: {
-    shapes: ["veil", "bloom", "ribbon"],
+    shapes: ["veil", "bloom", "ribbon", "arc", "prism", "beam"],
     accentOffset: 12,
     angleBias: 0.14,
     softness: 0.9,
   },
   pluck: {
-    shapes: ["beam", "prism", "arc"],
+    shapes: ["beam", "prism", "arc", "ribbon", "bloom", "veil"],
     accentOffset: -14,
     angleBias: 0.44,
     softness: 0.32,
   },
   organ: {
-    shapes: ["arc", "ribbon", "veil"],
+    shapes: ["arc", "ribbon", "veil", "bloom", "beam", "prism"],
     accentOffset: 22,
     angleBias: 0,
     softness: 0.7,
@@ -207,24 +202,6 @@ const SOUND_MODES: readonly SoundMode[] = [
     filterQ: 0.35,
     reverb: { roomSize: 0.66, dampening: 3000, wet: 0.16 },
   },
-];
-
-const PENTATONIC_SCALE: NoteChoice[] = [
-  midiToNote(60),
-  midiToNote(62),
-  midiToNote(64),
-  midiToNote(67),
-  midiToNote(69),
-  midiToNote(72),
-  midiToNote(74),
-  midiToNote(76),
-  midiToNote(79),
-  midiToNote(81),
-  midiToNote(84),
-  midiToNote(86),
-  midiToNote(88),
-  midiToNote(91),
-  midiToNote(93),
 ];
 
 const WHITE_KEYS = buildKeys().filter((key) => key.kind === "white");
@@ -308,14 +285,6 @@ function modulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function normalizeWord(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[^a-z]/gi, "")
-    .slice(0, 24)
-    .toUpperCase();
-}
-
 function fnv1a(value: string) {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -343,39 +312,23 @@ function spectralColor(index: number, rng: () => number, pale = false): Color {
   };
 }
 
-function createMapping(rawWord: string): Mapping {
-  const word = normalizeWord(rawWord) || "AURA";
-  const seedHash = fnv1a(word);
+function createMapping(): Mapping {
+  const seedHash = fnv1a("AURA");
   const rng = mulberry32(seedHash);
-  const letters: Color[] = [];
   const pitches: Color[] = [];
   const paletteOffset = seedHash % SPECTRAL_HUES.length;
-
-  for (let index = 0; index < 26; index += 1) {
-    const paleVowel = index === 8 || index === 14;
-    letters.push(spectralColor(paletteOffset + index * 5 + Math.floor(rng() * 2), rng, paleVowel));
-  }
 
   for (let index = 0; index < 12; index += 1) {
     pitches.push(spectralColor(paletteOffset + index * 5, rng));
   }
 
-  const offset = seedHash % PENTATONIC_SCALE.length;
-  const letterNotes = Array.from({ length: 26 }, (_, index) => {
-    const note = PENTATONIC_SCALE[(index + offset) % PENTATONIC_SCALE.length];
-    return { ...note };
-  });
-
   return {
-    word,
     seedHash,
-    letters,
     pitches,
-    letterNotes,
   };
 }
 
-const PREVIEW_MAPPING = createMapping("AURA");
+const AURA_MAPPING = createMapping();
 
 function colorToHslar(color: Color, alpha: number) {
   return `hsla(${Math.round(color.h)}, ${Math.round(color.s)}%, ${Math.round(color.l)}%, ${alpha})`;
@@ -436,7 +389,9 @@ function makeLinearAuraGradient(
   const gradient = context.createLinearGradient(-length / 2, 0, length / 2, 0);
   gradient.addColorStop(0, colorToHslar(primary, 0));
   gradient.addColorStop(0.18, colorToHslar(primary, alpha * 0.46));
-  gradient.addColorStop(0.52, colorToHslar(accent, alpha));
+  gradient.addColorStop(0.47, colorToHslar(accent, alpha * 0.88));
+  gradient.addColorStop(0.53, `rgba(255, 255, 255, ${alpha * 0.24})`);
+  gradient.addColorStop(0.62, colorToHslar(accent, alpha));
   gradient.addColorStop(0.78, colorToHslar(primary, alpha * 0.58));
   gradient.addColorStop(1, colorToHslar(accent, 0));
   return gradient;
@@ -470,7 +425,8 @@ function drawAuraParticle(
     context.fill();
 
     const nucleus = context.createRadialGradient(radius * 0.12, -radius * 0.08, 0, radius * 0.12, -radius * 0.08, radius * 0.34);
-    nucleus.addColorStop(0, colorToHslar(blob.accent, alpha * 0.9));
+    nucleus.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.34})`);
+    nucleus.addColorStop(0.2, colorToHslar(blob.accent, alpha * 0.9));
     nucleus.addColorStop(1, colorToHslar(blob.accent, 0));
     context.fillStyle = nucleus;
     context.beginPath();
@@ -495,7 +451,7 @@ function drawAuraParticle(
     context.stroke();
 
     context.shadowBlur = 0;
-    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.72);
+    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.28})`;
     context.lineWidth *= 0.16;
     traceRibbon();
     context.stroke();
@@ -530,7 +486,7 @@ function drawAuraParticle(
     context.stroke();
 
     context.shadowBlur = 0;
-    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.7);
+    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.26})`;
     context.lineWidth *= 0.14;
     context.beginPath();
     context.arc(0, 0, radius, startAngle + 0.08, endAngle - 0.08);
@@ -552,7 +508,7 @@ function drawAuraParticle(
     context.fill();
 
     context.shadowBlur = 0;
-    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.42);
+    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.24})`;
     context.lineWidth = Math.max(0.5, radius * 0.025);
     context.stroke();
   }
@@ -635,9 +591,8 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function exportFileStem(word: string) {
-  const normalized = normalizeWord(word).toLowerCase();
-  return `aura-${normalized || "composition"}`;
+function exportFileStem() {
+  return "aura-composition";
 }
 
 function supportedVideoType() {
@@ -647,12 +602,11 @@ function supportedVideoType() {
 
 export function AuraToy() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
   const soundPickerRef = useRef<HTMLDivElement | null>(null);
   const soundTriggerRef = useRef<HTMLButtonElement | null>(null);
   const blobsRef = useRef<BlobParticle[]>([]);
-  const mappingRef = useRef<Mapping | null>(null);
-  const seedWordRef = useRef("");
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
   const grainRef = useRef<HTMLCanvasElement | null>(null);
@@ -660,6 +614,8 @@ export function AuraToy() {
   const audioGenerationRef = useRef(0);
   const visualGenerationRef = useRef(0);
   const resetFrameRef = useRef<number | null>(null);
+  const previewFrameRef = useRef<number | null>(null);
+  const dialWheelTimerRef = useRef<number | null>(null);
   const wakeRendererRef = useRef<(() => void) | null>(null);
   const releaseTimersRef = useRef<Map<string, number>>(new Map());
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
@@ -676,9 +632,6 @@ export function AuraToy() {
   });
   const activeToneNotesRef = useRef<Map<string, string>>(new Map());
 
-  const [entryValue, setEntryValue] = useState("");
-  const [committed, setCommitted] = useState(false);
-  const [mapping, setMapping] = useState<Mapping | null>(null);
   const [activeKeys, setActiveKeys] = useState<Set<string>>(() => new Set());
   const [octave, setOctave] = useState(BASE_OCTAVE);
   const [resetting, setResetting] = useState(false);
@@ -686,6 +639,8 @@ export function AuraToy() {
   const [soundMenuOpen, setSoundMenuOpen] = useState(false);
   const [layerCount, setLayerCount] = useState(0);
   const [exportState, setExportState] = useState<ExportState>("idle");
+  const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
+  const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -696,11 +651,6 @@ export function AuraToy() {
       }),
     );
   }, []);
-
-  useEffect(() => {
-    mappingRef.current = mapping;
-    seedWordRef.current = mapping?.word ?? "";
-  }, [mapping]);
 
   useEffect(() => {
     soundModeRef.current = soundMode;
@@ -745,21 +695,6 @@ export function AuraToy() {
   }, []);
 
   useEffect(() => {
-    const storedSeed = window.localStorage.getItem(STORAGE_KEY);
-    const normalized = storedSeed ? normalizeWord(storedSeed) : "";
-
-    if (normalized) {
-      const storedMapping = createMapping(normalized);
-      window.requestAnimationFrame(() => {
-        setMapping(storedMapping);
-        setCommitted(true);
-        seedWordRef.current = normalized;
-        mappingRef.current = storedMapping;
-      });
-    } else {
-      inputRef.current?.focus({ preventScroll: true });
-    }
-
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     reducedMotionRef.current = media.matches;
     const updateMotion = () => {
@@ -774,6 +709,8 @@ export function AuraToy() {
   useEffect(
     () => () => {
       if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
+      if (previewFrameRef.current !== null) window.cancelAnimationFrame(previewFrameRef.current);
+      if (dialWheelTimerRef.current !== null) window.clearTimeout(dialWheelTimerRef.current);
       releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       releaseTimersRef.current.clear();
       disposeToneEngine();
@@ -826,19 +763,6 @@ export function AuraToy() {
     }
   }, []);
 
-  const triggerAttackRelease = useCallback(
-    (noteName: string, velocity: number, duration = "8n") => {
-      const generation = visualGenerationRef.current;
-      void ensureTone()
-        .then(() => {
-          if (generation !== visualGenerationRef.current) return;
-          toneRef.current.synth?.triggerAttackRelease(noteName, duration, undefined, velocity);
-        })
-        .catch(() => undefined);
-    },
-    [ensureTone],
-  );
-
   const triggerAttack = useCallback(
     (keyId: string, noteName: string, velocity: number) => {
       const generation = visualGenerationRef.current;
@@ -867,7 +791,7 @@ export function AuraToy() {
     const mode = soundModeRef.current;
     const profile = VISUAL_MODES[mode];
     const modeIndex = SOUND_MODES.findIndex(({ id: soundModeId }) => soundModeId === mode);
-    const identity = `${seedWordRef.current || "AURA"}|${mode}|${note.name}`;
+    const identity = `AURA|${mode}|${note.name}`;
     const repeat = noteRepeatRef.current.get(identity) ?? 0;
     noteRepeatRef.current.set(identity, repeat + 1);
 
@@ -887,7 +811,7 @@ export function AuraToy() {
     const x = clamp(baseX + Math.cos(orbitAngle) * orbit * (0.72 + repeatRng() * 0.5), 0.035, 0.965);
     const y = clamp(baseY + Math.sin(orbitAngle) * orbit * (0.58 + repeatRng() * 0.45), 0.04, 0.9);
     const primaryShapeIndex = Math.floor(identityRng() * profile.shapes.length);
-    const shape = profile.shapes[modulo(primaryShapeIndex + Math.floor(repeat / 3), profile.shapes.length)];
+    const shape = profile.shapes[modulo(primaryShapeIndex + repeat, profile.shapes.length)];
     const baseRadius: Record<AuraShape, number> = {
       bloom: 0.13,
       ribbon: 0.1,
@@ -940,66 +864,6 @@ export function AuraToy() {
     wakeRendererRef.current?.();
   }, []);
 
-  const playLetter = useCallback(
-    (letter: string, liveMapping: Mapping, index: number) => {
-      const letterIndex = LETTERS.indexOf(letter.toUpperCase());
-      if (letterIndex < 0) return;
-      const note = liveMapping.letterNotes[letterIndex];
-      const color = liveMapping.letters[letterIndex];
-      const velocity = 0.54 + ((liveMapping.seedHash + index * 37) % 34) / 100;
-      const generation = visualGenerationRef.current;
-
-      window.setTimeout(() => {
-        if (generation !== visualGenerationRef.current) return;
-        spawnBlob(note, color, velocity);
-        triggerAttackRelease(note.name, velocity, "8n");
-      }, index * 92);
-    },
-    [spawnBlob, triggerAttackRelease],
-  );
-
-  const commitSeed = useCallback(
-    (value: string) => {
-      const normalized = normalizeWord(value);
-      if (!normalized || committed) return;
-      const nextMapping = createMapping(normalized);
-      window.localStorage.setItem(STORAGE_KEY, normalized);
-      setMapping(nextMapping);
-      setCommitted(true);
-      setEntryValue("");
-      mappingRef.current = nextMapping;
-      seedWordRef.current = normalized;
-    },
-    [committed],
-  );
-
-  useEffect(() => {
-    if (committed || !entryValue) return;
-    const timeout = window.setTimeout(() => commitSeed(entryValue), 1100);
-    return () => window.clearTimeout(timeout);
-  }, [committed, commitSeed, entryValue]);
-
-  const handleEntryChange = useCallback(
-    (value: string) => {
-      if (committed) return;
-      const normalized = normalizeWord(value);
-      const previous = entryValue;
-      setEntryValue(normalized);
-
-      if (!normalized) return;
-      const liveMapping = createMapping(normalized);
-      setMapping(liveMapping);
-
-      if (normalized.length > previous.length) {
-        normalized
-          .slice(previous.length)
-          .split("")
-          .forEach((letter, offset) => playLetter(letter, liveMapping, offset));
-      }
-    },
-    [committed, entryValue, playLetter],
-  );
-
   const shiftedNote = useCallback(
     (key: KeySpec): NoteChoice => {
       const shifted = midiToNote(key.midi + (octave - BASE_OCTAVE) * 12);
@@ -1016,9 +880,8 @@ export function AuraToy() {
         releaseTimersRef.current.delete(key.id);
       }
 
-      const liveMapping = mappingRef.current ?? PREVIEW_MAPPING;
       const note = shiftedNote(key);
-      const color = liveMapping.pitches[note.pc];
+      const color = AURA_MAPPING.pitches[note.pc];
       spawnBlob(note, color, velocity);
       setActiveKeys((current) => {
         const next = new Set(current);
@@ -1075,10 +938,9 @@ export function AuraToy() {
   );
 
   useEffect(() => {
-    if (!committed) return;
-
     const downKeys = new Set<string>();
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (previewKind) return;
       if (event.repeat || event.metaKey || event.altKey || event.ctrlKey) return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       const key = keyboardMap.get(event.key.toLowerCase());
@@ -1099,7 +961,7 @@ export function AuraToy() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [committed, endKey, keyboardMap, startKey]);
+  }, [endKey, keyboardMap, previewKind, startKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1254,17 +1116,9 @@ export function AuraToy() {
     };
   }, []);
 
-  const createExportCanvas = useCallback((replayProgress?: number) => {
-    const sourceBounds = canvasRef.current?.getBoundingClientRect();
-    const sourceWidth = Math.max(1, sourceBounds?.width ?? 1440);
-    const sourceHeight = Math.max(1, sourceBounds?.height ?? 900);
-    const maxDimension = replayProgress === undefined ? 1920 : blobsRef.current.length > 160 ? 960 : 1280;
-    const scale = Math.min(2, maxDimension / Math.max(sourceWidth, sourceHeight));
-    const output = document.createElement("canvas");
-    output.width = Math.max(1, Math.round(sourceWidth * scale));
-    output.height = Math.max(1, Math.round(sourceHeight * scale));
+  const renderArtwork = useCallback((output: HTMLCanvasElement, replayProgress?: number) => {
     const outputContext = output.getContext("2d", { alpha: false });
-    if (!outputContext) return output;
+    if (!outputContext) return;
 
     paintArtworkBackground(outputContext, output.width, output.height);
     const settledAt = (blobsRef.current.at(-1)?.createdAt ?? performance.now()) + BLOB_ARRIVAL_DURATION;
@@ -1279,15 +1133,78 @@ export function AuraToy() {
     if (grainRef.current) {
       drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
     }
-    return output;
   }, []);
+
+  const createExportCanvas = useCallback((replayProgress?: number) => {
+    const sourceBounds = canvasRef.current?.getBoundingClientRect();
+    const sourceWidth = Math.max(1, sourceBounds?.width ?? 1440);
+    const sourceHeight = Math.max(1, sourceBounds?.height ?? 900);
+    const maxDimension = replayProgress === undefined ? 1920 : blobsRef.current.length > 160 ? 960 : 1280;
+    const scale = Math.min(2, maxDimension / Math.max(sourceWidth, sourceHeight));
+    const output = document.createElement("canvas");
+    output.width = Math.max(1, Math.round(sourceWidth * scale));
+    output.height = Math.max(1, Math.round(sourceHeight * scale));
+    renderArtwork(output, replayProgress);
+    return output;
+  }, [renderArtwork]);
+
+  useEffect(() => {
+    if (!previewKind) return;
+    const preview = previewCanvasRef.current;
+    const sourceBounds = canvasRef.current?.getBoundingClientRect();
+    if (!preview || !sourceBounds) return;
+
+    const maxDimension = blobsRef.current.length > 160 ? 900 : 1200;
+    const scale = Math.min(1.5, maxDimension / Math.max(sourceBounds.width, sourceBounds.height));
+    preview.width = Math.max(1, Math.round(sourceBounds.width * scale));
+    preview.height = Math.max(1, Math.round(sourceBounds.height * scale));
+    previewDownloadRef.current?.focus({ preventScroll: true });
+
+    if (previewKind === "image" || reducedMotionRef.current || exportState === "video") {
+      renderArtwork(preview);
+      return;
+    }
+
+    const revealDuration = clamp(1800 + blobsRef.current.length * 75, 2800, 4800);
+    const holdDuration = 1100;
+    const loopDuration = revealDuration + holdDuration;
+    const startedAt = performance.now();
+    let lastDrawAt = -Infinity;
+    const renderPreviewFrame = (now: number) => {
+      if (now - lastDrawAt < 1000 / 24) {
+        previewFrameRef.current = window.requestAnimationFrame(renderPreviewFrame);
+        return;
+      }
+      lastDrawAt = now;
+      const elapsed = (now - startedAt) % loopDuration;
+      const progress = clamp(elapsed / revealDuration, 0, 1);
+      renderArtwork(preview, progress);
+      previewFrameRef.current = window.requestAnimationFrame(renderPreviewFrame);
+    };
+    previewFrameRef.current = window.requestAnimationFrame(renderPreviewFrame);
+
+    return () => {
+      if (previewFrameRef.current !== null) window.cancelAnimationFrame(previewFrameRef.current);
+      previewFrameRef.current = null;
+    };
+  }, [exportState, previewKind, renderArtwork]);
+
+  useEffect(() => {
+    if (!previewKind) return;
+    const handlePreviewKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && exportState === "idle") setPreviewKind(null);
+    };
+    window.addEventListener("keydown", handlePreviewKeyDown);
+    return () => window.removeEventListener("keydown", handlePreviewKeyDown);
+  }, [exportState, previewKind]);
 
   const downloadStill = useCallback(() => {
     if (blobsRef.current.length === 0) return;
     const output = createExportCanvas();
     output.toBlob((blob) => {
       if (!blob) return;
-      downloadBlob(blob, `${exportFileStem(seedWordRef.current)}.png`);
+      downloadBlob(blob, `${exportFileStem()}.png`);
+      setPreviewKind(null);
     }, "image/png");
   }, [createExportCanvas]);
 
@@ -1350,7 +1267,8 @@ export function AuraToy() {
       });
 
       const video = new Blob(chunks, { type: mimeType || "video/webm" });
-      downloadBlob(video, `${exportFileStem(seedWordRef.current)}.webm`);
+      downloadBlob(video, `${exportFileStem()}.webm`);
+      setPreviewKind(null);
     } finally {
       stream.getTracks().forEach((track) => track.stop());
       setExportState("idle");
@@ -1365,9 +1283,15 @@ export function AuraToy() {
   }, []);
 
   const selectSoundMode = useCallback(
-    (nextMode: SoundModeId) => {
-      setSoundMenuOpen(false);
+    (nextMode: SoundModeId, direction?: -1 | 1) => {
       if (nextMode === soundModeRef.current) return;
+
+      const currentIndex = SOUND_MODES.findIndex(({ id }) => id === soundModeRef.current);
+      const nextIndex = SOUND_MODES.findIndex(({ id }) => id === nextMode);
+      let distance = nextIndex - currentIndex;
+      if (distance > SOUND_MODES.length / 2) distance -= SOUND_MODES.length;
+      if (distance < -SOUND_MODES.length / 2) distance += SOUND_MODES.length;
+      setDialDirection(direction ?? (distance >= 0 ? 1 : -1));
 
       visualGenerationRef.current += 1;
       releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -1378,6 +1302,15 @@ export function AuraToy() {
       setActiveKeys(new Set());
     },
     [disposeToneEngine],
+  );
+
+  const cycleSoundMode = useCallback(
+    (direction: -1 | 1) => {
+      const currentIndex = SOUND_MODES.findIndex(({ id }) => id === soundModeRef.current);
+      const nextMode = SOUND_MODES[modulo(currentIndex + direction, SOUND_MODES.length)];
+      selectSoundMode(nextMode.id, direction);
+    },
+    [selectSoundMode],
   );
 
   const resetAura = useCallback(() => {
@@ -1395,6 +1328,7 @@ export function AuraToy() {
     soundModeRef.current = DEFAULT_SOUND_MODE;
     setSoundMode(DEFAULT_SOUND_MODE);
     setSoundMenuOpen(false);
+    setPreviewKind(null);
     setLayerCount(0);
     setExportState("idle");
     wakeRendererRef.current?.();
@@ -1405,30 +1339,11 @@ export function AuraToy() {
   }, [disposeToneEngine]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
+  const activeSoundModeIndex = SOUND_MODES.findIndex(({ id }) => id === soundMode);
 
   return (
-    <main className={`aura-page ${committed ? "is-committed" : "is-entry"} ${resetting ? "is-resetting" : ""}`}>
+    <main className={`aura-page ${resetting ? "is-resetting" : ""}`}>
       <canvas ref={canvasRef} className="aura-canvas" aria-hidden="true" />
-
-      <div className={`seed-entry ${committed ? "is-hidden" : ""} ${entryValue ? "" : "is-empty"}`}>
-        <span className="entry-caret" aria-hidden="true" />
-        <input
-          ref={inputRef}
-          value={entryValue}
-          aria-label="Seed word"
-          spellCheck={false}
-          autoCapitalize="characters"
-          autoComplete="off"
-          placeholder=""
-          size={Math.max(1, entryValue.length)}
-          onChange={(event) => handleEntryChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              commitSeed(entryValue);
-            }
-          }}
-        />
-      </div>
 
       <section className="instrument-zone" aria-label="Aura instrument">
         <div className="instrument-body">
@@ -1440,40 +1355,78 @@ export function AuraToy() {
               title="Reset aura"
               onClick={resetAura}
             />
-            <div ref={soundPickerRef} className="sound-picker">
+            <div
+              ref={soundPickerRef}
+              className="sound-picker"
+              style={{ "--mode-length": activeSoundMode.label.length } as CSSProperties}
+              onWheel={(event) => {
+                event.preventDefault();
+                if (dialWheelTimerRef.current !== null || event.deltaY === 0) return;
+                const direction = event.deltaY > 0 ? 1 : -1;
+                cycleSoundMode(direction);
+                setSoundMenuOpen(true);
+                dialWheelTimerRef.current = window.setTimeout(() => {
+                  dialWheelTimerRef.current = null;
+                }, 180);
+              }}
+            >
               <button
                 ref={soundTriggerRef}
                 type="button"
-                className="device-label"
+                className="mode-screen"
                 aria-label={`Sound mode: ${activeSoundMode.label}`}
-                aria-haspopup="menu"
+                aria-haspopup="listbox"
                 aria-expanded={soundMenuOpen}
                 title="Choose sound mode"
                 onClick={() => setSoundMenuOpen((open) => !open)}
                 onKeyDown={(event) => {
                   if (event.key === "ArrowDown") {
                     event.preventDefault();
+                    cycleSoundMode(1);
+                    setSoundMenuOpen(true);
+                  }
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    cycleSoundMode(-1);
                     setSoundMenuOpen(true);
                   }
                 }}
               >
-                J-05
+                <span className="mode-screen-glass" aria-hidden="true">
+                  <span
+                    key={`${soundMode}-${dialDirection}`}
+                    className={`mode-readout ${dialDirection > 0 ? "is-forward" : "is-backward"}`}
+                  >
+                    {activeSoundMode.label}
+                  </span>
+                </span>
               </button>
               {soundMenuOpen ? (
-                <div className="sound-menu" role="menu" aria-label="Sound modes">
-                  {SOUND_MODES.map((mode) => (
-                    <button
-                      key={mode.id}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={mode.id === soundMode}
-                      className={`sound-option ${mode.id === soundMode ? "is-selected" : ""}`}
-                      onClick={() => selectSoundMode(mode.id)}
-                    >
-                      <span className="sound-option-dot" aria-hidden="true" />
-                      <span>{mode.label}</span>
-                    </button>
-                  ))}
+                <div className="sound-wheel" role="listbox" aria-label="Sound modes">
+                  <span className="sound-wheel-focus" aria-hidden="true" />
+                  {SOUND_MODES.map((mode, index) => {
+                    let offset = index - activeSoundModeIndex;
+                    if (offset > SOUND_MODES.length / 2) offset -= SOUND_MODES.length;
+                    if (offset < -SOUND_MODES.length / 2) offset += SOUND_MODES.length;
+                    return (
+                      <button
+                        key={mode.id}
+                        type="button"
+                        role="option"
+                        aria-selected={mode.id === soundMode}
+                        className={`sound-wheel-option ${mode.id === soundMode ? "is-selected" : ""}`}
+                        style={
+                          {
+                            "--mode-offset": offset,
+                            "--mode-distance": Math.abs(offset),
+                          } as CSSProperties
+                        }
+                        onClick={() => selectSoundMode(mode.id)}
+                      >
+                        {mode.label}
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
@@ -1544,20 +1497,20 @@ export function AuraToy() {
         <button
           type="button"
           className="export-button"
-          aria-label="Download visual as PNG"
-          title="Download PNG"
+          aria-label="Preview visual as PNG"
+          title="Preview PNG"
           disabled={layerCount === 0 || exportState !== "idle"}
-          onClick={downloadStill}
+          onClick={() => setPreviewKind("image")}
         >
           <span className="export-icon is-still" aria-hidden="true" />
         </button>
         <button
           type="button"
           className={`export-button ${exportState === "video" ? "is-exporting" : ""}`}
-          aria-label={exportState === "video" ? "Rendering video" : "Download visual as video"}
-          title={exportState === "video" ? "Rendering video" : "Download WebM video"}
+          aria-label={exportState === "video" ? "Rendering video" : "Preview visual as video"}
+          title={exportState === "video" ? "Rendering video" : "Preview WebM video"}
           disabled={layerCount === 0 || exportState !== "idle"}
-          onClick={() => void downloadVideo()}
+          onClick={() => setPreviewKind("video")}
         >
           <span className="export-icon is-video" aria-hidden="true" />
         </button>
@@ -1565,6 +1518,55 @@ export function AuraToy() {
           {exportState === "video" ? "Rendering Aura video" : ""}
         </span>
       </div>
+
+      {previewKind ? (
+        <div
+          className="export-preview-backdrop"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget && exportState === "idle") setPreviewKind(null);
+          }}
+        >
+          <section
+            className="export-preview"
+            role="dialog"
+            aria-modal="true"
+            aria-label={previewKind === "image" ? "Image export preview" : "Video export preview"}
+          >
+            <header className="export-preview-header">
+              <span className="export-preview-label">{previewKind === "image" ? "Still" : "Motion"}</span>
+              <div className="export-preview-actions">
+                <button
+                  type="button"
+                  className="preview-control"
+                  aria-label="Close export preview"
+                  title="Close preview"
+                  disabled={exportState !== "idle"}
+                  onClick={() => setPreviewKind(null)}
+                >
+                  <span className="close-icon" aria-hidden="true" />
+                </button>
+                <button
+                  ref={previewDownloadRef}
+                  type="button"
+                  className={`preview-control ${exportState === "video" ? "is-exporting" : ""}`}
+                  aria-label={previewKind === "image" ? "Download PNG" : "Download WebM video"}
+                  title={previewKind === "image" ? "Download PNG" : "Download WebM video"}
+                  disabled={exportState !== "idle"}
+                  onClick={() => {
+                    if (previewKind === "image") downloadStill();
+                    else void downloadVideo();
+                  }}
+                >
+                  <span className="download-icon" aria-hidden="true" />
+                </button>
+              </div>
+            </header>
+            <div className="export-preview-screen">
+              <canvas ref={previewCanvasRef} aria-label="Artwork to be saved" />
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

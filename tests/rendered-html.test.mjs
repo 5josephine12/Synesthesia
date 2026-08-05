@@ -33,12 +33,11 @@ test("server-renders the Aura shell", async () => {
     html,
     /A synesthesia simulator that turns a word and a melody into a luminous aura\./,
   );
-  assert.match(html, /entry-caret/);
-  assert.match(html, /aria-label="Seed word"/);
   assert.match(html, /aria-label="Reset aura"/);
   assert.match(html, /aria-label="Sound mode: Piano"/);
-  assert.match(html, /aria-label="Download visual as PNG"/);
-  assert.match(html, /aria-label="Download visual as video"/);
+  assert.match(html, /aria-label="Preview visual as PNG"/);
+  assert.match(html, /aria-label="Preview visual as video"/);
+  assert.doesNotMatch(html, /entry-caret|aria-label="Seed word"|J-05/);
   assert.doesNotMatch(html, /aria-label="Save (?:portrait|square|wide) visual"/);
   assert.doesNotMatch(html, /<h1>Aura<\/h1>|>Save aura</i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
