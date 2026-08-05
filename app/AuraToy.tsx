@@ -111,6 +111,10 @@ type HarmonicContext = {
   confidence: number;
 };
 
+type ChordContext = HarmonicContext & {
+  pitchClasses: number[];
+};
+
 type SpectrumNote = {
   midi: number;
   score: number;
@@ -126,6 +130,7 @@ type MicrophoneRuntime = {
   frequencyData: Float32Array;
   previousSpectrum: Float32Array;
   chroma: Float32Array;
+  chordChroma: Float32Array;
   frameChroma: Float32Array;
   animationFrame: number;
   analyze: FrameRequestCallback;
@@ -150,15 +155,10 @@ type MicrophoneRuntime = {
   onsetDeviation: number;
   highlightedPitchClasses: number[];
   lastKeyBeatAt: number;
-  melodyPitchClass: number | null;
-  melodyCandidatePitchClass: number | null;
-  melodyCandidateFrames: number;
-  melodyLastSeenAt: number;
-  melodyStableSince: number;
-  harmonyPitchClasses: number[];
-  harmonyCandidatePitchClasses: number[];
-  harmonyCandidateFrames: number;
-  harmonyLastSeenAt: number;
+  leftHandPitchClasses: number[];
+  leftHandCandidatePitchClasses: number[];
+  leftHandCandidateFrames: number;
+  leftHandLastSeenAt: number;
   visualCursor: number;
 };
 
@@ -589,6 +589,8 @@ function updateSpectrumAnalysis(
   const maximumBin = Math.min(frequencyData.length - 1, Math.floor((4200 * fftSize) / sampleRate));
   let spectralFlux = 0;
   let peakDecibels = -Infinity;
+  let bassMidi: number | null = null;
+  let strongestBassPeak = -Infinity;
 
   for (let bin = minimumBin; bin <= maximumBin; bin += 1) {
     const decibels = frequencyData[bin];
@@ -614,6 +616,14 @@ function updateSpectrumAnalysis(
     const amplitude = Math.pow(10, decibels / 20);
     const prominence = clamp((decibels - Math.max(left, right)) / 10, 0.18, 1);
     const peakWeight = (amplitude * (0.72 + prominence * 0.28)) / Math.sqrt(1 + frequency / 1500);
+
+    if (frequency <= 265 && decibels >= Math.max(-72, peakDecibels - 24)) {
+      const bassWeight = peakWeight * (1 + clamp((265 - frequency) / 220, 0, 1) * 0.16);
+      if (bassWeight > strongestBassPeak) {
+        bassMidi = Math.round(frequencyToMidi(frequency));
+        strongestBassPeak = bassWeight;
+      }
+    }
 
     for (let harmonic = 1; harmonic <= harmonicWeights.length; harmonic += 1) {
       const fundamental = frequency / harmonic;
@@ -655,8 +665,55 @@ function updateSpectrumAnalysis(
   return {
     spectralFlux,
     dominantMidi: noteCandidates[0]?.midi ?? null,
+    bassMidi,
     noteCandidates,
     pitchClasses,
+  };
+}
+
+function detectChordContext(chroma: Float32Array, bassPitchClass: number | null): ChordContext | null {
+  const total = chroma.reduce((sum, value) => sum + value, 0);
+  if (total < 0.0001) return null;
+
+  const candidates: Array<ChordContext & { score: number }> = [];
+  for (let root = 0; root < 12; root += 1) {
+    for (const [mode, third] of [
+      ["major", 4],
+      ["minor", 3],
+    ] as const) {
+      const pitchClasses = [root, modulo(root + third, 12), modulo(root + 7, 12)];
+      const toneEnergy =
+        chroma[pitchClasses[0]] * 1.2 +
+        chroma[pitchClasses[1]] * 1.05 +
+        chroma[pitchClasses[2]] * 0.92;
+      const coverage = pitchClasses.reduce((sum, pitchClass) => sum + chroma[pitchClass], 0) / total;
+      const bassFit =
+        bassPitchClass === root
+          ? total * 0.24
+          : bassPitchClass !== null && pitchClasses.includes(bassPitchClass)
+            ? total * 0.08
+            : 0;
+      candidates.push({
+        root,
+        mode,
+        pitchClasses,
+        confidence: 0,
+        score: toneEnergy + coverage * total * 0.36 + bassFit,
+      });
+    }
+  }
+
+  candidates.sort((first, second) => second.score - first.score);
+  const best = candidates[0];
+  const second = candidates[1];
+  if (!best) return null;
+  const coverage = best.pitchClasses.reduce((sum, pitchClass) => sum + chroma[pitchClass], 0) / total;
+  const margin = (best.score - (second?.score ?? 0)) / Math.max(0.0001, best.score);
+  return {
+    root: best.root,
+    mode: best.mode,
+    pitchClasses: best.pitchClasses,
+    confidence: clamp(coverage * 0.72 + margin * 2.4, 0, 1),
   };
 }
 
@@ -1503,6 +1560,7 @@ export function AuraToy() {
         frequencyData: new Float32Array(analyser.frequencyBinCount),
         previousSpectrum: new Float32Array(analyser.frequencyBinCount),
         chroma: new Float32Array(12),
+        chordChroma: new Float32Array(12),
         frameChroma: new Float32Array(12),
         animationFrame: 0,
         analyze: () => undefined,
@@ -1527,15 +1585,10 @@ export function AuraToy() {
         onsetDeviation: 0.04,
         highlightedPitchClasses: [],
         lastKeyBeatAt: -Infinity,
-        melodyPitchClass: null,
-        melodyCandidatePitchClass: null,
-        melodyCandidateFrames: 0,
-        melodyLastSeenAt: -Infinity,
-        melodyStableSince: -Infinity,
-        harmonyPitchClasses: [],
-        harmonyCandidatePitchClasses: [],
-        harmonyCandidateFrames: 0,
-        harmonyLastSeenAt: -Infinity,
+        leftHandPitchClasses: [],
+        leftHandCandidatePitchClasses: [],
+        leftHandCandidateFrames: 0,
+        leftHandLastSeenAt: -Infinity,
         visualCursor: 0,
       };
       microphoneRef.current = runtime;
@@ -1562,14 +1615,19 @@ export function AuraToy() {
         const level = activeSignal ? clamp((rms - gate) / Math.max(0.012, 0.09 - gate), 0, 1) : 0;
         microphoneButtonRef.current?.style.setProperty("--mic-level", level.toFixed(3));
 
-        const { spectralFlux, dominantMidi, noteCandidates, pitchClasses } = updateSpectrumAnalysis(
-          runtime.frequencyData,
-          runtime.previousSpectrum,
-          runtime.chroma,
-          runtime.frameChroma,
-          audioContext.sampleRate,
-          analyser.fftSize,
-        );
+        const { spectralFlux, dominantMidi, bassMidi, noteCandidates, pitchClasses } =
+          updateSpectrumAnalysis(
+            runtime.frequencyData,
+            runtime.previousSpectrum,
+            runtime.chroma,
+            runtime.frameChroma,
+            audioContext.sampleRate,
+            analyser.fftSize,
+          );
+        for (let pitchClass = 0; pitchClass < runtime.chordChroma.length; pitchClass += 1) {
+          runtime.chordChroma[pitchClass] =
+            runtime.chordChroma[pitchClass] * 0.84 + runtime.frameChroma[pitchClass];
+        }
         const beatBandEnergy = calculateBandEnergy(
           runtime.frequencyData,
           audioContext.sampleRate,
@@ -1639,127 +1697,83 @@ export function AuraToy() {
               ? pitchClasses
               : detectedMidi !== null
                 ? [modulo(detectedMidi, 12)]
-                : runtime.melodyPitchClass !== null && now - runtime.melodyLastSeenAt <= 700
-                  ? [runtime.melodyPitchClass]
+                : runtime.leftHandPitchClasses.length > 0 &&
+                    now - runtime.leftHandLastSeenAt <= 520
+                  ? runtime.leftHandPitchClasses
                   : [];
 
-        const rankedMelodyNotes = noteCandidates
-          .map((candidate) => ({
-            midi: candidate.midi,
-            pitchClass: modulo(candidate.midi, 12),
-            score:
-              candidate.score *
-              (1 + clamp((candidate.midi - MIN_MIDI) / (MAX_MIDI - MIN_MIDI), 0, 1) * 0.32),
-          }))
-          .sort((first, second) => second.score - first.score);
-        const melodyLeader = rankedMelodyNotes[0] ?? null;
-        const currentMelody = rankedMelodyNotes.find(
-          ({ pitchClass }) => pitchClass === runtime.melodyPitchClass,
+        const bassPitchClass = activeSignal && bassMidi !== null ? modulo(bassMidi, 12) : null;
+        const chordContext = activeSignal
+          ? detectChordContext(runtime.chordChroma, bassPitchClass)
+          : null;
+        const chordEnergy = runtime.chordChroma.reduce((sum, value) => sum + value, 0);
+        const strongestChordTone = runtime.chordChroma.reduce(
+          (strongest, value) => Math.max(strongest, value),
+          0,
         );
-        const melodyPitchClass = !activeSignal
-          ? null
-          : monophonicPitchClass ??
-            (currentMelody && melodyLeader && currentMelody.score >= melodyLeader.score * 0.54
-              ? currentMelody.pitchClass
-              : melodyLeader?.pitchClass ?? null);
+        const chordEvidenceCount = runtime.chordChroma.reduce(
+          (count, value) =>
+            count +
+            (value >= strongestChordTone * 0.32 && value >= chordEnergy * 0.08 ? 1 : 0),
+          0,
+        );
+        const hasChordEvidence = chordEvidenceCount >= 2;
+        const leftHandCandidate =
+          bassPitchClass !== null &&
+          chordContext &&
+          chordContext.confidence >= 0.42 &&
+          hasChordEvidence
+            ? [...chordContext.pitchClasses].sort((first, second) => first - second)
+            : bassPitchClass !== null
+              ? [bassPitchClass]
+              : [];
 
-        if (melodyPitchClass !== null) {
-          if (runtime.melodyPitchClass === melodyPitchClass) {
-            runtime.melodyLastSeenAt = now;
-            runtime.melodyCandidatePitchClass = null;
-            runtime.melodyCandidateFrames = 0;
+        // Treat lower-spectrum notes as accompaniment: single bass notes settle
+        // quickly, while complete chord voicings need several consistent frames.
+        if (leftHandCandidate.length > 0) {
+          if (pitchClassesMatch(leftHandCandidate, runtime.leftHandPitchClasses)) {
+            runtime.leftHandLastSeenAt = now;
+            runtime.leftHandCandidatePitchClasses = [];
+            runtime.leftHandCandidateFrames = 0;
           } else {
-            if (runtime.melodyCandidatePitchClass === melodyPitchClass) {
-              runtime.melodyCandidateFrames += 1;
+            if (pitchClassesMatch(leftHandCandidate, runtime.leftHandCandidatePitchClasses)) {
+              runtime.leftHandCandidateFrames += 1;
             } else {
-              runtime.melodyCandidatePitchClass = melodyPitchClass;
-              runtime.melodyCandidateFrames = 1;
+              runtime.leftHandCandidatePitchClasses = leftHandCandidate;
+              runtime.leftHandCandidateFrames = 1;
             }
 
-            const minimumNoteDuration = now - runtime.melodyStableSince >= 190;
-            const confirmationFrames =
-              runtime.melodyPitchClass === null
-                ? 3
-                : monophonicFrame || now - runtime.lastBeatAt <= 140
-                  ? 4
-                  : 8;
-            if (
-              runtime.melodyCandidateFrames >= confirmationFrames &&
-              (runtime.melodyPitchClass === null || minimumNoteDuration)
-            ) {
-              runtime.melodyPitchClass = melodyPitchClass;
-              runtime.melodyLastSeenAt = now;
-              runtime.melodyStableSince = now;
-              runtime.melodyCandidatePitchClass = null;
-              runtime.melodyCandidateFrames = 0;
-            }
-          }
-        } else if (now - runtime.melodyLastSeenAt > 420 && runtime.melodyPitchClass !== null) {
-          runtime.melodyPitchClass = null;
-          runtime.melodyCandidatePitchClass = null;
-          runtime.melodyCandidateFrames = 0;
-          runtime.melodyStableSince = -Infinity;
-        }
-
-        const hasRecentMelody =
-          runtime.melodyPitchClass !== null && now - runtime.melodyLastSeenAt <= 380;
-        const primaryPitchClass = hasRecentMelody ? runtime.melodyPitchClass : null;
-        const harmonyCandidate =
-          activeSignal && !monophonicFrame && melodyLeader && primaryPitchClass !== null
-            ? rankedMelodyNotes
-                .filter(
-                  ({ pitchClass, score }) =>
-                    pitchClass !== primaryPitchClass && score >= melodyLeader.score * 0.72,
-                )
-                .sort((first, second) => second.midi - first.midi)
-                .slice(0, 2)
-                .map(({ pitchClass }) => pitchClass)
-                .sort((first, second) => first - second)
-            : [];
-
-        if (harmonyCandidate.length > 0) {
-          if (pitchClassesMatch(harmonyCandidate, runtime.harmonyPitchClasses)) {
-            runtime.harmonyLastSeenAt = now;
-            runtime.harmonyCandidatePitchClasses = [];
-            runtime.harmonyCandidateFrames = 0;
-          } else {
-            if (pitchClassesMatch(harmonyCandidate, runtime.harmonyCandidatePitchClasses)) {
-              runtime.harmonyCandidateFrames += 1;
-            } else {
-              runtime.harmonyCandidatePitchClasses = harmonyCandidate;
-              runtime.harmonyCandidateFrames = 1;
-            }
-
-            const harmonyConfirmationFrames =
-              runtime.harmonyPitchClasses.length === 0
+            const isChord = leftHandCandidate.length > 1;
+            const isInitialVoicing = runtime.leftHandPitchClasses.length === 0;
+            const isNearBeat = now - runtime.lastBeatAt <= 150;
+            const confirmationFrames = isChord
+              ? isInitialVoicing
                 ? 7
-                : now - runtime.lastBeatAt <= 140
+                : isNearBeat
                   ? 6
-                  : 10;
-            if (runtime.harmonyCandidateFrames >= harmonyConfirmationFrames) {
-              runtime.harmonyPitchClasses = harmonyCandidate;
-              runtime.harmonyLastSeenAt = now;
-              runtime.harmonyCandidatePitchClasses = [];
-              runtime.harmonyCandidateFrames = 0;
-            } else if (now - runtime.harmonyLastSeenAt > 280) {
-              runtime.harmonyPitchClasses = [];
+                  : 10
+              : isInitialVoicing
+                ? 4
+                : isNearBeat
+                  ? 5
+                  : 8;
+            if (runtime.leftHandCandidateFrames >= confirmationFrames) {
+              runtime.leftHandPitchClasses = leftHandCandidate;
+              runtime.leftHandLastSeenAt = now;
+              runtime.leftHandCandidatePitchClasses = [];
+              runtime.leftHandCandidateFrames = 0;
+            } else if (now - runtime.leftHandLastSeenAt > 480) {
+              runtime.leftHandPitchClasses = [];
             }
           }
-        } else if (now - runtime.harmonyLastSeenAt > 280) {
-          runtime.harmonyPitchClasses = [];
-          runtime.harmonyCandidatePitchClasses = [];
-          runtime.harmonyCandidateFrames = 0;
+        } else if (now - runtime.leftHandLastSeenAt > 480) {
+          runtime.leftHandPitchClasses = [];
+          runtime.leftHandCandidatePitchClasses = [];
+          runtime.leftHandCandidateFrames = 0;
         }
 
-        const nextHighlightedPitchClasses = primaryPitchClass === null
-          ? []
-          : [
-              primaryPitchClass,
-              ...runtime.harmonyPitchClasses.filter(
-                (pitchClass) => pitchClass !== primaryPitchClass,
-              ),
-            ].slice(0, 3);
-        nextHighlightedPitchClasses.sort((first, second) => first - second);
+        const nextHighlightedPitchClasses =
+          now - runtime.leftHandLastSeenAt <= 480 ? runtime.leftHandPitchClasses : [];
 
         const highlightsChanged =
           nextHighlightedPitchClasses.length !== runtime.highlightedPitchClasses.length ||
