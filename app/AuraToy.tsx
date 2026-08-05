@@ -3,10 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
   Download,
   Image as ImageIcon,
   Video as VideoIcon,
@@ -1466,7 +1462,6 @@ export function AuraToy() {
             />
             <div
               className="mode-dial"
-              style={{ "--mode-length": activeSoundMode.label.length } as CSSProperties}
               onWheel={(event) => {
                 event.preventDefault();
                 if (dialWheelTimerRef.current !== null || event.deltaY === 0) return;
@@ -1491,26 +1486,26 @@ export function AuraToy() {
                     {activeSoundMode.label}
                   </span>
                 </span>
-              </div>
-              <div className="mode-stepper" aria-label="Sound mode controls">
-                <button
-                  type="button"
-                  className="mode-step-button"
-                  aria-label="Previous sound mode"
-                  title="Previous sound mode"
-                  onClick={() => cycleSoundMode(-1)}
-                >
-                  <ChevronUp size={11} strokeWidth={1.6} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className="mode-step-button"
-                  aria-label="Next sound mode"
-                  title="Next sound mode"
-                  onClick={() => cycleSoundMode(1)}
-                >
-                  <ChevronDown size={11} strokeWidth={1.6} aria-hidden="true" />
-                </button>
+                <div className="mode-stepper" aria-label="Sound mode controls">
+                  <button
+                    type="button"
+                    className="mode-step-button"
+                    aria-label="Previous sound mode"
+                    title="Previous sound mode"
+                    onClick={() => cycleSoundMode(-1)}
+                  >
+                    <span className="filled-triangle is-up" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="mode-step-button"
+                    aria-label="Next sound mode"
+                    title="Next sound mode"
+                    onClick={() => cycleSoundMode(1)}
+                  >
+                    <span className="filled-triangle is-down" aria-hidden="true" />
+                  </button>
+                </div>
               </div>
             </div>
             <span className="header-rule" aria-hidden="true" />
@@ -1523,7 +1518,7 @@ export function AuraToy() {
                 disabled={octave === MIN_OCTAVE}
                 onClick={() => shiftOctave(-1)}
               >
-                <ChevronLeft className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+                <span className="filled-triangle is-left" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -1533,7 +1528,7 @@ export function AuraToy() {
                 disabled={octave === MAX_OCTAVE}
                 onClick={() => shiftOctave(1)}
               >
-                <ChevronRight className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+                <span className="filled-triangle is-right" aria-hidden="true" />
               </button>
             </div>
           </div>

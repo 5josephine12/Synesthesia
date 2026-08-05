@@ -37,9 +37,11 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="Sound mode: Piano"/);
   assert.match(html, /aria-label="Previous sound mode"/);
   assert.match(html, /aria-label="Next sound mode"/);
+  assert.match(html, /filled-triangle is-up/);
+  assert.match(html, /filled-triangle is-left/);
   assert.match(html, /aria-label="Preview visual as PNG"/);
   assert.match(html, /aria-label="Preview visual as video"/);
-  assert.doesNotMatch(html, /aria-haspopup|role="listbox"|sound-wheel/);
+  assert.doesNotMatch(html, /aria-haspopup|role="listbox"|sound-wheel|lucide-chevron/);
   assert.doesNotMatch(html, /entry-caret|aria-label="Seed word"|J-05/);
   assert.doesNotMatch(html, /aria-label="Save (?:portrait|square|wide) visual"/);
   assert.doesNotMatch(html, /<h1>Aura<\/h1>|>Save aura</i);
