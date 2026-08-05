@@ -141,7 +141,7 @@ const MAX_OCTAVE = 7;
 const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
 const MAX_MIDI = (MAX_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
-const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 24;
+const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 30;
 const MICROPHONE_FFT_SIZE = 4096;
 const DEFAULT_SOUND_MODE: SoundModeId = "piano";
 const RADIOGRAPHIC_HUES = [338, 322, 300, 282, 260, 238, 220, 10, 18, 348, 312, 248] as const;
@@ -942,6 +942,7 @@ export function AuraToy() {
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
   const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const microphoneIntroductionShownRef = useRef(false);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
   const blobIdRef = useRef(1);
@@ -982,6 +983,7 @@ export function AuraToy() {
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
   const [microphoneMidi, setMicrophoneMidi] = useState<number | null>(null);
   const [microphoneReading, setMicrophoneReading] = useState("Listening");
+  const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -1213,7 +1215,7 @@ export function AuraToy() {
       createdAt: now,
     });
 
-    setLayerCount(blobsRef.current.length);
+    if (blobsRef.current.length === 1) setLayerCount(1);
     wakeRendererRef.current?.();
   }, []);
 
@@ -1222,6 +1224,7 @@ export function AuraToy() {
     disposeMicrophoneRuntime(microphoneRef.current);
     microphoneRef.current = null;
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
+    setMicrophonePromptOpen(false);
     setMicrophoneState("idle");
     setMicrophoneMidi(null);
     setMicrophoneReading("Listening");
@@ -1273,7 +1276,6 @@ export function AuraToy() {
 
       const detector = PitchDetector.forFloat32Array(MICROPHONE_FFT_SIZE);
       detector.minVolumeDecibels = -62;
-      const startedAt = performance.now();
       const runtime: MicrophoneRuntime = {
         stream,
         context: audioContext,
@@ -1287,13 +1289,13 @@ export function AuraToy() {
         animationFrame: 0,
         lastAnalysisAt: -Infinity,
         lastVisualAt: -Infinity,
-        lastBeatAt: startedAt,
+        lastBeatAt: -Infinity,
         lastValidPitchAt: -Infinity,
         lastMidi: null,
         candidateMidi: null,
         candidateFrames: 0,
-        noiseFloor: 0.004,
-        smoothedEnergy: 0.008,
+        noiseFloor: 0.0018,
+        smoothedEnergy: 0.003,
         smoothedFlux: 0.001,
       };
       microphoneRef.current = runtime;
@@ -1311,14 +1313,13 @@ export function AuraToy() {
         const previousEnergy = runtime.smoothedEnergy;
         const energyRise = rms / Math.max(0.0001, previousEnergy);
         runtime.smoothedEnergy = lerp(previousEnergy, rms, rms > previousEnergy ? 0.18 : 0.055);
-        runtime.noiseFloor = lerp(
-          runtime.noiseFloor,
-          rms,
-          rms < Math.max(0.008, previousEnergy * 1.08) ? 0.035 : 0.002,
-        );
-        const gate = Math.max(0.006, runtime.noiseFloor * 2.35);
+        runtime.noiseFloor =
+          rms <= runtime.noiseFloor * 1.24
+            ? lerp(runtime.noiseFloor, rms, 0.1)
+            : Math.min(0.012, runtime.noiseFloor + 0.000004);
+        const gate = Math.max(0.0025, runtime.noiseFloor * 1.7);
         const activeSignal = rms > gate;
-        const level = activeSignal ? clamp((rms - gate) / Math.max(0.018, 0.12 - gate), 0, 1) : 0;
+        const level = activeSignal ? clamp((rms - gate) / Math.max(0.012, 0.09 - gate), 0, 1) : 0;
         microphoneButtonRef.current?.style.setProperty("--mic-level", level.toFixed(3));
 
         const { spectralFlux, dominantMidi } = updateSpectrumAnalysis(
@@ -1332,8 +1333,8 @@ export function AuraToy() {
         runtime.smoothedFlux = lerp(previousFlux, spectralFlux, 0.085);
         const beatDetected =
           activeSignal &&
-          now - runtime.lastBeatAt > 165 &&
-          (energyRise > 1.34 || spectralFlux > Math.max(0.0012, previousFlux * 1.75));
+          now - runtime.lastBeatAt > 110 &&
+          (energyRise > 1.16 || spectralFlux > Math.max(0.0007, previousFlux * 1.38));
         if (beatDetected) runtime.lastBeatAt = now;
 
         const [frequency, clarity] = detector.findPitch(runtime.timeDomain, audioContext.sampleRate);
@@ -1344,10 +1345,11 @@ export function AuraToy() {
           nearestMidi !== null &&
           nearestMidi >= MIN_MIDI &&
           nearestMidi <= MAX_MIDI &&
-          clarity >= 0.86 &&
+          clarity >= 0.68 &&
           Math.abs(midiFloat - nearestMidi) <= 0.48;
 
         if (clearPitch && nearestMidi !== null) {
+          runtime.lastValidPitchAt = now;
           if (runtime.candidateMidi === nearestMidi) runtime.candidateFrames += 1;
           else {
             runtime.candidateMidi = nearestMidi;
@@ -1363,9 +1365,8 @@ export function AuraToy() {
           stableMidi = runtime.candidateMidi;
           noteChanged = stableMidi !== runtime.lastMidi;
           runtime.lastMidi = stableMidi;
-          runtime.lastValidPitchAt = now;
           if (noteChanged) setMicrophoneMidi(stableMidi);
-        } else if (now - runtime.lastValidPitchAt > 360 && runtime.lastMidi !== null) {
+        } else if (now - runtime.lastValidPitchAt > 260 && runtime.lastMidi !== null) {
           runtime.lastMidi = null;
           runtime.candidateMidi = null;
           runtime.candidateFrames = 0;
@@ -1373,16 +1374,17 @@ export function AuraToy() {
         }
 
         if (!activeSignal) return;
-        const sustainedPulse = stableMidi !== null && now - runtime.lastVisualAt > 680;
-        const beatPulse = beatDetected && now - runtime.lastVisualAt > 125;
-        if (!noteChanged && !sustainedPulse && !beatPulse) return;
-
-        const detectedMidi = stableMidi ?? runtime.lastMidi ?? dominantMidi;
+        const recentStableMidi = now - runtime.lastValidPitchAt < 260 ? runtime.lastMidi : null;
+        const detectedMidi = stableMidi ?? (clearPitch ? nearestMidi : null) ?? recentStableMidi ?? dominantMidi;
         if (detectedMidi === null) return;
+        const visualInterval = beatDetected ? 60 : lerp(165, 72, level);
+        if (now - runtime.lastVisualAt < visualInterval) return;
+        if (!clearPitch && !beatDetected && recentStableMidi === null && level < 0.1) return;
+
         const note = midiToNote(clamp(detectedMidi, MIN_MIDI, MAX_MIDI));
         const harmonicContext = detectHarmonicContext(runtime.chroma);
         const baseColor = AURA_MAPPING.pitches[note.pc];
-        const velocity = clamp(0.32 + level * 0.58 + (beatDetected ? 0.1 : 0), 0.32, 1);
+        const velocity = clamp(0.26 + level * 0.64 + (beatDetected ? 0.1 : 0), 0.26, 1);
         spawnBlob(note, microphoneColor(baseColor, harmonicContext), velocity);
         runtime.lastVisualAt = now;
         setMicrophoneReading(
@@ -1410,13 +1412,41 @@ export function AuraToy() {
     }
   }, [spawnBlob, stopMicrophone]);
 
+  const prepareMicrophone = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicrophoneState("unsupported");
+      return;
+    }
+
+    try {
+      const permission = await navigator.permissions?.query({ name: "microphone" as PermissionName });
+      if (permission?.state === "denied") {
+        setMicrophoneState("error");
+        setMicrophoneReading("Microphone access is blocked");
+        return;
+      }
+    } catch {
+      // Some browsers do not expose microphone permission state.
+    }
+
+    if (microphoneIntroductionShownRef.current) {
+      void startMicrophone();
+      return;
+    }
+    setMicrophonePromptOpen(true);
+  }, [startMicrophone]);
+
   const toggleMicrophone = useCallback(() => {
+    if (microphonePromptOpen) {
+      setMicrophonePromptOpen(false);
+      return;
+    }
     if (microphoneState === "listening" || microphoneState === "requesting") {
       stopMicrophone();
       return;
     }
-    void startMicrophone();
-  }, [microphoneState, startMicrophone, stopMicrophone]);
+    void prepareMicrophone();
+  }, [microphonePromptOpen, microphoneState, prepareMicrophone, stopMicrophone]);
 
   const shiftedNote = useCallback(
     (key: KeySpec): NoteChoice => {
@@ -1920,6 +1950,8 @@ export function AuraToy() {
       ? `Stop microphone listening, detecting ${microphoneReading}`
       : microphoneState === "requesting"
         ? "Cancel microphone request"
+        : microphonePromptOpen
+          ? "Close microphone setup"
         : microphoneState === "error"
           ? "Retry microphone listening"
           : microphoneState === "unsupported"
@@ -2061,7 +2093,6 @@ export function AuraToy() {
           className={`export-button microphone-button is-${microphoneState}`}
           aria-label={microphoneLabel}
           aria-pressed={microphoneState === "listening"}
-          title={microphoneLabel}
           disabled={microphoneState === "unsupported"}
           onClick={toggleMicrophone}
         >
@@ -2075,6 +2106,51 @@ export function AuraToy() {
           {microphoneState === "listening" ? microphoneReading : microphoneLabel}
         </span>
       </div>
+
+      {microphonePromptOpen ? (
+        <div
+          className="microphone-permission-backdrop"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setMicrophonePromptOpen(false);
+          }}
+        >
+          <section
+            className="microphone-permission"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="microphone-permission-title"
+          >
+            <header className="microphone-permission-header">
+              <h2 id="microphone-permission-title">Microphone</h2>
+              <button
+                type="button"
+                className="preview-control"
+                aria-label="Close microphone setup"
+                onClick={() => setMicrophonePromptOpen(false)}
+              >
+                <X className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+              </button>
+            </header>
+            <div className="microphone-permission-screen">
+              <span className="microphone-permission-icon" aria-hidden="true">
+                <Mic className="control-icon" size={18} strokeWidth={1.5} />
+              </span>
+              <p>Aura listens locally to pitch, rhythm, and volume. Audio is never saved.</p>
+            </div>
+            <button
+              type="button"
+              className="microphone-permission-action"
+              onClick={() => {
+                microphoneIntroductionShownRef.current = true;
+                setMicrophonePromptOpen(false);
+                void startMicrophone();
+              }}
+            >
+              Allow microphone
+            </button>
+          </section>
+        </div>
+      ) : null}
 
       <div className={`export-dock ${layerCount > 0 ? "is-ready" : ""}`} aria-label="Export visual">
         <button
