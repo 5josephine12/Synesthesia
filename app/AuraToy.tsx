@@ -53,6 +53,7 @@ type BlobParticle = {
 type KeySpec = NoteChoice & {
   id: string;
   kind: "white" | "upper";
+  hand: "left" | "right";
   left?: number;
 };
 
@@ -156,6 +157,7 @@ type MicrophoneRuntime = {
   onsetBaseline: number;
   onsetDeviation: number;
   highlightedPitchClasses: number[];
+  highlightedHarmonyPitchClasses: number[];
   lastKeyBeatAt: number;
   leftHandPitchClasses: number[];
   leftHandCandidatePitchClasses: number[];
@@ -170,11 +172,12 @@ type MicrophoneRuntime = {
 };
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const BASE_OCTAVE = 4;
+const BASE_OCTAVE = 3;
+const HIGHEST_PIANO_OCTAVE = 7;
 const MIN_OCTAVE = 1;
-const MAX_OCTAVE = 7;
+const MAX_OCTAVE = HIGHEST_PIANO_OCTAVE - 1;
 const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
-const MAX_MIDI = (MAX_OCTAVE + 2) * 12 - 1;
+const MAX_MIDI = (HIGHEST_PIANO_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
 const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 30;
 const MICROPHONE_FFT_SIZE = 4096;
@@ -343,29 +346,35 @@ function buildKeys(): KeySpec[] {
     { pc: 10, afterWhite: 5 },
   ];
 
-  const octave = 4;
-  whitePitchClasses.forEach((pc) => {
-    const note = `${NOTE_NAMES[pc]}${octave}`;
-    keys.push({
-      id: note,
-      kind: "white",
-      name: note,
-      midi: (octave + 1) * 12 + pc,
-      pc,
-    });
-  });
+  for (let octaveOffset = 0; octaveOffset < 2; octaveOffset += 1) {
+    const octave = BASE_OCTAVE + octaveOffset;
+    const hand = octaveOffset === 0 ? "left" : "right";
 
-  upperSlots.forEach(({ pc, afterWhite }) => {
-    const note = `${NOTE_NAMES[pc]}${octave}`;
-    keys.push({
-      id: note,
-      kind: "upper",
-      name: note,
-      midi: (octave + 1) * 12 + pc,
-      pc,
-      left: (afterWhite + 1) / 7,
+    whitePitchClasses.forEach((pc) => {
+      const note = `${NOTE_NAMES[pc]}${octave}`;
+      keys.push({
+        id: note,
+        kind: "white",
+        hand,
+        name: note,
+        midi: (octave + 1) * 12 + pc,
+        pc,
+      });
     });
-  });
+
+    upperSlots.forEach(({ pc, afterWhite }) => {
+      const note = `${NOTE_NAMES[pc]}${octave}`;
+      keys.push({
+        id: note,
+        kind: "upper",
+        hand,
+        name: note,
+        midi: (octave + 1) * 12 + pc,
+        pc,
+        left: (octaveOffset * 7 + afterWhite + 1) / 14,
+      });
+    });
+  }
 
   return keys;
 }
@@ -1255,7 +1264,7 @@ export function AuraToy() {
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
-  const [microphonePitchClasses, setMicrophonePitchClasses] = useState<number[]>([]);
+  const [microphoneHarmonyPitchClasses, setMicrophoneHarmonyPitchClasses] = useState<number[]>([]);
   const [microphoneMelodyPitchClass, setMicrophoneMelodyPitchClass] = useState<number | null>(null);
   const [microphoneBeatPitchClasses, setMicrophoneBeatPitchClasses] = useState<number[]>([]);
   const [microphoneReading, setMicrophoneReading] = useState("Listening");
@@ -1507,7 +1516,7 @@ export function AuraToy() {
     }
     setMicrophonePromptOpen(false);
     setMicrophoneState("idle");
-    setMicrophonePitchClasses([]);
+    setMicrophoneHarmonyPitchClasses([]);
     setMicrophoneMelodyPitchClass(null);
     setMicrophoneBeatPitchClasses([]);
     setMicrophoneReading("Listening");
@@ -1595,6 +1604,7 @@ export function AuraToy() {
         onsetBaseline: 0.05,
         onsetDeviation: 0.04,
         highlightedPitchClasses: [],
+        highlightedHarmonyPitchClasses: [],
         lastKeyBeatAt: -Infinity,
         leftHandPitchClasses: [],
         leftHandCandidatePitchClasses: [],
@@ -1917,6 +1927,15 @@ export function AuraToy() {
 
         const nextHighlightedPitchClasses =
           now - runtime.leftHandLastSeenAt <= 480 ? [...runtime.leftHandPitchClasses] : [];
+        const harmonyHighlightsChanged =
+          nextHighlightedPitchClasses.length !== runtime.highlightedHarmonyPitchClasses.length ||
+          nextHighlightedPitchClasses.some(
+            (pitchClass, index) => pitchClass !== runtime.highlightedHarmonyPitchClasses[index],
+          );
+        if (harmonyHighlightsChanged) {
+          runtime.highlightedHarmonyPitchClasses = [...nextHighlightedPitchClasses];
+          setMicrophoneHarmonyPitchClasses(nextHighlightedPitchClasses);
+        }
         if (
           runtime.melodyPitchClass !== null &&
           now - runtime.melodyLastSeenAt <= 560 &&
@@ -1933,7 +1952,6 @@ export function AuraToy() {
           );
         if (highlightsChanged) {
           runtime.highlightedPitchClasses = nextHighlightedPitchClasses;
-          setMicrophonePitchClasses(nextHighlightedPitchClasses);
         }
 
         if (melodyOnsetPitchClass !== null) {
@@ -2012,7 +2030,7 @@ export function AuraToy() {
       microphoneRef.current = null;
       microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
       setMicrophoneState("error");
-      setMicrophonePitchClasses([]);
+      setMicrophoneHarmonyPitchClasses([]);
       setMicrophoneMelodyPitchClass(null);
       setMicrophoneBeatPitchClasses([]);
       setMicrophoneReading("Microphone unavailable");
@@ -2556,6 +2574,7 @@ export function AuraToy() {
     if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
     setResetting(true);
     setLayerCount(0);
+    setOctave(BASE_OCTAVE);
     wakeRendererRef.current?.();
     resetFrameRef.current = window.requestAnimationFrame(() => {
       resetFrameRef.current = null;
@@ -2576,6 +2595,24 @@ export function AuraToy() {
           : microphoneState === "unsupported"
             ? "Microphone listening is unsupported"
             : "Start microphone listening";
+  const keyPresentation = (key: KeySpec) => {
+    const note = shiftedNote(key);
+    const isHarmony =
+      key.hand === "left" && microphoneHarmonyPitchClasses.includes(note.pc);
+    const isMelody = key.hand === "right" && microphoneMelodyPitchClass === note.pc;
+    const isDetected = isHarmony || isMelody;
+    const isBeat = isDetected && microphoneBeatPitchClasses.includes(note.pc);
+
+    return {
+      note,
+      className: `piano-key ${key.kind === "white" ? "white-key" : "upper-key"} ${
+        activeKeys.has(key.id) ? "is-active" : ""
+      } ${isDetected ? "is-detected" : ""} ${isMelody ? "is-melody" : ""} ${
+        isBeat ? "is-microphone-beat" : ""
+      }`,
+    };
+  };
+
   return (
     <main className={`aura-page ${resetting ? "is-resetting" : ""}`}>
       <canvas ref={canvasRef} className="aura-canvas" aria-hidden="true" />
@@ -2643,8 +2680,8 @@ export function AuraToy() {
               <button
                 type="button"
                 className="transport-button"
-                aria-label="Shift octave down"
-                title="Lower octave"
+                aria-label="Shift both octaves down"
+                title="Lower both octaves"
                 disabled={octave === MIN_OCTAVE}
                 onClick={() => shiftOctave(-1)}
               >
@@ -2653,8 +2690,8 @@ export function AuraToy() {
               <button
                 type="button"
                 className="transport-button"
-                aria-label="Shift octave up"
-                title="Raise octave"
+                aria-label="Shift both octaves up"
+                title="Raise both octaves"
                 disabled={octave === MAX_OCTAVE}
                 onClick={() => shiftOctave(1)}
               >
@@ -2665,45 +2702,47 @@ export function AuraToy() {
 
           <div className="keybed" data-octave={octave}>
             <div className="white-keys">
-              {WHITE_KEYS.map((key) => (
-                <button
-                  key={key.id}
-                  type="button"
-                  className={`piano-key white-key ${activeKeys.has(key.id) ? "is-active" : ""} ${
-                    microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-detected" : ""
-                  } ${
-                    microphoneMelodyPitchClass === shiftedNote(key).pc ? "is-melody" : ""
-                  } ${microphoneBeatPitchClasses.includes(shiftedNote(key).pc) ? "is-microphone-beat" : ""}`}
-                  aria-label={shiftedNote(key).name}
-                  onPointerDown={(event) => handlePointerDown(event, key)}
-                  onPointerUp={(event) => handlePointerEnd(event, key)}
-                  onPointerCancel={(event) => handlePointerEnd(event, key)}
-                  onLostPointerCapture={() => endKey(key)}
-                />
-              ))}
+              {WHITE_KEYS.map((key) => {
+                const { note, className } = keyPresentation(key);
+
+                return (
+                  <button
+                    key={key.id}
+                    type="button"
+                    className={className}
+                    data-hand={key.hand}
+                    aria-label={note.name}
+                    onPointerDown={(event) => handlePointerDown(event, key)}
+                    onPointerUp={(event) => handlePointerEnd(event, key)}
+                    onPointerCancel={(event) => handlePointerEnd(event, key)}
+                    onLostPointerCapture={() => endKey(key)}
+                  />
+                );
+              })}
             </div>
 
-            {UPPER_KEYS.map((key) => (
-              <div
-                key={key.id}
-                className="upper-key-slot"
-                style={{ "--upper-left": `${(key.left ?? 0) * 100}%` } as CSSProperties}
-              >
-                <button
-                  type="button"
-                  className={`piano-key upper-key ${activeKeys.has(key.id) ? "is-active" : ""} ${
-                    microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-detected" : ""
-                  } ${
-                    microphoneMelodyPitchClass === shiftedNote(key).pc ? "is-melody" : ""
-                  } ${microphoneBeatPitchClasses.includes(shiftedNote(key).pc) ? "is-microphone-beat" : ""}`}
-                  aria-label={shiftedNote(key).name}
-                  onPointerDown={(event) => handlePointerDown(event, key)}
-                  onPointerUp={(event) => handlePointerEnd(event, key)}
-                  onPointerCancel={(event) => handlePointerEnd(event, key)}
-                  onLostPointerCapture={() => endKey(key)}
-                />
-              </div>
-            ))}
+            {UPPER_KEYS.map((key) => {
+              const { note, className } = keyPresentation(key);
+
+              return (
+                <div
+                  key={key.id}
+                  className="upper-key-slot"
+                  style={{ "--upper-left": `${(key.left ?? 0) * 100}%` } as CSSProperties}
+                >
+                  <button
+                    type="button"
+                    className={className}
+                    data-hand={key.hand}
+                    aria-label={note.name}
+                    onPointerDown={(event) => handlePointerDown(event, key)}
+                    onPointerUp={(event) => handlePointerEnd(event, key)}
+                    onPointerCancel={(event) => handlePointerEnd(event, key)}
+                    onLostPointerCapture={() => endKey(key)}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
 

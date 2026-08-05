@@ -39,6 +39,12 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="Next sound mode"/);
   assert.match(html, /filled-triangle is-up/);
   assert.match(html, /filled-triangle is-left/);
+  assert.match(html, /aria-label="C3"/);
+  assert.match(html, /aria-label="B4"/);
+  assert.match(html, /data-hand="left"/);
+  assert.match(html, /data-hand="right"/);
+  assert.match(html, /aria-label="Shift both octaves down"/);
+  assert.match(html, /aria-label="Shift both octaves up"/);
   assert.match(html, /aria-label="Preview visual as PNG"/);
   assert.match(html, /aria-label="Preview visual as video"/);
   assert.doesNotMatch(html, /aria-haspopup|role="listbox"|sound-wheel|lucide-chevron/);
