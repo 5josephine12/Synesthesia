@@ -150,6 +150,7 @@ type MicrophoneRuntime = {
   keyPitchConfidence: Float32Array;
   keyPitchLastSeenAt: Float64Array;
   highlightedPitchClasses: number[];
+  lastKeyBeatAt: number;
   melodyPitchClass: number | null;
   melodyCandidatePitchClass: number | null;
   melodyCandidateFrames: number;
@@ -629,7 +630,9 @@ function updateSpectrumAnalysis(
   const pitchClasses = rankedPitchClasses
     .filter(
       ({ score }) =>
-        score > 0 && score >= strongestPitchClass * 0.44 && score >= Math.max(0.000001, totalPitchEnergy * 0.1),
+        score > 0 &&
+        score >= strongestPitchClass * 0.38 &&
+        score >= Math.max(0.000001, totalPitchEnergy * 0.08),
     )
     .slice(0, 3)
     .map(({ pitchClass }) => pitchClass);
@@ -1516,6 +1519,7 @@ export function AuraToy() {
         keyPitchConfidence: new Float32Array(12),
         keyPitchLastSeenAt: new Float64Array(12).fill(-Infinity),
         highlightedPitchClasses: [],
+        lastKeyBeatAt: -Infinity,
         melodyPitchClass: null,
         melodyCandidatePitchClass: null,
         melodyCandidateFrames: 0,
@@ -1599,7 +1603,7 @@ export function AuraToy() {
         if (runtime.candidateFrames >= 2 && runtime.candidateMidi !== null) {
           stableMidi = runtime.candidateMidi;
           runtime.lastMidi = stableMidi;
-        } else if (now - runtime.lastValidPitchAt > 260 && runtime.lastMidi !== null) {
+        } else if (now - runtime.lastValidPitchAt > 650 && runtime.lastMidi !== null) {
           runtime.lastMidi = null;
           runtime.candidateMidi = null;
           runtime.candidateFrames = 0;
@@ -1608,18 +1612,32 @@ export function AuraToy() {
         const monophonicFrame =
           clearPitch && clarity >= 0.82 && nearestMidi !== null && pitchClasses.length <= 1;
         const monophonicPitchClass = monophonicFrame ? modulo(nearestMidi, 12) : null;
+        const recentStableMidi = now - runtime.lastValidPitchAt < 650 ? runtime.lastMidi : null;
+        const spectralMidi =
+          noteCandidates.length > 0
+            ? noteCandidates[runtime.visualCursor % noteCandidates.length].midi
+            : dominantMidi;
+        const detectedMidi = monophonicFrame
+          ? nearestMidi
+          : spectralMidi ?? stableMidi ?? (clearPitch ? nearestMidi : null) ?? recentStableMidi;
         const detectedPitchClasses = !activeSignal
           ? []
           : monophonicPitchClass !== null
             ? [monophonicPitchClass]
-            : pitchClasses;
+            : pitchClasses.length > 0
+              ? pitchClasses
+              : detectedMidi !== null
+                ? [modulo(detectedMidi, 12)]
+                : runtime.melodyPitchClass !== null && now - runtime.melodyLastSeenAt <= 700
+                  ? [runtime.melodyPitchClass]
+                  : [];
 
         // Confirm chord tones across several frames, then release them gently to avoid key flicker.
         for (let pitchClass = 0; pitchClass < 12; pitchClass += 1) {
           const isPresent = detectedPitchClasses.includes(pitchClass);
           runtime.keyPitchConfidence[pitchClass] = clamp(
             runtime.keyPitchConfidence[pitchClass] +
-              (isPresent ? (monophonicFrame ? 0.95 : 0.72) : -0.34),
+              (isPresent ? (monophonicFrame ? 1.2 : 0.95) : activeSignal ? -0.1 : -0.28),
             0,
             3,
           );
@@ -1629,11 +1647,11 @@ export function AuraToy() {
         const nextHighlightedPitchClasses = Array.from({ length: 12 }, (_, pitchClass) => pitchClass)
           .filter((pitchClass) => {
             const wasHighlighted = runtime.highlightedPitchClasses.includes(pitchClass);
-            const entryThreshold = monophonicFrame ? 1.2 : 1.45;
+            const entryThreshold = monophonicFrame ? 1 : 0.9;
             return (
               runtime.keyPitchConfidence[pitchClass] >= entryThreshold ||
               (wasHighlighted &&
-                now - runtime.keyPitchLastSeenAt[pitchClass] <= 420 &&
+                now - runtime.keyPitchLastSeenAt[pitchClass] <= 720 &&
                 runtime.keyPitchConfidence[pitchClass] >= 0.28)
             );
           })
@@ -1692,11 +1710,6 @@ export function AuraToy() {
               runtime.melodyStableSince = now;
               runtime.melodyCandidatePitchClass = null;
               runtime.melodyCandidateFrames = 0;
-              if (microphoneBeatTimerRef.current !== null) {
-                window.clearTimeout(microphoneBeatTimerRef.current);
-                microphoneBeatTimerRef.current = null;
-              }
-              setMicrophoneBeatPitchClasses([]);
             }
           }
         } else if (now - runtime.melodyLastSeenAt > 700 && runtime.melodyPitchClass !== null) {
@@ -1704,25 +1717,20 @@ export function AuraToy() {
           runtime.melodyCandidatePitchClass = null;
           runtime.melodyCandidateFrames = 0;
           runtime.melodyStableSince = -Infinity;
-          if (microphoneBeatTimerRef.current !== null) {
-            window.clearTimeout(microphoneBeatTimerRef.current);
-            microphoneBeatTimerRef.current = null;
-          }
-          setMicrophoneBeatPitchClasses([]);
         }
 
+        const hasPendingKeyBeat =
+          Number.isFinite(runtime.lastBeatAt) &&
+          runtime.lastBeatAt > runtime.lastKeyBeatAt &&
+          now - runtime.lastBeatAt <= 240;
         if (
-          beatDetected &&
+          hasPendingKeyBeat &&
           runtime.beatConfidence >= 1.5 &&
-          runtime.melodyPitchClass !== null &&
-          now - runtime.melodyStableSince >= 450
+          runtime.highlightedPitchClasses.length > 0
         ) {
           if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
-          setMicrophoneBeatPitchClasses(
-            runtime.highlightedPitchClasses.length > 0
-              ? [...runtime.highlightedPitchClasses]
-              : [runtime.melodyPitchClass],
-          );
+          runtime.lastKeyBeatAt = runtime.lastBeatAt;
+          setMicrophoneBeatPitchClasses([...runtime.highlightedPitchClasses]);
           microphoneBeatTimerRef.current = window.setTimeout(() => {
             microphoneBeatTimerRef.current = null;
             setMicrophoneBeatPitchClasses([]);
@@ -1730,14 +1738,6 @@ export function AuraToy() {
         }
 
         if (!activeSignal) return;
-        const recentStableMidi = now - runtime.lastValidPitchAt < 260 ? runtime.lastMidi : null;
-        const spectralMidi =
-          noteCandidates.length > 0
-            ? noteCandidates[runtime.visualCursor % noteCandidates.length].midi
-            : dominantMidi;
-        const detectedMidi = monophonicFrame
-          ? nearestMidi
-          : spectralMidi ?? stableMidi ?? (clearPitch ? nearestMidi : null) ?? recentStableMidi;
         if (detectedMidi === null) return;
         const visualInterval = beatDetected ? 60 : lerp(165, 72, level);
         if (now - runtime.lastVisualAt < visualInterval) return;
