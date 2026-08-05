@@ -138,8 +138,10 @@ type MicrophoneRuntime = {
   noiseFloor: number;
   smoothedEnergy: number;
   smoothedFlux: number;
-  lastPitchClassSignature: string;
-  lastPitchClassAt: number;
+  melodyPitchClass: number | null;
+  melodyCandidatePitchClass: number | null;
+  melodyCandidateFrames: number;
+  melodyLastSeenAt: number;
   visualCursor: number;
 };
 
@@ -1030,7 +1032,7 @@ export function AuraToy() {
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
-  const [microphonePitchClasses, setMicrophonePitchClasses] = useState<number[]>([]);
+  const [microphoneMelodyPitchClass, setMicrophoneMelodyPitchClass] = useState<number | null>(null);
   const [microphoneReading, setMicrophoneReading] = useState("Listening");
   const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
 
@@ -1275,7 +1277,7 @@ export function AuraToy() {
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
     setMicrophonePromptOpen(false);
     setMicrophoneState("idle");
-    setMicrophonePitchClasses([]);
+    setMicrophoneMelodyPitchClass(null);
     setMicrophoneReading("Listening");
   }, []);
 
@@ -1347,8 +1349,10 @@ export function AuraToy() {
         noiseFloor: 0.0018,
         smoothedEnergy: 0.003,
         smoothedFlux: 0.001,
-        lastPitchClassSignature: "",
-        lastPitchClassAt: -Infinity,
+        melodyPitchClass: null,
+        melodyCandidatePitchClass: null,
+        melodyCandidateFrames: 0,
+        melodyLastSeenAt: -Infinity,
         visualCursor: 0,
       };
       microphoneRef.current = runtime;
@@ -1430,16 +1434,53 @@ export function AuraToy() {
           : monophonicPitchClass !== null
             ? [monophonicPitchClass]
             : pitchClasses;
-        if (detectedPitchClasses.length > 0) {
-          runtime.lastPitchClassAt = now;
-          const pitchClassSignature = detectedPitchClasses.join(",");
-          if (pitchClassSignature !== runtime.lastPitchClassSignature) {
-            runtime.lastPitchClassSignature = pitchClassSignature;
-            setMicrophonePitchClasses(detectedPitchClasses);
+
+        const rankedMelodyNotes = noteCandidates
+          .map((candidate) => ({
+            pitchClass: modulo(candidate.midi, 12),
+            score:
+              candidate.score *
+              (1 + clamp((candidate.midi - MIN_MIDI) / (MAX_MIDI - MIN_MIDI), 0, 1) * 0.18),
+          }))
+          .sort((first, second) => second.score - first.score);
+        const melodyLeader = rankedMelodyNotes[0] ?? null;
+        const currentMelody = rankedMelodyNotes.find(
+          ({ pitchClass }) => pitchClass === runtime.melodyPitchClass,
+        );
+        const melodyPitchClass = !activeSignal
+          ? null
+          : monophonicPitchClass ??
+            (currentMelody && melodyLeader && currentMelody.score >= melodyLeader.score * 0.68
+              ? currentMelody.pitchClass
+              : melodyLeader?.pitchClass ?? null);
+
+        if (melodyPitchClass !== null) {
+          if (runtime.melodyPitchClass === melodyPitchClass) {
+            runtime.melodyLastSeenAt = now;
+            runtime.melodyCandidatePitchClass = null;
+            runtime.melodyCandidateFrames = 0;
+          } else {
+            if (runtime.melodyCandidatePitchClass === melodyPitchClass) {
+              runtime.melodyCandidateFrames += 1;
+            } else {
+              runtime.melodyCandidatePitchClass = melodyPitchClass;
+              runtime.melodyCandidateFrames = 1;
+            }
+
+            const confirmationFrames = monophonicFrame ? 2 : runtime.melodyPitchClass === null ? 2 : 5;
+            if (runtime.melodyCandidateFrames >= confirmationFrames) {
+              runtime.melodyPitchClass = melodyPitchClass;
+              runtime.melodyLastSeenAt = now;
+              runtime.melodyCandidatePitchClass = null;
+              runtime.melodyCandidateFrames = 0;
+              setMicrophoneMelodyPitchClass(melodyPitchClass);
+            }
           }
-        } else if (now - runtime.lastPitchClassAt > 180 && runtime.lastPitchClassSignature !== "") {
-          runtime.lastPitchClassSignature = "";
-          setMicrophonePitchClasses([]);
+        } else if (now - runtime.melodyLastSeenAt > 360 && runtime.melodyPitchClass !== null) {
+          runtime.melodyPitchClass = null;
+          runtime.melodyCandidatePitchClass = null;
+          runtime.melodyCandidateFrames = 0;
+          setMicrophoneMelodyPitchClass(null);
         }
 
         if (!activeSignal) return;
@@ -1496,7 +1537,7 @@ export function AuraToy() {
       microphoneRef.current = null;
       microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
       setMicrophoneState("error");
-      setMicrophonePitchClasses([]);
+      setMicrophoneMelodyPitchClass(null);
       setMicrophoneReading("Microphone unavailable");
     }
   }, [spawnBlob, stopMicrophone]);
@@ -2140,7 +2181,7 @@ export function AuraToy() {
                   key={key.id}
                   type="button"
                   className={`piano-key white-key ${
-                    activeKeys.has(key.id) || microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-active" : ""
+                    activeKeys.has(key.id) || shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-active" : ""
                   }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
@@ -2160,7 +2201,7 @@ export function AuraToy() {
                 <button
                   type="button"
                   className={`piano-key upper-key ${
-                    activeKeys.has(key.id) || microphonePitchClasses.includes(shiftedNote(key).pc) ? "is-active" : ""
+                    activeKeys.has(key.id) || shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-active" : ""
                   }`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
