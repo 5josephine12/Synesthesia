@@ -464,8 +464,8 @@ button {
   pointer-events: auto;
 }
 
-.piano-key.is-active {
-  transform: translateY(2px);
+.piano-key.is-active,
+.piano-key.is-detected {
   background: radial-gradient(
     ellipse at 50% 44%,
     #fffde7 0 24%,
@@ -481,9 +481,18 @@ button {
   transition-duration: 120ms;
 }
 
-.piano-key.is-active::after {
+.piano-key.is-active {
+  transform: translateY(2px);
+}
+
+.piano-key.is-active::after,
+.piano-key.is-detected::after {
   opacity: 1;
   transition-duration: 120ms;
+}
+
+.piano-key.is-microphone-beat {
+  animation: microphoneKeyBeat 105ms cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
 
 .is-resetting .piano-key,
@@ -863,6 +872,19 @@ button {
 
   to {
     opacity: 1;
+  }
+}
+
+@keyframes microphoneKeyBeat {
+  0%,
+  100% {
+    filter: brightness(1);
+    transform: translateY(0);
+  }
+
+  48% {
+    filter: brightness(1.025);
+    transform: translateY(3px);
   }
 }
 

@@ -142,6 +142,7 @@ type MicrophoneRuntime = {
   melodyCandidatePitchClass: number | null;
   melodyCandidateFrames: number;
   melodyLastSeenAt: number;
+  melodyStableSince: number;
   visualCursor: number;
 };
 
@@ -1004,6 +1005,7 @@ export function AuraToy() {
   const visualGenerationRef = useRef(0);
   const microphoneGenerationRef = useRef(0);
   const microphoneRef = useRef<MicrophoneRuntime | null>(null);
+  const microphoneBeatTimerRef = useRef<number | null>(null);
   const resetFrameRef = useRef<number | null>(null);
   const previewFrameRef = useRef<number | null>(null);
   const dialWheelTimerRef = useRef<number | null>(null);
@@ -1033,6 +1035,7 @@ export function AuraToy() {
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
   const [microphoneMelodyPitchClass, setMicrophoneMelodyPitchClass] = useState<number | null>(null);
+  const [microphoneBeatPitchClass, setMicrophoneBeatPitchClass] = useState<number | null>(null);
   const [microphoneReading, setMicrophoneReading] = useState("Listening");
   const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
 
@@ -1085,6 +1088,7 @@ export function AuraToy() {
       if (dialWheelTimerRef.current !== null) window.clearTimeout(dialWheelTimerRef.current);
       releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       releaseTimersRef.current.clear();
+      if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
       microphoneGenerationRef.current += 1;
       disposeMicrophoneRuntime(microphoneRef.current);
       microphoneRef.current = null;
@@ -1275,9 +1279,14 @@ export function AuraToy() {
     disposeMicrophoneRuntime(microphoneRef.current);
     microphoneRef.current = null;
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
+    if (microphoneBeatTimerRef.current !== null) {
+      window.clearTimeout(microphoneBeatTimerRef.current);
+      microphoneBeatTimerRef.current = null;
+    }
     setMicrophonePromptOpen(false);
     setMicrophoneState("idle");
     setMicrophoneMelodyPitchClass(null);
+    setMicrophoneBeatPitchClass(null);
     setMicrophoneReading("Listening");
   }, []);
 
@@ -1353,6 +1362,7 @@ export function AuraToy() {
         melodyCandidatePitchClass: null,
         melodyCandidateFrames: 0,
         melodyLastSeenAt: -Infinity,
+        melodyStableSince: -Infinity,
         visualCursor: 0,
       };
       microphoneRef.current = runtime;
@@ -1391,8 +1401,8 @@ export function AuraToy() {
         runtime.smoothedFlux = lerp(previousFlux, spectralFlux, 0.085);
         const beatDetected =
           activeSignal &&
-          now - runtime.lastBeatAt > 110 &&
-          (energyRise > 1.16 || spectralFlux > Math.max(0.0007, previousFlux * 1.38));
+          now - runtime.lastBeatAt > 125 &&
+          (energyRise > 1.08 || spectralFlux > Math.max(0.00025, previousFlux * 1.18));
         if (beatDetected) runtime.lastBeatAt = now;
 
         const [frequency, clarity] = detector.findPitch(runtime.timeDomain, audioContext.sampleRate);
@@ -1471,16 +1481,41 @@ export function AuraToy() {
             if (runtime.melodyCandidateFrames >= confirmationFrames) {
               runtime.melodyPitchClass = melodyPitchClass;
               runtime.melodyLastSeenAt = now;
+              runtime.melodyStableSince = now;
               runtime.melodyCandidatePitchClass = null;
               runtime.melodyCandidateFrames = 0;
+              if (microphoneBeatTimerRef.current !== null) {
+                window.clearTimeout(microphoneBeatTimerRef.current);
+                microphoneBeatTimerRef.current = null;
+              }
+              setMicrophoneBeatPitchClass(null);
               setMicrophoneMelodyPitchClass(melodyPitchClass);
             }
           }
-        } else if (now - runtime.melodyLastSeenAt > 360 && runtime.melodyPitchClass !== null) {
+        } else if (now - runtime.melodyLastSeenAt > 700 && runtime.melodyPitchClass !== null) {
           runtime.melodyPitchClass = null;
           runtime.melodyCandidatePitchClass = null;
           runtime.melodyCandidateFrames = 0;
+          runtime.melodyStableSince = -Infinity;
+          if (microphoneBeatTimerRef.current !== null) {
+            window.clearTimeout(microphoneBeatTimerRef.current);
+            microphoneBeatTimerRef.current = null;
+          }
+          setMicrophoneBeatPitchClass(null);
           setMicrophoneMelodyPitchClass(null);
+        }
+
+        if (
+          beatDetected &&
+          runtime.melodyPitchClass !== null &&
+          now - runtime.melodyStableSince >= 450
+        ) {
+          if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
+          setMicrophoneBeatPitchClass(runtime.melodyPitchClass);
+          microphoneBeatTimerRef.current = window.setTimeout(() => {
+            microphoneBeatTimerRef.current = null;
+            setMicrophoneBeatPitchClass(null);
+          }, 105);
         }
 
         if (!activeSignal) return;
@@ -1538,6 +1573,7 @@ export function AuraToy() {
       microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
       setMicrophoneState("error");
       setMicrophoneMelodyPitchClass(null);
+      setMicrophoneBeatPitchClass(null);
       setMicrophoneReading("Microphone unavailable");
     }
   }, [spawnBlob, stopMicrophone]);
@@ -2180,9 +2216,9 @@ export function AuraToy() {
                 <button
                   key={key.id}
                   type="button"
-                  className={`piano-key white-key ${
-                    activeKeys.has(key.id) || shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-active" : ""
-                  }`}
+                  className={`piano-key white-key ${activeKeys.has(key.id) ? "is-active" : ""} ${
+                    shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-detected" : ""
+                  } ${shiftedNote(key).pc === microphoneBeatPitchClass ? "is-microphone-beat" : ""}`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
                   onPointerUp={(event) => handlePointerEnd(event, key)}
@@ -2200,9 +2236,9 @@ export function AuraToy() {
               >
                 <button
                   type="button"
-                  className={`piano-key upper-key ${
-                    activeKeys.has(key.id) || shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-active" : ""
-                  }`}
+                  className={`piano-key upper-key ${activeKeys.has(key.id) ? "is-active" : ""} ${
+                    shiftedNote(key).pc === microphoneMelodyPitchClass ? "is-detected" : ""
+                  } ${shiftedNote(key).pc === microphoneBeatPitchClass ? "is-microphone-beat" : ""}`}
                   aria-label={shiftedNote(key).name}
                   onPointerDown={(event) => handlePointerDown(event, key)}
                   onPointerUp={(event) => handlePointerEnd(event, key)}
