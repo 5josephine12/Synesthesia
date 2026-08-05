@@ -491,6 +491,10 @@ button {
   transition-duration: 120ms;
 }
 
+.piano-key.is-melody::after {
+  animation: microphoneMelodyBreath 820ms ease-in-out infinite alternate;
+}
+
 .piano-key.is-microphone-beat {
   animation: microphoneKeyBeat 105ms cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
@@ -885,6 +889,16 @@ button {
   48% {
     filter: brightness(1.025);
     transform: translateY(3px);
+  }
+}
+
+@keyframes microphoneMelodyBreath {
+  from {
+    opacity: 0.7;
+  }
+
+  to {
+    opacity: 1;
   }
 }
 
