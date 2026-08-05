@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
 
 type Color = {
   h: number;
@@ -18,25 +19,29 @@ type NoteChoice = {
 type Mapping = {
   word: string;
   seedHash: number;
-  seedId: string;
   letters: Color[];
   pitches: Color[];
   letterNotes: NoteChoice[];
 };
 
+type AuraShape = "bloom" | "ribbon" | "beam" | "arc" | "prism" | "veil";
+
 type BlobParticle = {
   id: number;
   color: Color;
+  accent: Color;
+  shape: AuraShape;
+  repeat: number;
   x: number;
   y: number;
-  restX: number;
-  restY: number;
   radius: number;
+  angle: number;
+  stretch: number;
+  thickness: number;
+  curvature: number;
   velocity: number;
   softness: number;
   createdAt: number;
-  life: number;
-  phase: number;
 };
 
 type KeySpec = NoteChoice & {
@@ -45,13 +50,164 @@ type KeySpec = NoteChoice & {
   left?: number;
 };
 
+type AuraSynth = {
+  triggerAttackRelease: (note: string, duration: string, time?: number, velocity?: number) => void;
+  triggerAttack: (note: string, time?: number, velocity?: number) => void;
+  triggerRelease: (note: string, time?: number) => void;
+  releaseAll: () => void;
+  dispose: () => void;
+};
+
+type AuraReverb = {
+  dispose: () => void;
+};
+
+type AuraFilter = {
+  dispose: () => void;
+};
+
+type SoundModeId = "piano" | "glass" | "pad" | "pluck" | "organ";
+
+type SoundMode = {
+  id: SoundModeId;
+  label: string;
+  oscillator: "triangle8" | "sine4" | "sine" | "triangle" | "square4";
+  envelope: {
+    attack: number;
+    decay: number;
+    sustain: number;
+    release: number;
+  };
+  volume: number;
+  filterFrequency: number;
+  filterQ: number;
+  reverb: {
+    roomSize: number;
+    dampening: number;
+    wet: number;
+  };
+};
+
+type VisualMode = {
+  shapes: readonly AuraShape[];
+  accentOffset: number;
+  angleBias: number;
+  softness: number;
+};
+
+type ExportState = "idle" | "video";
+
 const STORAGE_KEY = "aura.seed.v1";
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const MIN_MIDI = 48;
-const MAX_MIDI = 83;
-const SETTLE_DELAY = 800;
-const SETTLE_DURATION = 1500;
+const BASE_OCTAVE = 4;
+const MIN_OCTAVE = 1;
+const MAX_OCTAVE = 7;
+const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
+const MAX_MIDI = (MAX_OCTAVE + 2) * 12 - 1;
+const BLOB_ARRIVAL_DURATION = 550;
+const DEFAULT_SOUND_MODE: SoundModeId = "piano";
+const SPECTRAL_HUES = [330, 286, 250, 220, 188, 156, 112, 72, 48, 24, 4, 350] as const;
+const COMPOSITION_ANCHORS = [
+  [0.14, 0.3],
+  [0.82, 0.2],
+  [0.3, 0.7],
+  [0.7, 0.62],
+  [0.48, 0.17],
+  [0.9, 0.46],
+  [0.12, 0.68],
+  [0.76, 0.8],
+  [0.36, 0.42],
+  [0.6, 0.36],
+  [0.27, 0.15],
+  [0.5, 0.76],
+] as const;
+
+const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
+  piano: {
+    shapes: ["ribbon", "bloom", "arc"],
+    accentOffset: 18,
+    angleBias: -0.08,
+    softness: 0.62,
+  },
+  glass: {
+    shapes: ["prism", "beam", "arc"],
+    accentOffset: -20,
+    angleBias: -0.34,
+    softness: 0.38,
+  },
+  pad: {
+    shapes: ["veil", "bloom", "ribbon"],
+    accentOffset: 12,
+    angleBias: 0.14,
+    softness: 0.9,
+  },
+  pluck: {
+    shapes: ["beam", "prism", "arc"],
+    accentOffset: -14,
+    angleBias: 0.44,
+    softness: 0.32,
+  },
+  organ: {
+    shapes: ["arc", "ribbon", "veil"],
+    accentOffset: 22,
+    angleBias: 0,
+    softness: 0.7,
+  },
+};
+
+const SOUND_MODES: readonly SoundMode[] = [
+  {
+    id: "piano",
+    label: "Piano",
+    oscillator: "triangle8",
+    envelope: { attack: 0.006, decay: 1.15, sustain: 0.06, release: 1.1 },
+    volume: -8,
+    filterFrequency: 5200,
+    filterQ: 0.45,
+    reverb: { roomSize: 0.56, dampening: 4300, wet: 0.12 },
+  },
+  {
+    id: "glass",
+    label: "Glass",
+    oscillator: "sine4",
+    envelope: { attack: 0.012, decay: 1.8, sustain: 0.08, release: 2.4 },
+    volume: -10,
+    filterFrequency: 7600,
+    filterQ: 1.2,
+    reverb: { roomSize: 0.82, dampening: 5200, wet: 0.34 },
+  },
+  {
+    id: "pad",
+    label: "Warm Pad",
+    oscillator: "sine",
+    envelope: { attack: 0.42, decay: 0.8, sustain: 0.72, release: 2.8 },
+    volume: -8,
+    filterFrequency: 2200,
+    filterQ: 0.7,
+    reverb: { roomSize: 0.86, dampening: 2500, wet: 0.3 },
+  },
+  {
+    id: "pluck",
+    label: "Pluck",
+    oscillator: "triangle",
+    envelope: { attack: 0.002, decay: 0.24, sustain: 0.01, release: 0.42 },
+    volume: -7,
+    filterFrequency: 4100,
+    filterQ: 1.7,
+    reverb: { roomSize: 0.42, dampening: 3600, wet: 0.08 },
+  },
+  {
+    id: "organ",
+    label: "Organ",
+    oscillator: "square4",
+    envelope: { attack: 0.025, decay: 0.08, sustain: 0.86, release: 0.55 },
+    volume: -13,
+    filterFrequency: 3300,
+    filterQ: 0.35,
+    reverb: { roomSize: 0.66, dampening: 3000, wet: 0.16 },
+  },
+];
 
 const PENTATONIC_SCALE: NoteChoice[] = [
   midiToNote(60),
@@ -111,30 +267,29 @@ function buildKeys(): KeySpec[] {
     { pc: 10, afterWhite: 5 },
   ];
 
-  for (let octave = 4; octave <= 5; octave += 1) {
-    whitePitchClasses.forEach((pc) => {
-      const note = `${NOTE_NAMES[pc]}${octave}`;
-      keys.push({
-        id: note,
-        kind: "white",
-        name: note,
-        midi: (octave + 1) * 12 + pc,
-        pc,
-      });
+  const octave = 4;
+  whitePitchClasses.forEach((pc) => {
+    const note = `${NOTE_NAMES[pc]}${octave}`;
+    keys.push({
+      id: note,
+      kind: "white",
+      name: note,
+      midi: (octave + 1) * 12 + pc,
+      pc,
     });
+  });
 
-    upperSlots.forEach(({ pc, afterWhite }) => {
-      const note = `${NOTE_NAMES[pc]}${octave}`;
-      keys.push({
-        id: note,
-        kind: "upper",
-        name: note,
-        midi: (octave + 1) * 12 + pc,
-        pc,
-        left: ((octave - 4) * 7 + afterWhite + 1) / 14,
-      });
+  upperSlots.forEach(({ pc, afterWhite }) => {
+    const note = `${NOTE_NAMES[pc]}${octave}`;
+    keys.push({
+      id: note,
+      kind: "upper",
+      name: note,
+      midi: (octave + 1) * 12 + pc,
+      pc,
+      left: (afterWhite + 1) / 7,
     });
-  }
+  });
 
   return keys;
 }
@@ -179,70 +334,30 @@ function mulberry32(seed: number) {
   };
 }
 
-function circularDistance(a: number, b: number) {
-  const distance = Math.abs(a - b) % 360;
-  return Math.min(distance, 360 - distance);
-}
-
-function shortestHueDelta(from: number, to: number) {
-  return ((((to - from) % 360) + 540) % 360) - 180;
-}
-
-function enforceNeighborSeparation(hue: number, previous: number | null, minDistance: number, rng: () => number) {
-  if (previous === null || circularDistance(hue, previous) >= minDistance) {
-    return hue;
-  }
-
-  const direction = rng() > 0.5 ? 1 : -1;
-  const needed = minDistance - circularDistance(hue, previous);
-  return modulo(hue + direction * (needed + 8 + rng() * 18), 360);
-}
-
-function biasedHue(index: number, randomHue: number, rng: () => number) {
-  const bias: Record<number, { hue: number; weight: number }> = {
-    0: { hue: 4, weight: 0.5 },
-    8: { hue: 54, weight: 0.42 },
-    14: { hue: 214, weight: 0.28 },
-    24: { hue: 52, weight: 0.5 },
+function spectralColor(index: number, rng: () => number, pale = false): Color {
+  const hue = modulo(SPECTRAL_HUES[modulo(index, SPECTRAL_HUES.length)] + (rng() - 0.5) * 16, 360);
+  return {
+    h: hue,
+    s: pale ? 68 + rng() * 14 : 80 + rng() * 16,
+    l: pale ? 62 + rng() * 8 : 50 + rng() * 14,
   };
-  const target = bias[index];
-  if (!target) return randomHue;
-
-  const weight = target.weight + rng() * 0.14;
-  return modulo(randomHue + shortestHueDelta(randomHue, target.hue) * weight, 360);
 }
 
 function createMapping(rawWord: string): Mapping {
   const word = normalizeWord(rawWord) || "AURA";
   const seedHash = fnv1a(word);
   const rng = mulberry32(seedHash);
-  const seedId = seedHash.toString(36).toUpperCase().padStart(6, "0").slice(-6);
   const letters: Color[] = [];
   const pitches: Color[] = [];
-  let previousHue: number | null = null;
+  const paletteOffset = seedHash % SPECTRAL_HUES.length;
 
   for (let index = 0; index < 26; index += 1) {
-    const randomHue = rng() * 360;
-    const hue = enforceNeighborSeparation(biasedHue(index, randomHue, rng), previousHue, 18, rng);
     const paleVowel = index === 8 || index === 14;
-    const color = {
-      h: hue,
-      s: paleVowel ? 34 + rng() * 12 : 45 + rng() * 27,
-      l: paleVowel ? 70 + rng() * 6 : 54 + rng() * 16,
-    };
-    letters.push(color);
-    previousHue = hue;
+    letters.push(spectralColor(paletteOffset + index * 5 + Math.floor(rng() * 2), rng, paleVowel));
   }
 
-  previousHue = null;
   for (let index = 0; index < 12; index += 1) {
-    const hue = enforceNeighborSeparation(rng() * 360, previousHue, 24, rng);
-    pitches.push({
-      h: hue,
-      s: 48 + rng() * 22,
-      l: 56 + rng() * 12,
-    });
-    previousHue = hue;
+    pitches.push(spectralColor(paletteOffset + index * 5, rng));
   }
 
   const offset = seedHash % PENTATONIC_SCALE.length;
@@ -254,12 +369,13 @@ function createMapping(rawWord: string): Mapping {
   return {
     word,
     seedHash,
-    seedId,
     letters,
     pitches,
     letterNotes,
   };
 }
+
+const PREVIEW_MAPPING = createMapping("AURA");
 
 function colorToHslar(color: Color, alpha: number) {
   return `hsla(${Math.round(color.h)}, ${Math.round(color.s)}%, ${Math.round(color.l)}%, ${alpha})`;
@@ -277,24 +393,20 @@ function easeOutCubic(value: number) {
   return 1 - Math.pow(1 - clamp(value, 0, 1), 3);
 }
 
-function easeInOut(value: number) {
-  const x = clamp(value, 0, 1);
-  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
-}
-
-function makeNoiseTile(size: number, alpha = 18) {
+function makeNoiseTile(size: number, alpha = 18, seed = 0x4a3035) {
   const tile = document.createElement("canvas");
   tile.width = size;
   tile.height = size;
   const tileContext = tile.getContext("2d");
   if (!tileContext) return tile;
+  const rng = mulberry32(seed);
   const image = tileContext.createImageData(size, size);
   for (let index = 0; index < image.data.length; index += 4) {
-    const value = Math.random() * 255;
+    const value = rng() * 255;
     image.data[index] = value;
     image.data[index + 1] = value;
     image.data[index + 2] = value;
-    image.data[index + 3] = Math.random() * alpha;
+    image.data[index + 3] = rng() * alpha;
   }
   tileContext.putImageData(image, 0, 0);
   return tile;
@@ -312,62 +424,277 @@ function drawGrain(context: CanvasRenderingContext2D, width: number, height: num
   context.restore();
 }
 
-function drawTrackedText(
+function makeLinearAuraGradient(
   context: CanvasRenderingContext2D,
-  text: string,
-  centerX: number,
-  y: number,
-  tracking: number,
+  blob: BlobParticle,
+  length: number,
+  alpha: number,
+  reverse = false,
 ) {
-  const characters = text.split("");
-  const width =
-    characters.reduce((total, character) => total + context.measureText(character).width, 0) +
-    tracking * Math.max(0, characters.length - 1);
-  let x = centerX - width / 2;
+  const primary = reverse ? blob.accent : blob.color;
+  const accent = reverse ? blob.color : blob.accent;
+  const gradient = context.createLinearGradient(-length / 2, 0, length / 2, 0);
+  gradient.addColorStop(0, colorToHslar(primary, 0));
+  gradient.addColorStop(0.18, colorToHslar(primary, alpha * 0.46));
+  gradient.addColorStop(0.52, colorToHslar(accent, alpha));
+  gradient.addColorStop(0.78, colorToHslar(primary, alpha * 0.58));
+  gradient.addColorStop(1, colorToHslar(accent, 0));
+  return gradient;
+}
 
-  characters.forEach((character) => {
-    context.fillText(character, x, y);
-    x += context.measureText(character).width + tracking;
+function drawAuraParticle(
+  context: CanvasRenderingContext2D,
+  blob: BlobParticle,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  alpha: number,
+) {
+  context.save();
+  context.translate(centerX, centerY);
+  context.rotate(blob.angle);
+  context.shadowColor = colorToHslar(blob.color, alpha * 0.42);
+  context.shadowBlur = radius * (0.16 + blob.softness * 0.34);
+
+  if (blob.shape === "bloom") {
+    context.save();
+    context.scale(blob.stretch, 1);
+    const gradient = context.createRadialGradient(-radius * 0.18, -radius * 0.12, 0, 0, 0, radius);
+    gradient.addColorStop(0, colorToHslar(blob.accent, alpha));
+    gradient.addColorStop(0.16, colorToHslar(blob.color, alpha * 0.72));
+    gradient.addColorStop(0.52 + blob.softness * 0.16, colorToHslar(blob.color, alpha * 0.2));
+    gradient.addColorStop(1, colorToHslar(blob.accent, 0));
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.arc(0, 0, radius, 0, Math.PI * 2);
+    context.fill();
+
+    const nucleus = context.createRadialGradient(radius * 0.12, -radius * 0.08, 0, radius * 0.12, -radius * 0.08, radius * 0.34);
+    nucleus.addColorStop(0, colorToHslar(blob.accent, alpha * 0.9));
+    nucleus.addColorStop(1, colorToHslar(blob.accent, 0));
+    context.fillStyle = nucleus;
+    context.beginPath();
+    context.arc(radius * 0.12, -radius * 0.08, radius * 0.34, 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+  }
+
+  if (blob.shape === "ribbon") {
+    const length = radius * blob.stretch;
+    const bend = radius * blob.curvature;
+    const traceRibbon = () => {
+      context.beginPath();
+      context.moveTo(-length / 2, 0);
+      context.bezierCurveTo(-length * 0.25, bend, length * 0.14, -bend * 0.8, length / 2, 0);
+    };
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.strokeStyle = makeLinearAuraGradient(context, blob, length, alpha);
+    context.lineWidth = radius * (0.22 + blob.thickness * 0.52);
+    traceRibbon();
+    context.stroke();
+
+    context.shadowBlur = 0;
+    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.72);
+    context.lineWidth *= 0.16;
+    traceRibbon();
+    context.stroke();
+  }
+
+  if (blob.shape === "beam") {
+    const length = radius * blob.stretch;
+    const height = radius * (0.24 + blob.thickness * 0.5);
+    context.fillStyle = makeLinearAuraGradient(context, blob, length, alpha * 0.9);
+    context.beginPath();
+    context.roundRect(-length / 2, -height / 2, length, height, height / 2);
+    context.fill();
+
+    context.shadowBlur = 0;
+    const core = makeLinearAuraGradient(context, blob, length * 0.72, alpha, true);
+    context.fillStyle = core;
+    context.beginPath();
+    context.roundRect(-length * 0.36, -height * 0.1, length * 0.72, height * 0.2, height * 0.1);
+    context.fill();
+  }
+
+  if (blob.shape === "arc") {
+    const startAngle = -Math.PI * (0.92 + Math.abs(blob.curvature) * 0.12);
+    const endAngle = Math.PI * (0.1 + Math.abs(blob.curvature) * 0.42);
+    context.save();
+    context.scale(blob.stretch, 1);
+    context.lineCap = "round";
+    context.strokeStyle = makeLinearAuraGradient(context, blob, radius * 2, alpha);
+    context.lineWidth = radius * (0.16 + blob.thickness * 0.34);
+    context.beginPath();
+    context.arc(0, 0, radius, startAngle, endAngle);
+    context.stroke();
+
+    context.shadowBlur = 0;
+    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.7);
+    context.lineWidth *= 0.14;
+    context.beginPath();
+    context.arc(0, 0, radius, startAngle + 0.08, endAngle - 0.08);
+    context.stroke();
+    context.restore();
+  }
+
+  if (blob.shape === "prism") {
+    const length = radius * blob.stretch;
+    const height = radius * (0.7 + blob.thickness * 0.9);
+    context.fillStyle = makeLinearAuraGradient(context, blob, length, alpha * 0.86);
+    context.beginPath();
+    context.moveTo(-length / 2, -height * 0.18);
+    context.lineTo(-length * 0.12, -height / 2);
+    context.lineTo(length / 2, -height * 0.12);
+    context.lineTo(length * 0.3, height / 2);
+    context.lineTo(-length * 0.42, height * 0.3);
+    context.closePath();
+    context.fill();
+
+    context.shadowBlur = 0;
+    context.strokeStyle = colorToHslar(blob.accent, alpha * 0.42);
+    context.lineWidth = Math.max(0.5, radius * 0.025);
+    context.stroke();
+  }
+
+  if (blob.shape === "veil") {
+    const length = radius * blob.stretch * 1.45;
+    const height = radius * (1.1 + blob.thickness * 1.5);
+    const gradient = context.createLinearGradient(0, -height / 2, 0, height / 2);
+    gradient.addColorStop(0, colorToHslar(blob.accent, 0));
+    gradient.addColorStop(0.34, colorToHslar(blob.color, alpha * 0.28));
+    gradient.addColorStop(0.72, colorToHslar(blob.accent, alpha * 0.55));
+    gradient.addColorStop(1, colorToHslar(blob.color, 0));
+    context.fillStyle = gradient;
+    context.beginPath();
+    context.roundRect(-length / 2, -height / 2, length, height, Math.min(radius * 0.36, height / 2));
+    context.fill();
+
+    context.shadowBlur = 0;
+    context.fillStyle = makeLinearAuraGradient(context, blob, length * 0.84, alpha * 0.46);
+    context.beginPath();
+    context.roundRect(-length * 0.42, -height * 0.06, length * 0.84, height * 0.12, height * 0.06);
+    context.fill();
+  }
+
+  context.restore();
+}
+
+function paintArtworkBackground(context: CanvasRenderingContext2D, width: number, height: number) {
+  context.fillStyle = "#f5f5f7";
+  context.fillRect(0, 0, width, height);
+
+  const wash = context.createRadialGradient(
+    width * 0.5,
+    height * 0.3,
+    0,
+    width * 0.5,
+    height * 0.3,
+    Math.max(width, height) * 0.62,
+  );
+  wash.addColorStop(0, "rgba(255, 250, 238, 0.22)");
+  wash.addColorStop(0.58, "rgba(246, 244, 248, 0.1)");
+  wash.addColorStop(1, "rgba(245, 245, 247, 0)");
+  context.fillStyle = wash;
+  context.fillRect(0, 0, width, height);
+}
+
+function drawAuraComposition(
+  context: CanvasRenderingContext2D,
+  blobs: readonly BlobParticle[],
+  width: number,
+  height: number,
+  now: number,
+  replayProgress?: number,
+) {
+  const shortSide = Math.min(width, height);
+  const replayPosition = replayProgress === undefined ? Number.POSITIVE_INFINITY : replayProgress * (blobs.length + 0.9);
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  blobs.forEach((blob, index) => {
+    const replayAge = replayPosition - index;
+    if (replayAge <= 0) return;
+
+    const age = replayProgress === undefined ? Math.max(0, now - blob.createdAt) : replayAge * BLOB_ARRIVAL_DURATION;
+    const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
+    const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
+    const alpha = clamp((0.24 + blob.velocity * 0.31) * Math.min(1, replayAge), 0, 0.56);
+
+    drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha);
   });
+  context.restore();
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportFileStem(word: string) {
+  const normalized = normalizeWord(word).toLowerCase();
+  return `aura-${normalized || "composition"}`;
+}
+
+function supportedVideoType() {
+  const candidates = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
 }
 
 export function AuraToy() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const soundPickerRef = useRef<HTMLDivElement | null>(null);
+  const soundTriggerRef = useRef<HTMLButtonElement | null>(null);
   const blobsRef = useRef<BlobParticle[]>([]);
   const mappingRef = useRef<Mapping | null>(null);
   const seedWordRef = useRef("");
-  const lastNoteAtRef = useRef(0);
-  const settleStartRef = useRef<number | null>(null);
-  const frozenAtRef = useRef<number | null>(null);
   const blobIdRef = useRef(1);
-  const noteOrderRef = useRef(0);
+  const noteRepeatRef = useRef<Map<string, number>>(new Map());
   const grainRef = useRef<HTMLCanvasElement | null>(null);
   const reducedMotionRef = useRef(false);
+  const audioGenerationRef = useRef(0);
+  const visualGenerationRef = useRef(0);
+  const resetFrameRef = useRef<number | null>(null);
+  const wakeRendererRef = useRef<(() => void) | null>(null);
+  const releaseTimersRef = useRef<Map<string, number>>(new Map());
+  const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
   const toneRef = useRef<{
-    module: any;
-    synth: any;
-    reverb: any;
+    synth: AuraSynth | null;
+    filter: AuraFilter | null;
+    reverb: AuraReverb | null;
     ready: Promise<void> | null;
   }>({
-    module: null,
     synth: null,
+    filter: null,
     reverb: null,
     ready: null,
   });
   const activeToneNotesRef = useRef<Map<string, string>>(new Map());
-  const keyHistoryRef = useRef<string[]>([]);
 
   const [entryValue, setEntryValue] = useState("");
   const [committed, setCommitted] = useState(false);
   const [mapping, setMapping] = useState<Mapping | null>(null);
-  const [canSave, setCanSave] = useState(false);
   const [activeKeys, setActiveKeys] = useState<Set<string>>(() => new Set());
-  const [transpose, setTranspose] = useState(0);
+  const [octave, setOctave] = useState(BASE_OCTAVE);
+  const [resetting, setResetting] = useState(false);
+  const [soundMode, setSoundMode] = useState<SoundModeId>(DEFAULT_SOUND_MODE);
+  const [soundMenuOpen, setSoundMenuOpen] = useState(false);
+  const [layerCount, setLayerCount] = useState(0);
+  const [exportState, setExportState] = useState<ExportState>("idle");
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
-    return new Map(KEYBOARD_ORDER.map((key, index) => [key, allKeys[index]]).filter(([, key]) => Boolean(key)));
+    return new Map<string, KeySpec>(
+      KEYBOARD_ORDER.flatMap((keyboardKey, index) => {
+        const pianoKey = allKeys[index];
+        return pianoKey ? [[keyboardKey, pianoKey] as const] : [];
+      }),
+    );
   }, []);
 
   useEffect(() => {
@@ -376,15 +703,59 @@ export function AuraToy() {
   }, [mapping]);
 
   useEffect(() => {
+    soundModeRef.current = soundMode;
+  }, [soundMode]);
+
+  useEffect(() => {
+    if (!soundMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!soundPickerRef.current?.contains(event.target as Node)) {
+        setSoundMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setSoundMenuOpen(false);
+      soundTriggerRef.current?.focus();
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [soundMenuOpen]);
+
+  const disposeToneEngine = useCallback(() => {
+    audioGenerationRef.current += 1;
+    const { synth, filter, reverb } = toneRef.current;
+    toneRef.current = {
+      synth: null,
+      filter: null,
+      reverb: null,
+      ready: null,
+    };
+    synth?.releaseAll();
+    synth?.dispose();
+    filter?.dispose();
+    reverb?.dispose();
+    activeToneNotesRef.current.clear();
+  }, []);
+
+  useEffect(() => {
     const storedSeed = window.localStorage.getItem(STORAGE_KEY);
     const normalized = storedSeed ? normalizeWord(storedSeed) : "";
 
     if (normalized) {
       const storedMapping = createMapping(normalized);
-      setMapping(storedMapping);
-      setCommitted(true);
-      seedWordRef.current = normalized;
-      mappingRef.current = storedMapping;
+      window.requestAnimationFrame(() => {
+        setMapping(storedMapping);
+        setCommitted(true);
+        seedWordRef.current = normalized;
+        mappingRef.current = storedMapping;
+      });
     } else {
       inputRef.current?.focus({ preventScroll: true });
     }
@@ -395,44 +766,72 @@ export function AuraToy() {
       reducedMotionRef.current = media.matches;
     };
     media.addEventListener("change", updateMotion);
-    return () => media.removeEventListener("change", updateMotion);
+    return () => {
+      media.removeEventListener("change", updateMotion);
+    };
   }, []);
+
+  useEffect(
+    () => () => {
+      if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
+      releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      releaseTimersRef.current.clear();
+      disposeToneEngine();
+    },
+    [disposeToneEngine],
+  );
 
   const ensureTone = useCallback(async () => {
     if (!toneRef.current.ready) {
-      toneRef.current.ready = (async () => {
-        const Tone = await import("tone");
-        await Tone.start();
-        const reverb = new Tone.Reverb({
-          decay: 4.8,
-          preDelay: 0.02,
-          wet: 0.24,
+      const generation = audioGenerationRef.current;
+      const mode = SOUND_MODES.find(({ id }) => id === soundModeRef.current) ?? SOUND_MODES[0];
+      const ready = (async () => {
+        await startTone();
+        const filter = new Filter({
+          type: "lowpass",
+          frequency: mode.filterFrequency,
+          Q: mode.filterQ,
+          rolloff: -12,
         });
-        await reverb.generate();
-        const synth = new Tone.PolySynth(Tone.Synth, {
-          oscillator: { type: "sine" },
-          envelope: {
-            attack: 0.04,
-            decay: 0.22,
-            sustain: 0.42,
-            release: 1.2,
-          },
-          volume: -9,
-        }).connect(reverb);
+        const reverb = new Freeverb(mode.reverb);
+        const synth = new PolySynth(Synth, {
+          oscillator: { type: mode.oscillator },
+          envelope: mode.envelope,
+          volume: mode.volume,
+        }).connect(filter);
+        synth.maxPolyphony = 16;
+        filter.connect(reverb);
         reverb.toDestination();
-        toneRef.current.module = Tone;
+
+        if (generation !== audioGenerationRef.current) {
+          synth.dispose();
+          filter.dispose();
+          reverb.dispose();
+          return;
+        }
+
         toneRef.current.synth = synth;
+        toneRef.current.filter = filter;
         toneRef.current.reverb = reverb;
       })();
+      toneRef.current.ready = ready;
     }
 
-    await toneRef.current.ready;
+    const ready = toneRef.current.ready;
+    try {
+      await ready;
+    } catch (error) {
+      if (toneRef.current.ready === ready) toneRef.current.ready = null;
+      throw error;
+    }
   }, []);
 
   const triggerAttackRelease = useCallback(
     (noteName: string, velocity: number, duration = "8n") => {
+      const generation = visualGenerationRef.current;
       void ensureTone()
         .then(() => {
+          if (generation !== visualGenerationRef.current) return;
           toneRef.current.synth?.triggerAttackRelease(noteName, duration, undefined, velocity);
         })
         .catch(() => undefined);
@@ -442,8 +841,10 @@ export function AuraToy() {
 
   const triggerAttack = useCallback(
     (keyId: string, noteName: string, velocity: number) => {
+      const generation = visualGenerationRef.current;
       void ensureTone()
         .then(() => {
+          if (generation !== visualGenerationRef.current) return;
           activeToneNotesRef.current.set(keyId, noteName);
           toneRef.current.synth?.triggerAttack(noteName, undefined, velocity);
         })
@@ -463,36 +864,80 @@ export function AuraToy() {
     const now = performance.now();
     const id = blobIdRef.current;
     blobIdRef.current += 1;
+    const mode = soundModeRef.current;
+    const profile = VISUAL_MODES[mode];
+    const modeIndex = SOUND_MODES.findIndex(({ id: soundModeId }) => soundModeId === mode);
+    const identity = `${seedWordRef.current || "AURA"}|${mode}|${note.name}`;
+    const repeat = noteRepeatRef.current.get(identity) ?? 0;
+    noteRepeatRef.current.set(identity, repeat + 1);
 
-    const seed = fnv1a(`${seedWordRef.current || "AURA"}-${note.name}-${id}`);
-    const rng = mulberry32(seed);
-    const order = noteOrderRef.current;
-    noteOrderRef.current += 1;
+    const identitySeed = fnv1a(identity);
+    const identityRng = mulberry32(identitySeed);
+    const repeatRng = mulberry32(identitySeed ^ Math.imul(repeat + 1, 0x9e3779b1));
     const pitchNorm = clamp((note.midi - MIN_MIDI) / (MAX_MIDI - MIN_MIDI), 0, 1);
-    const orderPosition = (order % 17) / 16;
-    const x = clamp(0.17 + orderPosition * 0.66 + (rng() - 0.5) * 0.1, 0.08, 0.92);
-    const y = clamp(0.14 + (1 - pitchNorm) * 0.46 + (rng() - 0.5) * 0.045, 0.08, 0.66);
-    const radius = lerp(0.17, 0.065, pitchNorm) * (0.94 + velocity * 0.12);
+    const anchor = COMPOSITION_ANCHORS[
+      modulo(note.pc * 7 + Math.floor(note.midi / 12) * 3 + modeIndex * 5 + identitySeed, COMPOSITION_ANCHORS.length)
+    ];
+    const pitchX = 0.1 + (note.pc / 11) * 0.8;
+    const pitchY = 0.1 + (1 - pitchNorm) * 0.76;
+    const baseX = clamp(lerp(pitchX, anchor[0], 0.38) + (identityRng() - 0.5) * 0.04, 0.05, 0.95);
+    const baseY = clamp(lerp(pitchY, anchor[1], 0.24) + (identityRng() - 0.5) * 0.035, 0.05, 0.88);
+    const orbit = repeat === 0 ? 0 : Math.min(0.024 + repeat * 0.008, 0.105);
+    const orbitAngle = repeat * 2.399963 + identityRng() * Math.PI * 2;
+    const x = clamp(baseX + Math.cos(orbitAngle) * orbit * (0.72 + repeatRng() * 0.5), 0.035, 0.965);
+    const y = clamp(baseY + Math.sin(orbitAngle) * orbit * (0.58 + repeatRng() * 0.45), 0.04, 0.9);
+    const primaryShapeIndex = Math.floor(identityRng() * profile.shapes.length);
+    const shape = profile.shapes[modulo(primaryShapeIndex + Math.floor(repeat / 3), profile.shapes.length)];
+    const baseRadius: Record<AuraShape, number> = {
+      bloom: 0.13,
+      ribbon: 0.1,
+      beam: 0.09,
+      arc: 0.14,
+      prism: 0.11,
+      veil: 0.17,
+    };
+    const repeatScale = 0.92 + repeatRng() * 0.2 + Math.min(repeat, 7) * 0.025;
+    const radius = baseRadius[shape] * (0.84 + identityRng() * 0.56) * (0.82 + velocity * 0.38) * repeatScale;
+    const stretchByShape: Record<AuraShape, [number, number]> = {
+      bloom: [0.7, 2.2],
+      ribbon: [2.4, 5.4],
+      beam: [2.8, 6.2],
+      arc: [1.1, 2.2],
+      prism: [1.3, 3.2],
+      veil: [1.8, 4.2],
+    };
+    const [minimumStretch, maximumStretch] = stretchByShape[shape];
+    const stretch = lerp(minimumStretch, maximumStretch, identityRng()) * (0.9 + repeatRng() * 0.22);
+    const accent = {
+      h: modulo(color.h + profile.accentOffset + (identityRng() - 0.5) * 8, 360),
+      s: clamp(color.s + 4 + identityRng() * 6, 0, 100),
+      l: clamp(color.l + 3 + identityRng() * 6, 0, 69),
+    };
 
     blobsRef.current.push({
       id,
       color,
+      accent,
+      shape,
+      repeat,
       x,
       y,
-      restX: lerp(x, 0.5, 0.42) + (rng() - 0.5) * 0.035,
-      restY: y + (rng() - 0.5) * 0.03,
       radius,
+      angle:
+        profile.angleBias +
+        (identityRng() - 0.5) * Math.PI * 1.15 +
+        (note.pc - 5.5) * 0.045 +
+        (repeatRng() - 0.5) * 0.22,
+      stretch,
+      thickness: 0.2 + identityRng() * 0.42 + velocity * 0.12 + repeatRng() * 0.08,
+      curvature: (identityRng() - 0.5) * 1.65 + (repeatRng() - 0.5) * 0.28,
       velocity,
-      softness: 0.72 + rng() * 0.24,
+      softness: clamp(profile.softness + (identityRng() - 0.5) * 0.18, 0.24, 0.98),
       createdAt: now,
-      life: 6.2 + rng() * 1.8,
-      phase: rng() * Math.PI * 2,
     });
 
-    lastNoteAtRef.current = now;
-    settleStartRef.current = null;
-    frozenAtRef.current = null;
-    setCanSave(false);
+    setLayerCount(blobsRef.current.length);
+    wakeRendererRef.current?.();
   }, []);
 
   const playLetter = useCallback(
@@ -502,8 +947,10 @@ export function AuraToy() {
       const note = liveMapping.letterNotes[letterIndex];
       const color = liveMapping.letters[letterIndex];
       const velocity = 0.54 + ((liveMapping.seedHash + index * 37) % 34) / 100;
+      const generation = visualGenerationRef.current;
 
       window.setTimeout(() => {
+        if (generation !== visualGenerationRef.current) return;
         spawnBlob(note, color, velocity);
         triggerAttackRelease(note.name, velocity, "8n");
       }, index * 92);
@@ -555,20 +1002,24 @@ export function AuraToy() {
 
   const shiftedNote = useCallback(
     (key: KeySpec): NoteChoice => {
-      const shifted = midiToNote(key.midi + transpose);
+      const shifted = midiToNote(key.midi + (octave - BASE_OCTAVE) * 12);
       return shifted;
     },
-    [transpose],
+    [octave],
   );
 
   const startKey = useCallback(
     (key: KeySpec, velocity = 0.76) => {
-      const liveMapping = mappingRef.current;
-      if (!liveMapping) return;
+      const pendingRelease = releaseTimersRef.current.get(key.id);
+      if (pendingRelease) {
+        window.clearTimeout(pendingRelease);
+        releaseTimersRef.current.delete(key.id);
+      }
+
+      const liveMapping = mappingRef.current ?? PREVIEW_MAPPING;
       const note = shiftedNote(key);
       const color = liveMapping.pitches[note.pc];
       spawnBlob(note, color, velocity);
-      keyHistoryRef.current = [...keyHistoryRef.current, note.name].slice(-20);
       setActiveKeys((current) => {
         const next = new Set(current);
         next.add(key.id);
@@ -581,12 +1032,20 @@ export function AuraToy() {
 
   const endKey = useCallback(
     (key: KeySpec) => {
-      setActiveKeys((current) => {
-        const next = new Set(current);
-        next.delete(key.id);
-        return next;
-      });
       triggerRelease(key.id);
+
+      const pendingRelease = releaseTimersRef.current.get(key.id);
+      if (pendingRelease) window.clearTimeout(pendingRelease);
+
+      const releaseTimer = window.setTimeout(() => {
+        releaseTimersRef.current.delete(key.id);
+        setActiveKeys((current) => {
+          const next = new Set(current);
+          next.delete(key.id);
+          return next;
+        });
+      }, 520);
+      releaseTimersRef.current.set(key.id, releaseTimer);
     },
     [triggerRelease],
   );
@@ -595,7 +1054,11 @@ export function AuraToy() {
     (event: ReactPointerEvent<HTMLButtonElement>, key: KeySpec) => {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
-      startKey(key, event.pointerType === "mouse" ? 0.72 : 0.82);
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const strikePosition = clamp((event.clientY - bounds.top) / Math.max(1, bounds.height), 0, 1);
+      const pressure = event.pressure > 0 ? event.pressure : 0.5;
+      const velocity = clamp(0.46 + strikePosition * 0.38 + pressure * 0.12, 0.46, 0.98);
+      startKey(key, velocity);
     },
     [startKey],
   );
@@ -638,51 +1101,6 @@ export function AuraToy() {
     };
   }, [committed, endKey, keyboardMap, startKey]);
 
-  const drawBlobLayer = useCallback((context: CanvasRenderingContext2D, width: number, height: number, now: number) => {
-    const frozenAt = frozenAtRef.current;
-    const settleStart = settleStartRef.current;
-    const effectiveNow = frozenAt ?? now;
-    const settleProgress = frozenAt
-      ? 1
-      : settleStart
-        ? easeInOut((now - settleStart) / SETTLE_DURATION)
-        : 0;
-    const reducedMotion = reducedMotionRef.current;
-    const shortSide = Math.min(width, height);
-
-    context.save();
-    context.globalCompositeOperation = "lighter";
-    blobsRef.current.forEach((blob) => {
-      const age = Math.max(0, (effectiveNow - blob.createdAt) / 1000);
-      const alive = clamp(1 - age / blob.life, 0, 1);
-      if (!frozenAt && alive <= 0.002) return;
-
-      const arrival = easeOutCubic(age / 0.55);
-      const drift = reducedMotion ? 0 : Math.min(0.2, age * 0.03) * (1 - settleProgress);
-      const wobble = reducedMotion ? 0 : Math.sin(age * 0.55 + blob.phase) * 0.012 * (1 - settleProgress);
-      const breathing = reducedMotion ? 0 : Math.cos(age * 0.38 + blob.phase) * 0.009 * (1 - settleProgress);
-      const movingX = lerp(blob.x + wobble, 0.5, drift);
-      const movingY = blob.y + breathing;
-      const x = lerp(movingX, blob.restX, settleProgress);
-      const y = lerp(movingY, blob.restY, settleProgress);
-      const radius = blob.radius * shortSide * (0.42 + arrival * 0.58) * (1 + settleProgress * 0.08);
-      const alpha = Math.pow(alive, 0.68) * (0.32 + blob.velocity * 0.58);
-      const centerX = x * width;
-      const centerY = y * height;
-      const gradient = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
-      const softMid = 0.42 + blob.softness * 0.18;
-
-      gradient.addColorStop(0, colorToHslar(blob.color, alpha * 0.7));
-      gradient.addColorStop(0.18, colorToHslar(blob.color, alpha * 0.42));
-      gradient.addColorStop(softMid, colorToHslar(blob.color, alpha * 0.16));
-      gradient.addColorStop(1, colorToHslar(blob.color, 0));
-
-      context.fillStyle = gradient;
-      context.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
-    });
-    context.restore();
-  }, []);
-
   useEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d", { alpha: true });
@@ -690,63 +1108,112 @@ export function AuraToy() {
 
     const offscreen = document.createElement("canvas");
     const offscreenContext = offscreen.getContext("2d", { alpha: true });
-    if (!offscreenContext) return;
+    const settled = document.createElement("canvas");
+    const settledContext = settled.getContext("2d", { alpha: true });
+    if (!offscreenContext || !settledContext) return;
 
     grainRef.current = makeNoiseTile(160, 20);
     let width = 1;
     let height = 1;
     let dpr = 1;
     let frame = 0;
+    let running = false;
+    let lastDrawAt = -Infinity;
+    let settledCount = 0;
+
+    const syncOffscreenSize = () => {
+      const layerTotal = blobsRef.current.length;
+      const renderScale = layerTotal > 320 ? 0.34 : layerTotal > 140 ? 0.42 : 0.5;
+      const targetWidth = Math.max(1, Math.round(width * renderScale));
+      const targetHeight = Math.max(1, Math.round(height * renderScale));
+      if (offscreen.width !== targetWidth || offscreen.height !== targetHeight) {
+        offscreen.width = targetWidth;
+        offscreen.height = targetHeight;
+        settled.width = targetWidth;
+        settled.height = targetHeight;
+        settledCount = 0;
+      }
+    };
 
     const resize = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      dpr = Math.min(window.devicePixelRatio || 1, 1.5);
       const rect = canvas.getBoundingClientRect();
       width = Math.max(1, rect.width);
       height = Math.max(1, rect.height);
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      offscreen.width = Math.max(1, Math.round(width * 0.5));
-      offscreen.height = Math.max(1, Math.round(height * 0.5));
+      syncOffscreenSize();
     };
 
-    const drawBreath = (now: number) => {
+    const drawEmptyAura = () => {
       if (blobsRef.current.length > 0) return;
-      const pulse = reducedMotionRef.current ? 0.4 : 0.5 + Math.sin(now / 2200) * 0.5;
       const gradient = context.createRadialGradient(width * 0.5, height * 0.28, 0, width * 0.5, height * 0.28, width * 0.34);
-      gradient.addColorStop(0, `rgba(255, 246, 222, ${0.045 + pulse * 0.018})`);
+      gradient.addColorStop(0, "rgba(255, 246, 222, 0.054)");
       gradient.addColorStop(0.54, "rgba(255, 217, 160, 0.025)");
-      gradient.addColorStop(1, "rgba(241, 241, 243, 0)");
+      gradient.addColorStop(1, "rgba(245, 245, 247, 0)");
       context.fillStyle = gradient;
       context.fillRect(0, 0, width, height);
     };
 
+    const wakeRenderer = () => {
+      if (running || document.hidden) return;
+      running = true;
+      frame = window.requestAnimationFrame(animate);
+    };
+
     const animate = (now: number) => {
+      running = false;
+
       if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
         resize();
       }
 
-      const hasBlobs = blobsRef.current.length > 0;
-      if (hasBlobs && lastNoteAtRef.current > 0 && !frozenAtRef.current) {
-        const idleTime = now - lastNoteAtRef.current;
-        if (idleTime > SETTLE_DELAY && !settleStartRef.current) {
-          settleStartRef.current = now;
-        }
-        if (settleStartRef.current && now - settleStartRef.current >= SETTLE_DURATION) {
-          frozenAtRef.current = now;
-          setCanSave(true);
-        }
+      const frameInterval = 1000 / 30;
+      if (now - lastDrawAt < frameInterval) {
+        wakeRenderer();
+        return;
       }
+      lastDrawAt = now;
 
       context.clearRect(0, 0, width, height);
-      drawBreath(now);
+      drawEmptyAura();
+
+      syncOffscreenSize();
+      if (blobsRef.current.length < settledCount) {
+        settledContext.clearRect(0, 0, settled.width, settled.height);
+        settledCount = 0;
+      }
+      while (settledCount < blobsRef.current.length) {
+        const blob = blobsRef.current[settledCount];
+        if (!reducedMotionRef.current && now - blob.createdAt < BLOB_ARRIVAL_DURATION) break;
+        drawAuraComposition(
+          settledContext,
+          [blob],
+          settled.width,
+          settled.height,
+          blob.createdAt + BLOB_ARRIVAL_DURATION,
+        );
+        settledCount += 1;
+      }
 
       offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
-      drawBlobLayer(offscreenContext, offscreen.width, offscreen.height, now);
+      offscreenContext.drawImage(settled, 0, 0);
+      if (settledCount < blobsRef.current.length) {
+        const newestBlob = blobsRef.current.at(-1);
+        const effectiveNow = reducedMotionRef.current && newestBlob ? newestBlob.createdAt + BLOB_ARRIVAL_DURATION : now;
+        drawAuraComposition(
+          offscreenContext,
+          blobsRef.current.slice(settledCount),
+          offscreen.width,
+          offscreen.height,
+          effectiveNow,
+        );
+      }
 
       context.save();
-      context.globalCompositeOperation = "lighter";
-      context.filter = reducedMotionRef.current ? "blur(18px)" : "blur(28px)";
+      context.globalCompositeOperation = "source-over";
+      context.filter = reducedMotionRef.current ? "blur(3px)" : "blur(5px)";
       context.drawImage(offscreen, 0, 0, width, height);
       context.restore();
 
@@ -754,81 +1221,197 @@ export function AuraToy() {
         drawGrain(context, width, height, grainRef.current, 0.055);
       }
 
-      if (!frozenAtRef.current) {
-        blobsRef.current = blobsRef.current.filter((blob) => (now - blob.createdAt) / 1000 < blob.life + 1.2);
+      const hasArrivingBlob =
+        !reducedMotionRef.current &&
+        blobsRef.current.some((blob) => now - blob.createdAt < BLOB_ARRIVAL_DURATION);
+      if (hasArrivingBlob) {
+        wakeRenderer();
       }
-
-      frame = window.requestAnimationFrame(animate);
     };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) wakeRenderer();
+    };
+    const handleResize = () => {
+      resize();
+      wakeRenderer();
+    };
+    const resizeObserver = new ResizeObserver(handleResize);
 
     resize();
-    window.addEventListener("resize", resize);
-    frame = window.requestAnimationFrame(animate);
+    wakeRendererRef.current = wakeRenderer;
+    window.addEventListener("resize", handleResize);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    resizeObserver.observe(canvas);
+    wakeRenderer();
 
     return () => {
-      window.removeEventListener("resize", resize);
+      wakeRendererRef.current = null;
+      window.removeEventListener("resize", handleResize);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      resizeObserver.disconnect();
       window.cancelAnimationFrame(frame);
     };
-  }, [drawBlobLayer]);
-
-  const downloadAura = useCallback(() => {
-    const liveMapping = mappingRef.current;
-    if (!liveMapping) return;
-
-    const width = 1080;
-    const height = 1350;
-    const exportCanvas = document.createElement("canvas");
-    exportCanvas.width = width;
-    exportCanvas.height = height;
-    const exportContext = exportCanvas.getContext("2d");
-    const layer = document.createElement("canvas");
-    layer.width = width;
-    layer.height = height;
-    const layerContext = layer.getContext("2d");
-    if (!exportContext || !layerContext) return;
-
-    exportContext.fillStyle = "#F1F1F3";
-    exportContext.fillRect(0, 0, width, height);
-    drawBlobLayer(layerContext, width, height, frozenAtRef.current ?? performance.now());
-    exportContext.save();
-    exportContext.globalCompositeOperation = "lighter";
-    exportContext.filter = "blur(36px)";
-    exportContext.drawImage(layer, 0, 0);
-    exportContext.restore();
-
-    drawGrain(exportContext, width, height, makeNoiseTile(260, 22), 0.06);
-
-    const noteSequence = keyHistoryRef.current.length ? keyHistoryRef.current.slice(-14).join(" ") : liveMapping.word;
-    const label = `${noteSequence.toUpperCase()}    SEED ${liveMapping.seedId}`;
-    exportContext.save();
-    exportContext.fillStyle = "#A8A8B0";
-    exportContext.font = "500 18px Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-    exportContext.textBaseline = "middle";
-    drawTrackedText(exportContext, label, width / 2, height - 52, 2);
-    exportContext.restore();
-
-    exportCanvas.toBlob((blob) => {
-      if (!blob) return;
-      const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.href = url;
-      link.download = `aura-${liveMapping.seedId}.png`;
-      link.click();
-      URL.revokeObjectURL(url);
-    }, "image/png");
-  }, [drawBlobLayer]);
-
-  const shiftOctave = useCallback((direction: -1 | 1) => {
-    setTranspose((current) => clamp(current + direction * 12, -12, 12));
   }, []);
 
-  const seedId = mapping?.seedId ?? "------";
+  const createExportCanvas = useCallback((replayProgress?: number) => {
+    const sourceBounds = canvasRef.current?.getBoundingClientRect();
+    const sourceWidth = Math.max(1, sourceBounds?.width ?? 1440);
+    const sourceHeight = Math.max(1, sourceBounds?.height ?? 900);
+    const maxDimension = replayProgress === undefined ? 1920 : blobsRef.current.length > 160 ? 960 : 1280;
+    const scale = Math.min(2, maxDimension / Math.max(sourceWidth, sourceHeight));
+    const output = document.createElement("canvas");
+    output.width = Math.max(1, Math.round(sourceWidth * scale));
+    output.height = Math.max(1, Math.round(sourceHeight * scale));
+    const outputContext = output.getContext("2d", { alpha: false });
+    if (!outputContext) return output;
+
+    paintArtworkBackground(outputContext, output.width, output.height);
+    const settledAt = (blobsRef.current.at(-1)?.createdAt ?? performance.now()) + BLOB_ARRIVAL_DURATION;
+    drawAuraComposition(
+      outputContext,
+      blobsRef.current,
+      output.width,
+      output.height,
+      settledAt,
+      replayProgress,
+    );
+    if (grainRef.current) {
+      drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
+    }
+    return output;
+  }, []);
+
+  const downloadStill = useCallback(() => {
+    if (blobsRef.current.length === 0) return;
+    const output = createExportCanvas();
+    output.toBlob((blob) => {
+      if (!blob) return;
+      downloadBlob(blob, `${exportFileStem(seedWordRef.current)}.png`);
+    }, "image/png");
+  }, [createExportCanvas]);
+
+  const downloadVideo = useCallback(async () => {
+    if (blobsRef.current.length === 0 || exportState !== "idle") return;
+    if (typeof MediaRecorder === "undefined" || typeof HTMLCanvasElement.prototype.captureStream !== "function") return;
+
+    setExportState("video");
+    const output = createExportCanvas(0);
+    const outputContext = output.getContext("2d", { alpha: false });
+    if (!outputContext) {
+      setExportState("idle");
+      return;
+    }
+
+    const mimeType = supportedVideoType();
+    const stream = output.captureStream(24);
+    const recorder = new MediaRecorder(stream, {
+      ...(mimeType ? { mimeType } : {}),
+      videoBitsPerSecond: 7_500_000,
+    });
+    const chunks: BlobPart[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+
+    try {
+      const revealDuration = clamp(1800 + blobsRef.current.length * 75, 2800, 4800);
+      const holdDuration = 900;
+      await new Promise<void>((resolve, reject) => {
+        recorder.onerror = () => reject(new Error("Unable to record Aura video"));
+        recorder.onstop = () => resolve();
+        recorder.start(250);
+        const startedAt = performance.now();
+
+        const renderFrame = (now: number) => {
+          const elapsed = now - startedAt;
+          const replayProgress = clamp(elapsed / revealDuration, 0, 1);
+          paintArtworkBackground(outputContext, output.width, output.height);
+          drawAuraComposition(
+            outputContext,
+            blobsRef.current,
+            output.width,
+            output.height,
+            now,
+            replayProgress,
+          );
+          if (grainRef.current) {
+            drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
+          }
+
+          if (elapsed < revealDuration + holdDuration) {
+            window.requestAnimationFrame(renderFrame);
+          } else {
+            recorder.stop();
+          }
+        };
+
+        window.requestAnimationFrame(renderFrame);
+      });
+
+      const video = new Blob(chunks, { type: mimeType || "video/webm" });
+      downloadBlob(video, `${exportFileStem(seedWordRef.current)}.webm`);
+    } finally {
+      stream.getTracks().forEach((track) => track.stop());
+      setExportState("idle");
+    }
+  }, [createExportCanvas, exportState]);
+
+  const shiftOctave = useCallback((direction: -1 | 1) => {
+    toneRef.current.synth?.releaseAll();
+    activeToneNotesRef.current.clear();
+    setActiveKeys(new Set());
+    setOctave((current) => clamp(current + direction, MIN_OCTAVE, MAX_OCTAVE));
+  }, []);
+
+  const selectSoundMode = useCallback(
+    (nextMode: SoundModeId) => {
+      setSoundMenuOpen(false);
+      if (nextMode === soundModeRef.current) return;
+
+      visualGenerationRef.current += 1;
+      releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      releaseTimersRef.current.clear();
+      disposeToneEngine();
+      soundModeRef.current = nextMode;
+      setSoundMode(nextMode);
+      setActiveKeys(new Set());
+    },
+    [disposeToneEngine],
+  );
+
+  const resetAura = useCallback(() => {
+    visualGenerationRef.current += 1;
+    releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    releaseTimersRef.current.clear();
+    disposeToneEngine();
+    blobsRef.current = [];
+    blobIdRef.current = 1;
+    noteRepeatRef.current.clear();
+    if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
+    setResetting(true);
+    setActiveKeys(new Set());
+    setOctave(BASE_OCTAVE);
+    soundModeRef.current = DEFAULT_SOUND_MODE;
+    setSoundMode(DEFAULT_SOUND_MODE);
+    setSoundMenuOpen(false);
+    setLayerCount(0);
+    setExportState("idle");
+    wakeRendererRef.current?.();
+    resetFrameRef.current = window.requestAnimationFrame(() => {
+      resetFrameRef.current = null;
+      setResetting(false);
+    });
+  }, [disposeToneEngine]);
+
+  const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
 
   return (
-    <main className={`aura-page ${committed ? "is-committed" : "is-entry"}`}>
+    <main className={`aura-page ${committed ? "is-committed" : "is-entry"} ${resetting ? "is-resetting" : ""}`}>
       <canvas ref={canvasRef} className="aura-canvas" aria-hidden="true" />
 
-      <div className={`seed-entry ${committed ? "is-hidden" : ""}`}>
+      <div className={`seed-entry ${committed ? "is-hidden" : ""} ${entryValue ? "" : "is-empty"}`}>
+        <span className="entry-caret" aria-hidden="true" />
         <input
           ref={inputRef}
           value={entryValue}
@@ -850,15 +1433,58 @@ export function AuraToy() {
       <section className="instrument-zone" aria-label="Aura instrument">
         <div className="instrument-body">
           <div className="instrument-header">
-            <span className="power-led" aria-hidden="true" />
-            <span className="device-label">K-07</span>
+            <button
+              type="button"
+              className="power-led"
+              aria-label="Reset aura"
+              title="Reset aura"
+              onClick={resetAura}
+            />
+            <div ref={soundPickerRef} className="sound-picker">
+              <button
+                ref={soundTriggerRef}
+                type="button"
+                className="device-label"
+                aria-label={`Sound mode: ${activeSoundMode.label}`}
+                aria-haspopup="menu"
+                aria-expanded={soundMenuOpen}
+                title="Choose sound mode"
+                onClick={() => setSoundMenuOpen((open) => !open)}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setSoundMenuOpen(true);
+                  }
+                }}
+              >
+                J-05
+              </button>
+              {soundMenuOpen ? (
+                <div className="sound-menu" role="menu" aria-label="Sound modes">
+                  {SOUND_MODES.map((mode) => (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={mode.id === soundMode}
+                      className={`sound-option ${mode.id === soundMode ? "is-selected" : ""}`}
+                      onClick={() => selectSoundMode(mode.id)}
+                    >
+                      <span className="sound-option-dot" aria-hidden="true" />
+                      <span>{mode.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <span className="header-rule" aria-hidden="true" />
-            <span className="seed-id">SEED {seedId}</span>
             <div className="transport" aria-label="Octave controls">
               <button
                 type="button"
                 className="transport-button"
                 aria-label="Shift octave down"
+                title="Lower octave"
+                disabled={octave === MIN_OCTAVE}
                 onClick={() => shiftOctave(-1)}
               >
                 <span className="triangle is-left" aria-hidden="true" />
@@ -867,6 +1493,8 @@ export function AuraToy() {
                 type="button"
                 className="transport-button"
                 aria-label="Shift octave up"
+                title="Raise octave"
+                disabled={octave === MAX_OCTAVE}
                 onClick={() => shiftOctave(1)}
               >
                 <span className="triangle is-right" aria-hidden="true" />
@@ -874,7 +1502,7 @@ export function AuraToy() {
             </div>
           </div>
 
-          <div className="keybed">
+          <div className="keybed" data-octave={octave}>
             <div className="white-keys">
               {WHITE_KEYS.map((key) => (
                 <button
@@ -891,26 +1519,52 @@ export function AuraToy() {
             </div>
 
             {UPPER_KEYS.map((key) => (
-              <button
+              <div
                 key={key.id}
-                type="button"
-                className={`piano-key upper-key ${activeKeys.has(key.id) ? "is-active" : ""}`}
+                className="upper-key-slot"
                 style={{ "--upper-left": `${(key.left ?? 0) * 100}%` } as CSSProperties}
-                aria-label={shiftedNote(key).name}
-                onPointerDown={(event) => handlePointerDown(event, key)}
-                onPointerUp={(event) => handlePointerEnd(event, key)}
-                onPointerCancel={(event) => handlePointerEnd(event, key)}
-                onLostPointerCapture={() => endKey(key)}
-              />
+              >
+                <button
+                  type="button"
+                  className={`piano-key upper-key ${activeKeys.has(key.id) ? "is-active" : ""}`}
+                  aria-label={shiftedNote(key).name}
+                  onPointerDown={(event) => handlePointerDown(event, key)}
+                  onPointerUp={(event) => handlePointerEnd(event, key)}
+                  onPointerCancel={(event) => handlePointerEnd(event, key)}
+                  onLostPointerCapture={() => endKey(key)}
+                />
+              </div>
             ))}
           </div>
         </div>
 
-        <h1>Aura</h1>
-        <button type="button" className={`save-aura ${canSave ? "is-visible" : ""}`} onClick={downloadAura}>
-          Save aura
-        </button>
       </section>
+
+      <div className={`export-dock ${layerCount > 0 ? "is-ready" : ""}`} aria-label="Export visual">
+        <button
+          type="button"
+          className="export-button"
+          aria-label="Download visual as PNG"
+          title="Download PNG"
+          disabled={layerCount === 0 || exportState !== "idle"}
+          onClick={downloadStill}
+        >
+          <span className="export-icon is-still" aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={`export-button ${exportState === "video" ? "is-exporting" : ""}`}
+          aria-label={exportState === "video" ? "Rendering video" : "Download visual as video"}
+          title={exportState === "video" ? "Rendering video" : "Download WebM video"}
+          disabled={layerCount === 0 || exportState !== "idle"}
+          onClick={() => void downloadVideo()}
+        >
+          <span className="export-icon is-video" aria-hidden="true" />
+        </button>
+        <span className="sr-only" aria-live="polite">
+          {exportState === "video" ? "Rendering Aura video" : ""}
+        </span>
+      </div>
     </main>
   );
 }

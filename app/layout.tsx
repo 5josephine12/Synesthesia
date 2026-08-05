@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Aura",
-  description: "A synesthesia simulator that turns a word and a melody into a downloadable aura.",
+  description: "A synesthesia simulator that turns a word and a melody into a luminous aura.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
