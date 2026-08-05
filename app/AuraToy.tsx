@@ -128,6 +128,7 @@ type MicrophoneRuntime = {
   chroma: Float32Array;
   frameChroma: Float32Array;
   animationFrame: number;
+  analyze: FrameRequestCallback;
   lastAnalysisAt: number;
   lastVisualAt: number;
   lastBeatAt: number;
@@ -1159,6 +1160,7 @@ export function AuraToy() {
   const previewFrameRef = useRef<number | null>(null);
   const dialWheelTimerRef = useRef<number | null>(null);
   const wakeRendererRef = useRef<(() => void) | null>(null);
+  const resetRendererRef = useRef<(() => void) | null>(null);
   const releaseTimersRef = useRef<Map<string, number>>(new Map());
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
   const toneRef = useRef<{
@@ -1497,6 +1499,7 @@ export function AuraToy() {
         chroma: new Float32Array(12),
         frameChroma: new Float32Array(12),
         animationFrame: 0,
+        analyze: () => undefined,
         lastAnalysisAt: -Infinity,
         lastVisualAt: -Infinity,
         lastBeatAt: -Infinity,
@@ -1632,47 +1635,9 @@ export function AuraToy() {
                   ? [runtime.melodyPitchClass]
                   : [];
 
-        // Confirm chord tones across several frames, then release them gently to avoid key flicker.
-        for (let pitchClass = 0; pitchClass < 12; pitchClass += 1) {
-          const isPresent = detectedPitchClasses.includes(pitchClass);
-          runtime.keyPitchConfidence[pitchClass] = clamp(
-            runtime.keyPitchConfidence[pitchClass] +
-              (isPresent ? (monophonicFrame ? 1.2 : 0.95) : activeSignal ? -0.1 : -0.28),
-            0,
-            3,
-          );
-          if (isPresent) runtime.keyPitchLastSeenAt[pitchClass] = now;
-        }
-
-        const nextHighlightedPitchClasses = Array.from({ length: 12 }, (_, pitchClass) => pitchClass)
-          .filter((pitchClass) => {
-            const wasHighlighted = runtime.highlightedPitchClasses.includes(pitchClass);
-            const entryThreshold = monophonicFrame ? 1 : 0.9;
-            return (
-              runtime.keyPitchConfidence[pitchClass] >= entryThreshold ||
-              (wasHighlighted &&
-                now - runtime.keyPitchLastSeenAt[pitchClass] <= 720 &&
-                runtime.keyPitchConfidence[pitchClass] >= 0.28)
-            );
-          })
-          .sort(
-            (first, second) =>
-              runtime.keyPitchConfidence[second] - runtime.keyPitchConfidence[first],
-          )
-          .slice(0, 3)
-          .sort((first, second) => first - second);
-        const highlightsChanged =
-          nextHighlightedPitchClasses.length !== runtime.highlightedPitchClasses.length ||
-          nextHighlightedPitchClasses.some(
-            (pitchClass, index) => pitchClass !== runtime.highlightedPitchClasses[index],
-          );
-        if (highlightsChanged) {
-          runtime.highlightedPitchClasses = nextHighlightedPitchClasses;
-          setMicrophonePitchClasses(nextHighlightedPitchClasses);
-        }
-
         const rankedMelodyNotes = noteCandidates
           .map((candidate) => ({
+            midi: candidate.midi,
             pitchClass: modulo(candidate.midi, 12),
             score:
               candidate.score *
@@ -1717,6 +1682,90 @@ export function AuraToy() {
           runtime.melodyCandidatePitchClass = null;
           runtime.melodyCandidateFrames = 0;
           runtime.melodyStableSince = -Infinity;
+        }
+
+        const hasRecentMelody =
+          runtime.melodyPitchClass !== null && now - runtime.melodyLastSeenAt <= 320;
+        const primaryPitchClass = activeSignal
+          ? (runtime.melodyPitchClass ??
+            monophonicPitchClass ??
+            (detectedMidi !== null ? modulo(detectedMidi, 12) : null))
+          : hasRecentMelody
+            ? runtime.melodyPitchClass
+            : null;
+        const supportingPitchClasses =
+          activeSignal && !monophonicFrame && melodyLeader
+            ? rankedMelodyNotes
+                .filter(
+                  ({ pitchClass, score }) =>
+                    pitchClass !== primaryPitchClass && score >= melodyLeader.score * 0.64,
+                )
+                .sort((first, second) => second.midi - first.midi)
+                .slice(0, 2)
+                .map(({ pitchClass }) => pitchClass)
+            : [];
+
+        // Read the spectrum like a restrained right-hand transcription: the lead
+        // enters quickly, while harmony tones must persist before joining it.
+        for (let pitchClass = 0; pitchClass < 12; pitchClass += 1) {
+          const isPrimary = pitchClass === primaryPitchClass;
+          const isSupporting = supportingPitchClasses.includes(pitchClass);
+          const confidenceDelta = isPrimary
+            ? activeSignal
+              ? 1.15
+              : -0.12
+            : isSupporting
+              ? 0.38
+              : activeSignal
+                ? -0.22
+                : -0.46;
+          runtime.keyPitchConfidence[pitchClass] = clamp(
+            runtime.keyPitchConfidence[pitchClass] + confidenceDelta,
+            0,
+            3,
+          );
+          if (isPrimary || isSupporting) runtime.keyPitchLastSeenAt[pitchClass] = now;
+        }
+
+        const nextHighlightedPitchClasses: number[] = [];
+        if (
+          primaryPitchClass !== null &&
+          (runtime.keyPitchConfidence[primaryPitchClass] >= 0.8 ||
+            runtime.highlightedPitchClasses.includes(primaryPitchClass))
+        ) {
+          nextHighlightedPitchClasses.push(primaryPitchClass);
+        }
+
+        const stableHarmonyPitchClasses = Array.from(
+          { length: 12 },
+          (_, pitchClass) => pitchClass,
+        )
+          .filter((pitchClass) => {
+            if (pitchClass === primaryPitchClass) return false;
+            const wasHighlighted = runtime.highlightedPitchClasses.includes(pitchClass);
+            return (
+              runtime.keyPitchConfidence[pitchClass] >= 1.55 ||
+              (wasHighlighted &&
+                now - runtime.keyPitchLastSeenAt[pitchClass] <= 420 &&
+                runtime.keyPitchConfidence[pitchClass] >= 0.62)
+            );
+          })
+          .sort(
+            (first, second) =>
+              runtime.keyPitchConfidence[second] - runtime.keyPitchConfidence[first],
+          )
+          .slice(0, 2);
+        nextHighlightedPitchClasses.push(...stableHarmonyPitchClasses);
+        nextHighlightedPitchClasses.sort((first, second) => first - second);
+
+        const highlightsChanged =
+          nextHighlightedPitchClasses.length !== runtime.highlightedPitchClasses.length ||
+          nextHighlightedPitchClasses.some(
+            (pitchClass, index) => pitchClass !== runtime.highlightedPitchClasses[index],
+          );
+        if (highlightsChanged) {
+          runtime.highlightedPitchClasses = nextHighlightedPitchClasses;
+          setMicrophonePitchClasses(nextHighlightedPitchClasses);
         }
 
         const hasPendingKeyBeat =
@@ -1770,7 +1819,8 @@ export function AuraToy() {
         );
       };
 
-      runtime.animationFrame = window.requestAnimationFrame(analyze);
+      runtime.analyze = analyze;
+      runtime.animationFrame = window.requestAnimationFrame(runtime.analyze);
       stream.getAudioTracks().forEach((track) => {
         track.addEventListener("ended", () => {
           if (generation === microphoneGenerationRef.current) stopMicrophone();
@@ -1979,6 +2029,14 @@ export function AuraToy() {
       context.fillRect(0, 0, width, height);
     };
 
+    const resetRenderer = () => {
+      settledContext.clearRect(0, 0, settled.width, settled.height);
+      offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
+      settledCount = 0;
+      context.clearRect(0, 0, width, height);
+      drawEmptyAura();
+    };
+
     const wakeRenderer = () => {
       if (running || document.hidden) return;
       running = true;
@@ -2063,6 +2121,7 @@ export function AuraToy() {
 
     resize();
     wakeRendererRef.current = wakeRenderer;
+    resetRendererRef.current = resetRenderer;
     window.addEventListener("resize", handleResize);
     document.addEventListener("visibilitychange", handleVisibilityChange);
     resizeObserver.observe(canvas);
@@ -2070,6 +2129,7 @@ export function AuraToy() {
 
     return () => {
       wakeRendererRef.current = null;
+      resetRendererRef.current = null;
       window.removeEventListener("resize", handleResize);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       resizeObserver.disconnect();
@@ -2300,6 +2360,19 @@ export function AuraToy() {
     blobsRef.current = [];
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
+    resetRendererRef.current?.();
+
+    const microphone = microphoneRef.current;
+    if (microphone && microphone.stream.active && microphone.context.state !== "closed") {
+      microphone.lastAnalysisAt = -Infinity;
+      microphone.lastVisualAt = -Infinity;
+      window.cancelAnimationFrame(microphone.animationFrame);
+      microphone.animationFrame = window.requestAnimationFrame(microphone.analyze);
+      if (microphone.context.state !== "running") {
+        void microphone.context.resume().catch(() => undefined);
+      }
+    }
+
     if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
     setResetting(true);
     setLayerCount(0);
