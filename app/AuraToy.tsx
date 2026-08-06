@@ -75,6 +75,7 @@ type Mapping = {
 };
 
 type AuraShape = "bloom" | "ribbon" | "beam" | "arc" | "prism" | "veil" | "wave" | "halo" | "flare" | "mesh";
+type AuraBlendMode = "lighter" | "source-over";
 
 type BlobParticle = {
   id: number;
@@ -91,6 +92,7 @@ type BlobParticle = {
   curvature: number;
   velocity: number;
   softness: number;
+  blendMode: AuraBlendMode;
   createdAt: number;
 };
 
@@ -223,6 +225,10 @@ const MAX_OCTAVE = HIGHEST_PIANO_OCTAVE - 1;
 const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
 const MAX_MIDI = (HIGHEST_PIANO_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
+const SATURATION_CHECK_INTERVAL = 6;
+const SATURATION_MINIMUM_LAYERS = 24;
+const MAXIMUM_ADDITIVE_LAYERS = 48;
+const SATURATION_COVERAGE_THRESHOLD = 0.14;
 const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 30;
 const MICROPHONE_FFT_SIZE = 4096;
 const DEFAULT_SOUND_MODE: SoundModeId = "piano";
@@ -881,6 +887,27 @@ function drawGrain(context: CanvasRenderingContext2D, width: number, height: num
   context.restore();
 }
 
+function isAuraWashedOut(
+  source: HTMLCanvasElement,
+  probe: HTMLCanvasElement,
+  context: CanvasRenderingContext2D,
+) {
+  context.clearRect(0, 0, probe.width, probe.height);
+  context.drawImage(source, 0, 0, probe.width, probe.height);
+  const pixels = context.getImageData(0, 0, probe.width, probe.height).data;
+  let washedOutPixels = 0;
+
+  for (let index = 0; index < pixels.length; index += 4) {
+    const red = pixels[index];
+    const green = pixels[index + 1];
+    const blue = pixels[index + 2];
+    const alpha = pixels[index + 3];
+    if (alpha > 96 && red > 238 && green > 238 && blue > 238) washedOutPixels += 1;
+  }
+
+  return washedOutPixels / (probe.width * probe.height) >= SATURATION_COVERAGE_THRESHOLD;
+}
+
 function makeLinearAuraGradient(
   context: CanvasRenderingContext2D,
   blob: BlobParticle,
@@ -1229,7 +1256,6 @@ function drawAuraComposition(
   const replayPosition = replayProgress === undefined ? Number.POSITIVE_INFINITY : replayProgress * (blobs.length + 0.9);
 
   context.save();
-  context.globalCompositeOperation = "lighter";
   blobs.forEach((blob, index) => {
     const replayAge = replayPosition - index;
     if (replayAge <= 0) return;
@@ -1239,6 +1265,7 @@ function drawAuraComposition(
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
     const alpha = clamp((0.4 + blob.velocity * 0.48) * Math.min(1, replayAge), 0, 0.88);
 
+    context.globalCompositeOperation = blob.blendMode;
     drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha);
   });
   context.restore();
@@ -1273,6 +1300,7 @@ export function AuraToy() {
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
   const grainRef = useRef<HTMLCanvasElement | null>(null);
+  const contrastLayeringRef = useRef(false);
   const reducedMotionRef = useRef(false);
   const audioGenerationRef = useRef(0);
   const visualGenerationRef = useRef(0);
@@ -1527,6 +1555,10 @@ export function AuraToy() {
       l: clamp(51 + identityRng() * 14, 0, 69),
     };
 
+    if (blobsRef.current.length >= MAXIMUM_ADDITIVE_LAYERS) {
+      contrastLayeringRef.current = true;
+    }
+
     blobsRef.current.push({
       id,
       color,
@@ -1542,6 +1574,7 @@ export function AuraToy() {
       curvature: (identityRng() - 0.5) * 1.65 + Math.sin(repeat * 0.62) * 0.14,
       velocity,
       softness: clamp(profile.softness + (identityRng() - 0.5) * 0.18, 0.24, 0.98),
+      blendMode: contrastLayeringRef.current ? "source-over" : "lighter",
       createdAt: now,
     });
 
@@ -2225,7 +2258,11 @@ export function AuraToy() {
     const offscreenContext = offscreen.getContext("2d", { alpha: true });
     const settled = document.createElement("canvas");
     const settledContext = settled.getContext("2d", { alpha: true });
-    if (!offscreenContext || !settledContext) return;
+    const saturationProbe = document.createElement("canvas");
+    saturationProbe.width = 48;
+    saturationProbe.height = 32;
+    const saturationProbeContext = saturationProbe.getContext("2d", { willReadFrequently: true });
+    if (!offscreenContext || !settledContext || !saturationProbeContext) return;
 
     grainRef.current = makeNoiseTile(160, 20);
     let width = 1;
@@ -2275,6 +2312,7 @@ export function AuraToy() {
       settledContext.clearRect(0, 0, settled.width, settled.height);
       offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
       settledCount = 0;
+      contrastLayeringRef.current = false;
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
     };
@@ -2318,6 +2356,14 @@ export function AuraToy() {
           blob.createdAt + BLOB_ARRIVAL_DURATION,
         );
         settledCount += 1;
+        if (
+          !contrastLayeringRef.current &&
+          settledCount >= SATURATION_MINIMUM_LAYERS &&
+          settledCount % SATURATION_CHECK_INTERVAL === 0 &&
+          isAuraWashedOut(settled, saturationProbe, saturationProbeContext)
+        ) {
+          contrastLayeringRef.current = true;
+        }
       }
 
       offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
@@ -2602,6 +2648,7 @@ export function AuraToy() {
     blobsRef.current = [];
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
+    contrastLayeringRef.current = false;
     resetRendererRef.current?.();
 
     const microphone = microphoneRef.current;
