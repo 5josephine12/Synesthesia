@@ -582,6 +582,7 @@ button {
 .preview-control:hover,
 .preview-control:focus-visible {
   color: rgba(64, 63, 70, 0.88);
+  transform: translateY(-1px);
 }
 
 .export-button:active,
@@ -643,8 +644,20 @@ button {
   animation: exportPulse 760ms ease-in-out infinite alternate;
 }
 
+.microphone-button.is-requesting::after {
+  animation: microphoneRequest 900ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.microphone-button.is-listening .control-icon {
+  animation: microphoneConnected 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 .microphone-button.is-error {
   color: rgba(156, 84, 103, 0.76);
+}
+
+.microphone-button.is-error .control-icon {
+  animation: controlNudge 360ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 .microphone-permission-backdrop {
@@ -656,7 +669,13 @@ button {
   place-items: center;
   background: rgba(245, 245, 247, 0.56);
   backdrop-filter: blur(18px);
-  animation: previewFadeIn 220ms ease-out both;
+  animation: overlayReveal 280ms ease-out both;
+  will-change: opacity;
+}
+
+.microphone-permission-backdrop.is-closing {
+  pointer-events: none;
+  animation: overlayDismiss 240ms ease-in both;
 }
 
 .microphone-permission {
@@ -670,7 +689,13 @@ button {
     0 18px 48px rgba(70, 70, 90, 0.1),
     inset 0 1px rgba(255, 255, 255, 0.4),
     inset 0 -1px rgba(70, 70, 90, 0.025);
-  animation: previewRiseIn 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: permissionReveal 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: 18% 100%;
+  will-change: opacity, transform;
+}
+
+.microphone-permission-backdrop.is-closing .microphone-permission {
+  animation: panelDismiss 240ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 .microphone-permission-header {
@@ -691,6 +716,7 @@ button {
   font-weight: 400;
   letter-spacing: 0;
   text-transform: uppercase;
+  animation: overlayDetailReveal 360ms 70ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .microphone-permission-screen {
@@ -713,6 +739,7 @@ button {
   display: grid;
   justify-items: center;
   gap: 16px;
+  animation: overlayContentReveal 440ms 90ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .microphone-permission-icon {
@@ -724,6 +751,10 @@ button {
   background: var(--control-surface);
   box-shadow: var(--control-depth-shadow);
   color: rgba(177, 58, 122, 0.72);
+}
+
+.microphone-permission.is-granting .microphone-permission-icon {
+  animation: permissionConfirmed 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .microphone-permission-screen p {
@@ -753,6 +784,7 @@ button {
     color 160ms ease,
     transform 120ms cubic-bezier(0.4, 0, 0.2, 1),
     box-shadow 220ms ease;
+  animation: overlayContentReveal 440ms 140ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .microphone-permission-action:hover,
@@ -765,6 +797,14 @@ button {
   box-shadow:
     0 1px 1px rgba(70, 70, 90, 0.035),
     0 2px 6px rgba(70, 70, 90, 0.045);
+}
+
+.microphone-permission-action.is-confirming {
+  color: rgba(177, 58, 122, 0.82);
+  transform: translateY(1px) scale(0.985);
+  box-shadow:
+    inset 0 1px 4px rgba(70, 70, 90, 0.065),
+    0 1px 3px rgba(70, 70, 90, 0.055);
 }
 
 .microphone-permission-action:focus-visible {
@@ -781,7 +821,13 @@ button {
   place-items: center;
   background: rgba(245, 245, 247, 0.58);
   backdrop-filter: blur(20px);
-  animation: previewFadeIn 240ms ease-out both;
+  animation: overlayReveal 300ms ease-out both;
+  will-change: opacity;
+}
+
+.export-preview-backdrop.is-closing {
+  pointer-events: none;
+  animation: overlayDismiss 240ms ease-in both;
 }
 
 .export-preview {
@@ -796,7 +842,13 @@ button {
     0 20px 54px rgba(70, 70, 90, 0.105),
     inset 0 1px rgba(255, 255, 255, 0.4),
     inset 0 -1px rgba(70, 70, 90, 0.025);
-  animation: previewRiseIn 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: previewReveal 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: 92% 100%;
+  will-change: opacity, transform;
+}
+
+.export-preview-backdrop.is-closing .export-preview {
+  animation: panelDismiss 240ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 .export-preview-header {
@@ -816,12 +868,21 @@ button {
   font-weight: 400;
   letter-spacing: 0;
   text-transform: uppercase;
+  animation: overlayDetailReveal 380ms 80ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .export-preview-actions {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.export-preview-actions .preview-control {
+  animation: overlayControlReveal 400ms 100ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.export-preview-actions .preview-control + .preview-control {
+  animation-delay: 145ms;
 }
 
 .dialog-close {
@@ -834,9 +895,16 @@ button {
   width: 15px;
   height: 15px;
   margin: 0;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dialog-close:hover .control-icon,
+.dialog-close:focus-visible .control-icon {
+  transform: rotate(5deg) scale(1.06);
 }
 
 .export-preview-screen {
+  position: relative;
   display: grid;
   min-height: 180px;
   max-height: calc(100dvh - 142px);
@@ -850,6 +918,7 @@ button {
     inset 0 2px 7px rgba(70, 70, 90, 0.075),
     inset 0 -1px rgba(255, 255, 255, 0.58),
     0 1px rgba(255, 255, 255, 0.2);
+  animation: previewScreenReveal 480ms 85ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .export-preview-screen canvas {
@@ -858,6 +927,59 @@ button {
   max-width: 100%;
   height: auto;
   max-height: calc(100dvh - 144px);
+  transition:
+    opacity 220ms ease,
+    transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.export-preview.is-processing .export-preview-screen canvas {
+  opacity: 0.58;
+  transform: scale(0.992);
+}
+
+.export-feedback {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  background: rgba(247, 247, 249, 0.5);
+  color: rgba(82, 81, 90, 0.78);
+  animation: exportFeedbackReveal 260ms ease-out both;
+}
+
+.export-feedback-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--control-surface);
+  box-shadow: var(--control-depth-shadow);
+  color: rgba(98, 97, 106, 0.78);
+}
+
+.export-feedback.is-preparing .export-feedback-icon {
+  animation: exportPreparing 760ms ease-in-out infinite alternate;
+}
+
+.export-feedback.is-complete .export-feedback-icon {
+  color: rgba(177, 58, 122, 0.76);
+  animation: exportComplete 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.export-feedback.is-error .export-feedback-icon {
+  color: rgba(156, 84, 103, 0.76);
+  animation: controlNudge 360ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.export-feedback-label {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .preview-control.is-exporting .control-icon {
@@ -909,16 +1031,157 @@ button {
   }
 }
 
-@keyframes previewFadeIn {
+@keyframes overlayReveal {
   from {
     opacity: 0;
   }
 }
 
-@keyframes previewRiseIn {
+@keyframes overlayDismiss {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes permissionReveal {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.985);
+    transform: translateY(18px) scale(0.955);
+  }
+}
+
+@keyframes previewReveal {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.965);
+  }
+}
+
+@keyframes panelDismiss {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.982);
+  }
+}
+
+@keyframes overlayDetailReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes overlayContentReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+@keyframes overlayControlReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.82);
+  }
+}
+
+@keyframes previewScreenReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+}
+
+@keyframes exportFeedbackReveal {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes exportPreparing {
+  from {
+    opacity: 0.72;
+    transform: translateY(1px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(-1px) scale(1.02);
+  }
+}
+
+@keyframes exportComplete {
+  0% {
+    opacity: 0;
+    transform: scale(0.7);
+  }
+
+  58% {
+    transform: scale(1.08);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes microphoneRequest {
+  0%,
+  100% {
+    opacity: 0.16;
+    transform: scale(0.76);
+  }
+
+  50% {
+    opacity: 0.66;
+    transform: scale(1);
+  }
+}
+
+@keyframes microphoneConnected {
+  0% {
+    opacity: 0.45;
+    transform: scale(0.72);
+  }
+
+  60% {
+    transform: scale(1.12);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes permissionConfirmed {
+  0% {
+    transform: scale(1);
+  }
+
+  48% {
+    color: rgba(177, 58, 122, 0.9);
+    transform: scale(0.9);
+  }
+
+  100% {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes controlNudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  35% {
+    transform: translateX(-2px);
+  }
+
+  70% {
+    transform: translateX(2px);
   }
 }
 
@@ -1000,6 +1263,7 @@ button {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
   }
 
   .power-led {

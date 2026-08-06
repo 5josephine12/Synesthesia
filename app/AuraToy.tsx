@@ -5,7 +5,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
 
-type SolidControlIconName = "close" | "download" | "image" | "mic" | "mic-off" | "video";
+type SolidControlIconName = "check" | "close" | "download" | "image" | "mic" | "mic-off" | "video";
 
 function SolidControlIcon({
   name,
@@ -52,6 +52,9 @@ function SolidControlIcon({
       ) : null}
       {name === "close" ? (
         <path d="m6 6 12 12M18 6 6 18" />
+      ) : null}
+      {name === "check" ? (
+        <path d="m9.2 18.15-5.35-5.34 2.35-2.35 3 3 8.6-8.61 2.35 2.35Z" />
       ) : null}
     </svg>
   );
@@ -147,8 +150,10 @@ type VisualMode = {
   softness: number;
 };
 
-type ExportState = "idle" | "video";
+type ExportState = "idle" | "image" | "video";
 type ExportKind = "image" | "video";
+type DownloadFeedback = "idle" | "preparing" | "complete" | "error";
+type HapticFeedback = "open" | "close" | "confirm" | "success" | "error";
 type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsupported";
 type ScaleMode = "major" | "minor";
 
@@ -262,6 +267,8 @@ const AURA_RENDER_PIXEL_BUDGET = 420_000;
 const AURA_SETTLE_BUDGET_MS = 4;
 const AURA_RENDER_BUDGET_MS = 12;
 const AURA_MIN_ADAPTIVE_SCALE = 0.62;
+const OVERLAY_EXIT_DURATION = 240;
+const DOWNLOAD_COMPLETE_HOLD = 520;
 const DEFAULT_SOUND_MODE: SoundModeId = "piano";
 const RADIOGRAPHIC_HUES = [338, 322, 300, 282, 260, 238, 220, 10, 18, 348, 312, 248] as const;
 const MAJOR_SCALE_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88] as const;
@@ -1427,6 +1434,37 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function hapticFeedback(kind: HapticFeedback) {
+  if (typeof window === "undefined" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const vibration = (navigator as Navigator & {
+    vibrate?: (pattern: number | number[]) => boolean;
+  }).vibrate;
+  if (!vibration) return;
+  const patterns: Record<HapticFeedback, number | number[]> = {
+    open: 8,
+    close: 5,
+    confirm: 12,
+    success: [10, 34, 16],
+    error: [18, 42, 18],
+  };
+  vibration.call(navigator, patterns[kind]);
+}
+
+function waitForPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Unable to prepare download"));
+    }, type);
+  });
+}
+
 function exportFileStem() {
   return "aura-composition";
 }
@@ -1440,7 +1478,11 @@ export function AuraToy() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
+  const imagePreviewButtonRef = useRef<HTMLButtonElement | null>(null);
+  const videoPreviewButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lastPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const microphoneAllowRef = useRef<HTMLButtonElement | null>(null);
   const microphoneIntroductionShownRef = useRef(false);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const exportBlurLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
@@ -1460,6 +1502,10 @@ export function AuraToy() {
   const microphoneBeatTimerRef = useRef<number | null>(null);
   const resetFrameRef = useRef<number | null>(null);
   const previewFrameRef = useRef<number | null>(null);
+  const previewCloseTimerRef = useRef<number | null>(null);
+  const microphonePromptCloseTimerRef = useRef<number | null>(null);
+  const downloadFeedbackTimerRef = useRef<number | null>(null);
+  const microphoneAfterCloseRef = useRef<(() => void) | null>(null);
   const dialWheelTimerRef = useRef<number | null>(null);
   const wakeRendererRef = useRef<(() => void) | null>(null);
   const resetRendererRef = useRef<(() => void) | null>(null);
@@ -1485,6 +1531,8 @@ export function AuraToy() {
   const [layerCount, setLayerCount] = useState(0);
   const [exportState, setExportState] = useState<ExportState>("idle");
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
+  const [previewClosing, setPreviewClosing] = useState(false);
+  const [downloadFeedback, setDownloadFeedback] = useState<DownloadFeedback>("idle");
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
   const [microphoneHarmonyPitchClasses, setMicrophoneHarmonyPitchClasses] = useState<number[]>([]);
@@ -1492,6 +1540,8 @@ export function AuraToy() {
   const [microphoneBeatPitchClasses, setMicrophoneBeatPitchClasses] = useState<number[]>([]);
   const [microphoneReading, setMicrophoneReading] = useState("Listening");
   const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
+  const [microphonePromptClosing, setMicrophonePromptClosing] = useState(false);
+  const [microphonePromptGranting, setMicrophonePromptGranting] = useState(false);
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -1506,6 +1556,14 @@ export function AuraToy() {
   useEffect(() => {
     soundModeRef.current = soundMode;
   }, [soundMode]);
+
+  useEffect(() => {
+    if (!microphonePromptOpen || microphonePromptClosing) return;
+    const frame = window.requestAnimationFrame(() => {
+      microphoneAllowRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [microphonePromptClosing, microphonePromptOpen]);
 
   const disposeToneEngine = useCallback(() => {
     audioGenerationRef.current += 1;
@@ -1539,6 +1597,13 @@ export function AuraToy() {
     () => () => {
       if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
       if (previewFrameRef.current !== null) window.cancelAnimationFrame(previewFrameRef.current);
+      if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current);
+      if (microphonePromptCloseTimerRef.current !== null) {
+        window.clearTimeout(microphonePromptCloseTimerRef.current);
+      }
+      if (downloadFeedbackTimerRef.current !== null) {
+        window.clearTimeout(downloadFeedbackTimerRef.current);
+      }
       if (dialWheelTimerRef.current !== null) window.clearTimeout(dialWheelTimerRef.current);
       releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       releaseTimersRef.current.clear();
@@ -1550,6 +1615,95 @@ export function AuraToy() {
     },
     [disposeToneEngine],
   );
+
+  const openMicrophonePrompt = useCallback(() => {
+    if (microphonePromptCloseTimerRef.current !== null) {
+      window.clearTimeout(microphonePromptCloseTimerRef.current);
+      microphonePromptCloseTimerRef.current = null;
+    }
+    microphoneAfterCloseRef.current = null;
+    setMicrophonePromptGranting(false);
+    setMicrophonePromptClosing(false);
+    setMicrophonePromptOpen(true);
+    hapticFeedback("open");
+  }, []);
+
+  const closeMicrophonePrompt = useCallback(
+    (afterClose?: () => void, feedback: HapticFeedback | null = "close") => {
+      if (!microphonePromptOpen) {
+        afterClose?.();
+        return;
+      }
+      if (microphonePromptCloseTimerRef.current !== null) {
+        window.clearTimeout(microphonePromptCloseTimerRef.current);
+      }
+      microphoneAfterCloseRef.current = afterClose ?? null;
+      setMicrophonePromptClosing(true);
+      if (feedback) hapticFeedback(feedback);
+      microphonePromptCloseTimerRef.current = window.setTimeout(() => {
+        microphonePromptCloseTimerRef.current = null;
+        setMicrophonePromptOpen(false);
+        setMicrophonePromptClosing(false);
+        setMicrophonePromptGranting(false);
+        const nextAction = microphoneAfterCloseRef.current;
+        microphoneAfterCloseRef.current = null;
+        if (nextAction) nextAction();
+        else microphoneButtonRef.current?.focus({ preventScroll: true });
+      }, reducedMotionRef.current ? 0 : OVERLAY_EXIT_DURATION);
+    },
+    [microphonePromptOpen],
+  );
+
+  useEffect(() => {
+    if (!microphonePromptOpen) return;
+    const handleMicrophonePromptKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !microphonePromptClosing) closeMicrophonePrompt();
+    };
+    window.addEventListener("keydown", handleMicrophonePromptKeyDown);
+    return () => window.removeEventListener("keydown", handleMicrophonePromptKeyDown);
+  }, [closeMicrophonePrompt, microphonePromptClosing, microphonePromptOpen]);
+
+  const openPreview = useCallback((kind: ExportKind) => {
+    if (previewCloseTimerRef.current !== null) {
+      window.clearTimeout(previewCloseTimerRef.current);
+      previewCloseTimerRef.current = null;
+    }
+    lastPreviewTriggerRef.current =
+      kind === "image" ? imagePreviewButtonRef.current : videoPreviewButtonRef.current;
+    setDownloadFeedback("idle");
+    setPreviewClosing(false);
+    setPreviewKind(kind);
+    hapticFeedback("open");
+  }, []);
+
+  const closePreview = useCallback(
+    (feedback: HapticFeedback | null = "close") => {
+      if (!previewKind || previewClosing) return;
+      if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current);
+      setPreviewClosing(true);
+      if (feedback) hapticFeedback(feedback);
+      previewCloseTimerRef.current = window.setTimeout(() => {
+        previewCloseTimerRef.current = null;
+        setPreviewKind(null);
+        setPreviewClosing(false);
+        setDownloadFeedback("idle");
+        lastPreviewTriggerRef.current?.focus({ preventScroll: true });
+      }, reducedMotionRef.current ? 0 : OVERLAY_EXIT_DURATION);
+    },
+    [previewClosing, previewKind],
+  );
+
+  const holdDownloadFeedback = useCallback((duration: number) => {
+    return new Promise<void>((resolve) => {
+      if (downloadFeedbackTimerRef.current !== null) {
+        window.clearTimeout(downloadFeedbackTimerRef.current);
+      }
+      downloadFeedbackTimerRef.current = window.setTimeout(() => {
+        downloadFeedbackTimerRef.current = null;
+        resolve();
+      }, reducedMotionRef.current ? 0 : duration);
+    });
+  }, []);
 
   const ensureTone = useCallback(async () => {
     if (!toneRef.current.ready) {
@@ -1728,7 +1882,14 @@ export function AuraToy() {
       window.clearTimeout(microphoneBeatTimerRef.current);
       microphoneBeatTimerRef.current = null;
     }
+    if (microphonePromptCloseTimerRef.current !== null) {
+      window.clearTimeout(microphonePromptCloseTimerRef.current);
+      microphonePromptCloseTimerRef.current = null;
+    }
+    microphoneAfterCloseRef.current = null;
     setMicrophonePromptOpen(false);
+    setMicrophonePromptClosing(false);
+    setMicrophonePromptGranting(false);
     setMicrophoneState("idle");
     setMicrophoneHarmonyPitchClasses([]);
     setMicrophoneMelodyPitchClass(null);
@@ -1849,6 +2010,7 @@ export function AuraToy() {
       };
       microphoneRef.current = runtime;
       setMicrophoneState("listening");
+      hapticFeedback("success");
 
       const analyze = (now: number) => {
         if (generation !== microphoneGenerationRef.current || microphoneRef.current !== runtime) return;
@@ -2317,6 +2479,7 @@ export function AuraToy() {
       setMicrophoneMelodyPitchClass(null);
       setMicrophoneBeatPitchClasses([]);
       setMicrophoneReading("Microphone unavailable");
+      hapticFeedback("error");
     }
   }, [spawnBlob, stopMicrophone]);
 
@@ -2341,20 +2504,21 @@ export function AuraToy() {
       void startMicrophone();
       return;
     }
-    setMicrophonePromptOpen(true);
-  }, [startMicrophone]);
+    openMicrophonePrompt();
+  }, [openMicrophonePrompt, startMicrophone]);
 
   const toggleMicrophone = useCallback(() => {
     if (microphonePromptOpen) {
-      setMicrophonePromptOpen(false);
+      closeMicrophonePrompt();
       return;
     }
     if (microphoneState === "listening" || microphoneState === "requesting") {
+      hapticFeedback("close");
       stopMicrophone();
       return;
     }
     void prepareMicrophone();
-  }, [microphonePromptOpen, microphoneState, prepareMicrophone, stopMicrophone]);
+  }, [closeMicrophonePrompt, microphonePromptOpen, microphoneState, prepareMicrophone, stopMicrophone]);
 
   const shiftedNote = useCallback(
     (key: KeySpec): NoteChoice => {
@@ -2432,7 +2596,7 @@ export function AuraToy() {
   useEffect(() => {
     const downKeys = new Set<string>();
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (previewKind) return;
+      if (previewKind || microphonePromptOpen) return;
       if (event.repeat || event.metaKey || event.altKey || event.ctrlKey) return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       const key = keyboardMap.get(event.key.toLowerCase());
@@ -2453,7 +2617,7 @@ export function AuraToy() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [endKey, keyboardMap, previewKind, startKey]);
+  }, [endKey, keyboardMap, microphonePromptOpen, previewKind, startKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2917,46 +3081,69 @@ export function AuraToy() {
   useEffect(() => {
     if (!previewKind) return;
     const handlePreviewKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && exportState === "idle") setPreviewKind(null);
+      if (event.key === "Escape" && exportState === "idle" && downloadFeedback === "idle") {
+        closePreview();
+      }
     };
     window.addEventListener("keydown", handlePreviewKeyDown);
     return () => window.removeEventListener("keydown", handlePreviewKeyDown);
-  }, [exportState, previewKind]);
+  }, [closePreview, downloadFeedback, exportState, previewKind]);
 
-  const downloadStill = useCallback(() => {
-    if (blobsRef.current.length === 0) return;
-    const output = createExportCanvas();
-    output.toBlob((blob) => {
-      if (!blob) return;
+  const downloadStill = useCallback(async () => {
+    if (blobsRef.current.length === 0 || exportState !== "idle") return;
+    setExportState("image");
+    setDownloadFeedback("preparing");
+    hapticFeedback("confirm");
+    await waitForPaint();
+
+    try {
+      const output = createExportCanvas();
+      const blob = await canvasToBlob(output, "image/png");
       downloadBlob(blob, `${exportFileStem()}.png`);
-      setPreviewKind(null);
-    }, "image/png");
-  }, [createExportCanvas]);
+      setExportState("idle");
+      setDownloadFeedback("complete");
+      hapticFeedback("success");
+      await holdDownloadFeedback(DOWNLOAD_COMPLETE_HOLD);
+      closePreview(null);
+    } catch {
+      setExportState("idle");
+      setDownloadFeedback("error");
+      hapticFeedback("error");
+      await holdDownloadFeedback(1000);
+      setDownloadFeedback("idle");
+    }
+  }, [closePreview, createExportCanvas, exportState, holdDownloadFeedback]);
 
   const downloadVideo = useCallback(async () => {
     if (blobsRef.current.length === 0 || exportState !== "idle") return;
-    if (typeof MediaRecorder === "undefined" || typeof HTMLCanvasElement.prototype.captureStream !== "function") return;
-
-    setExportState("video");
-    const output = createExportCanvas(0);
-    const outputContext = output.getContext("2d", { alpha: false });
-    if (!outputContext) {
-      setExportState("idle");
+    if (typeof MediaRecorder === "undefined" || typeof HTMLCanvasElement.prototype.captureStream !== "function") {
+      setDownloadFeedback("error");
+      hapticFeedback("error");
+      await holdDownloadFeedback(1000);
+      setDownloadFeedback("idle");
       return;
     }
 
-    const mimeType = supportedVideoType();
-    const stream = output.captureStream(24);
-    const recorder = new MediaRecorder(stream, {
-      ...(mimeType ? { mimeType } : {}),
-      videoBitsPerSecond: 7_500_000,
-    });
-    const chunks: BlobPart[] = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunks.push(event.data);
-    };
+    setExportState("video");
+    setDownloadFeedback("preparing");
+    hapticFeedback("confirm");
+    await waitForPaint();
+    let stream: MediaStream | null = null;
 
     try {
+      const output = createExportCanvas(0);
+      const outputContext = output.getContext("2d", { alpha: false });
+      if (!outputContext) throw new Error("Unable to prepare video canvas");
+      const mimeType = supportedVideoType();
+      stream = output.captureStream(24);
+      const recorder = new MediaRecorder(stream, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: 7_500_000,
+      });
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunks.push(event.data);
+      };
       const revealDuration = clamp(1800 + blobsRef.current.length * 75, 2800, 4800);
       const holdDuration = 900;
       await new Promise<void>((resolve, reject) => {
@@ -2982,12 +3169,22 @@ export function AuraToy() {
 
       const video = new Blob(chunks, { type: mimeType || "video/webm" });
       downloadBlob(video, `${exportFileStem()}.webm`);
-      setPreviewKind(null);
+      setExportState("idle");
+      setDownloadFeedback("complete");
+      hapticFeedback("success");
+      await holdDownloadFeedback(DOWNLOAD_COMPLETE_HOLD);
+      closePreview(null);
+    } catch {
+      setExportState("idle");
+      setDownloadFeedback("error");
+      hapticFeedback("error");
+      await holdDownloadFeedback(1000);
+      setDownloadFeedback("idle");
     } finally {
-      stream.getTracks().forEach((track) => track.stop());
+      stream?.getTracks().forEach((track) => track.stop());
       setExportState("idle");
     }
-  }, [createExportCanvas, exportState, renderArtwork]);
+  }, [closePreview, createExportCanvas, exportState, holdDownloadFeedback, renderArtwork]);
 
   const shiftOctave = useCallback((direction: -1 | 1) => {
     toneRef.current.synth?.releaseAll();
@@ -3029,14 +3226,21 @@ export function AuraToy() {
 
   useEffect(() => {
     const handleModeKeyboard = (event: KeyboardEvent) => {
-      if (previewKind || event.metaKey || event.altKey || event.ctrlKey || event.repeat) return;
+      if (
+        previewKind ||
+        microphonePromptOpen ||
+        event.metaKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.repeat
+      ) return;
       if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
       event.preventDefault();
       cycleSoundMode(event.key === "ArrowUp" ? -1 : 1);
     };
     window.addEventListener("keydown", handleModeKeyboard);
     return () => window.removeEventListener("keydown", handleModeKeyboard);
-  }, [cycleSoundMode, previewKind]);
+  }, [cycleSoundMode, microphonePromptOpen, previewKind]);
 
   const resetAura = useCallback(() => {
     blobsRef.current = [];
@@ -3257,13 +3461,15 @@ export function AuraToy() {
 
       {microphonePromptOpen ? (
         <div
-          className="microphone-permission-backdrop"
+          className={`microphone-permission-backdrop ${microphonePromptClosing ? "is-closing" : ""}`}
           onPointerDown={(event) => {
-            if (event.target === event.currentTarget) setMicrophonePromptOpen(false);
+            if (event.target === event.currentTarget && !microphonePromptClosing) {
+              closeMicrophonePrompt();
+            }
           }}
         >
           <section
-            className="microphone-permission"
+            className={`microphone-permission ${microphonePromptGranting ? "is-granting" : ""}`}
             role="dialog"
             aria-modal="true"
             aria-labelledby="microphone-permission-title"
@@ -3275,7 +3481,7 @@ export function AuraToy() {
                 className="preview-control dialog-close"
                 aria-label="Close microphone setup"
                 title="Close microphone setup"
-                onClick={() => setMicrophonePromptOpen(false)}
+                onClick={() => closeMicrophonePrompt()}
               >
                 <SolidControlIcon name="close" />
               </button>
@@ -3289,12 +3495,14 @@ export function AuraToy() {
               </div>
             </div>
             <button
+              ref={microphoneAllowRef}
               type="button"
-              className="microphone-permission-action"
+              className={`microphone-permission-action ${microphonePromptGranting ? "is-confirming" : ""}`}
               onClick={() => {
                 microphoneIntroductionShownRef.current = true;
-                setMicrophonePromptOpen(false);
-                void startMicrophone();
+                setMicrophonePromptGranting(true);
+                hapticFeedback("confirm");
+                closeMicrophonePrompt(() => void startMicrophone(), null);
               }}
             >
               Allow microphone
@@ -3305,22 +3513,24 @@ export function AuraToy() {
 
       <div className={`export-dock ${layerCount > 0 ? "is-ready" : ""}`} aria-label="Export visual">
         <button
+          ref={imagePreviewButtonRef}
           type="button"
           className="export-button"
           aria-label="Preview visual as PNG"
           title="Preview PNG"
           disabled={layerCount === 0 || exportState !== "idle"}
-          onClick={() => setPreviewKind("image")}
+          onClick={() => openPreview("image")}
         >
           <SolidControlIcon name="image" size={15} />
         </button>
         <button
+          ref={videoPreviewButtonRef}
           type="button"
           className={`export-button ${exportState === "video" ? "is-exporting" : ""}`}
           aria-label={exportState === "video" ? "Rendering video" : "Preview visual as video"}
           title={exportState === "video" ? "Rendering video" : "Preview WebM video"}
           disabled={layerCount === 0 || exportState !== "idle"}
-          onClick={() => setPreviewKind("video")}
+          onClick={() => openPreview("video")}
         >
           <SolidControlIcon name="video" size={15} />
         </button>
@@ -3331,13 +3541,18 @@ export function AuraToy() {
 
       {previewKind ? (
         <div
-          className="export-preview-backdrop"
+          className={`export-preview-backdrop ${previewClosing ? "is-closing" : ""}`}
           onPointerDown={(event) => {
-            if (event.target === event.currentTarget && exportState === "idle") setPreviewKind(null);
+            if (
+              event.target === event.currentTarget &&
+              exportState === "idle" &&
+              downloadFeedback === "idle" &&
+              !previewClosing
+            ) closePreview();
           }}
         >
           <section
-            className="export-preview"
+            className={`export-preview ${downloadFeedback !== "idle" ? "is-processing" : ""}`}
             role="dialog"
             aria-modal="true"
             aria-label={previewKind === "image" ? "Image export preview" : "Video export preview"}
@@ -3348,12 +3563,12 @@ export function AuraToy() {
                 <button
                   ref={previewDownloadRef}
                   type="button"
-                  className={`preview-control ${exportState === "video" ? "is-exporting" : ""}`}
+                  className={`preview-control ${downloadFeedback === "preparing" ? "is-exporting" : ""}`}
                   aria-label={previewKind === "image" ? "Download PNG" : "Download WebM video"}
                   title={previewKind === "image" ? "Download PNG" : "Download WebM video"}
-                  disabled={exportState !== "idle"}
+                  disabled={exportState !== "idle" || downloadFeedback !== "idle"}
                   onClick={() => {
-                    if (previewKind === "image") downloadStill();
+                    if (previewKind === "image") void downloadStill();
                     else void downloadVideo();
                   }}
                 >
@@ -3364,8 +3579,8 @@ export function AuraToy() {
                   className="preview-control dialog-close"
                   aria-label="Close export preview"
                   title="Close preview"
-                  disabled={exportState !== "idle"}
-                  onClick={() => setPreviewKind(null)}
+                  disabled={exportState !== "idle" || downloadFeedback !== "idle"}
+                  onClick={() => closePreview()}
                 >
                   <SolidControlIcon name="close" />
                 </button>
@@ -3373,6 +3588,36 @@ export function AuraToy() {
             </header>
             <div className="export-preview-screen">
               <canvas ref={previewCanvasRef} aria-label="Artwork to be saved" />
+              {downloadFeedback !== "idle" ? (
+                <div
+                  className={`export-feedback is-${downloadFeedback}`}
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  <span className="export-feedback-icon" aria-hidden="true">
+                    <SolidControlIcon
+                      name={
+                        downloadFeedback === "complete"
+                          ? "check"
+                          : downloadFeedback === "error"
+                            ? "close"
+                            : "download"
+                      }
+                      size={16}
+                    />
+                  </span>
+                  <span className="export-feedback-label">
+                    {downloadFeedback === "complete"
+                      ? "Saved"
+                      : downloadFeedback === "error"
+                        ? "Try again"
+                        : previewKind === "image"
+                          ? "Preparing image"
+                          : "Rendering motion"}
+                  </span>
+                </div>
+              ) : null}
             </div>
           </section>
         </div>
