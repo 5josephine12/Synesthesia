@@ -180,6 +180,9 @@ type MicrophoneRuntime = {
   chordChroma: Float32Array;
   melodyChroma: Float32Array;
   frameChroma: Float32Array;
+  candidateScores: Map<number, number>;
+  upperRegisterBoost: Float32Array;
+  melodyScores: Float32Array;
   animationFrame: number;
   analyze: FrameRequestCallback;
   lastAnalysisAt: number;
@@ -236,6 +239,14 @@ const DEFAULT_SOUND_MODE: SoundModeId = "piano";
 const RADIOGRAPHIC_HUES = [338, 322, 300, 282, 260, 238, 220, 10, 18, 348, 312, 248] as const;
 const MAJOR_SCALE_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88] as const;
 const MINOR_SCALE_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17] as const;
+const SCALE_PROFILES = [
+  { mode: "major", profile: MAJOR_SCALE_PROFILE },
+  { mode: "minor", profile: MINOR_SCALE_PROFILE },
+] as const;
+const CHORD_QUALITIES = [
+  { mode: "major", third: 4 },
+  { mode: "minor", third: 3 },
+] as const;
 const COMPOSITION_ANCHORS = [
   [0.14, 0.3],
   [0.82, 0.2],
@@ -647,10 +658,12 @@ function updateSpectrumAnalysis(
   previousSpectrum: Float32Array,
   chroma: Float32Array,
   frameChroma: Float32Array,
+  candidateScores: Map<number, number>,
   sampleRate: number,
   fftSize: number,
 ) {
   frameChroma.fill(0);
+  candidateScores.clear();
 
   const minimumBin = Math.max(1, Math.ceil((45 * fftSize) / sampleRate));
   const maximumBin = Math.min(frequencyData.length - 1, Math.floor((4200 * fftSize) / sampleRate));
@@ -669,7 +682,6 @@ function updateSpectrumAnalysis(
     if (decibels > peakDecibels) peakDecibels = decibels;
   }
 
-  const candidateScores = new Map<number, number>();
   const peakThreshold = Math.max(-78, peakDecibels - 30);
   const harmonicWeights = [1, 0.5, 0.32, 0.22] as const;
   for (let bin = minimumBin + 1; bin < maximumBin; bin += 1) {
@@ -706,28 +718,46 @@ function updateSpectrumAnalysis(
     chroma[pitchClass] = chroma[pitchClass] * 0.94 + frameChroma[pitchClass];
   }
 
-  const rankedPitchClasses = Array.from(frameChroma, (score, pitchClass) => ({ pitchClass, score })).sort(
-    (first, second) => second.score - first.score,
-  );
-  const strongestPitchClass = rankedPitchClasses[0]?.score ?? 0;
-  const totalPitchEnergy = rankedPitchClasses.reduce((sum, candidate) => sum + candidate.score, 0);
-  const pitchClasses = rankedPitchClasses
-    .filter(
-      ({ score }) =>
-        score > 0 &&
-        score >= strongestPitchClass * 0.38 &&
-        score >= Math.max(0.000001, totalPitchEnergy * 0.08),
-    )
-    .slice(0, 3)
-    .map(({ pitchClass }) => pitchClass);
+  let strongestPitchClass = 0;
+  let totalPitchEnergy = 0;
+  for (let pitchClass = 0; pitchClass < frameChroma.length; pitchClass += 1) {
+    const score = frameChroma[pitchClass];
+    strongestPitchClass = Math.max(strongestPitchClass, score);
+    totalPitchEnergy += score;
+  }
 
-  const rankedNotes = Array.from(candidateScores, ([midi, score]) => ({ midi, score })).sort(
-    (first, second) => second.score - first.score,
+  const pitchClasses: number[] = [];
+  const minimumPitchClassScore = Math.max(
+    strongestPitchClass * 0.38,
+    Math.max(0.000001, totalPitchEnergy * 0.08),
   );
-  const noteCandidates: SpectrumNote[] = pitchClasses.flatMap((pitchClass) => {
-    const candidate = rankedNotes.find(({ midi }) => modulo(midi, 12) === pitchClass);
-    return candidate ? [candidate] : [];
-  });
+  for (let rank = 0; rank < 3; rank += 1) {
+    let bestPitchClass = -1;
+    let bestScore = -Infinity;
+    for (let pitchClass = 0; pitchClass < frameChroma.length; pitchClass += 1) {
+      if (pitchClasses.includes(pitchClass)) continue;
+      const score = frameChroma[pitchClass];
+      if (score > bestScore) {
+        bestPitchClass = pitchClass;
+        bestScore = score;
+      }
+    }
+    if (bestPitchClass < 0 || bestScore <= 0 || bestScore < minimumPitchClassScore) break;
+    pitchClasses.push(bestPitchClass);
+  }
+
+  const noteCandidates: SpectrumNote[] = [];
+  for (const pitchClass of pitchClasses) {
+    let bestMidi: number | null = null;
+    let bestScore = -Infinity;
+    for (const [midi, score] of candidateScores) {
+      if (modulo(midi, 12) === pitchClass && score > bestScore) {
+        bestMidi = midi;
+        bestScore = score;
+      }
+    }
+    if (bestMidi !== null) noteCandidates.push({ midi: bestMidi, score: bestScore });
+  }
 
   return {
     spectralFlux,
@@ -742,44 +772,48 @@ function detectChordContext(chroma: Float32Array, bassPitchClass: number | null)
   const total = chroma.reduce((sum, value) => sum + value, 0);
   if (total < 0.0001) return null;
 
-  const candidates: Array<ChordContext & { score: number }> = [];
+  let bestRoot = 0;
+  let bestMode: ScaleMode = "major";
+  let bestThird = 4;
+  let bestScore = -Infinity;
+  let secondScore = -Infinity;
   for (let root = 0; root < 12; root += 1) {
-    for (const [mode, third] of [
-      ["major", 4],
-      ["minor", 3],
-    ] as const) {
-      const pitchClasses = [root, modulo(root + third, 12), modulo(root + 7, 12)];
+    for (const { mode, third } of CHORD_QUALITIES) {
+      const thirdPitchClass = modulo(root + third, 12);
+      const fifthPitchClass = modulo(root + 7, 12);
       const toneEnergy =
-        chroma[pitchClasses[0]] * 1.2 +
-        chroma[pitchClasses[1]] * 1.05 +
-        chroma[pitchClasses[2]] * 0.92;
-      const coverage = pitchClasses.reduce((sum, pitchClass) => sum + chroma[pitchClass], 0) / total;
+        chroma[root] * 1.2 +
+        chroma[thirdPitchClass] * 1.05 +
+        chroma[fifthPitchClass] * 0.92;
+      const coveredEnergy = chroma[root] + chroma[thirdPitchClass] + chroma[fifthPitchClass];
+      const coverage = coveredEnergy / total;
       const bassFit =
         bassPitchClass === root
           ? total * 0.24
-          : bassPitchClass !== null && pitchClasses.includes(bassPitchClass)
+          : bassPitchClass === thirdPitchClass || bassPitchClass === fifthPitchClass
             ? total * 0.08
             : 0;
-      candidates.push({
-        root,
-        mode,
-        pitchClasses,
-        confidence: 0,
-        score: toneEnergy + coverage * total * 0.36 + bassFit,
-      });
+      const score = toneEnergy + coverage * total * 0.36 + bassFit;
+      if (score > bestScore) {
+        secondScore = bestScore;
+        bestRoot = root;
+        bestMode = mode;
+        bestThird = third;
+        bestScore = score;
+      } else if (score > secondScore) {
+        secondScore = score;
+      }
     }
   }
 
-  candidates.sort((first, second) => second.score - first.score);
-  const best = candidates[0];
-  const second = candidates[1];
-  if (!best) return null;
-  const coverage = best.pitchClasses.reduce((sum, pitchClass) => sum + chroma[pitchClass], 0) / total;
-  const margin = (best.score - (second?.score ?? 0)) / Math.max(0.0001, best.score);
+  const pitchClasses = [bestRoot, modulo(bestRoot + bestThird, 12), modulo(bestRoot + 7, 12)];
+  const coverage =
+    (chroma[pitchClasses[0]] + chroma[pitchClasses[1]] + chroma[pitchClasses[2]]) / total;
+  const margin = (bestScore - secondScore) / Math.max(0.0001, bestScore);
   return {
-    root: best.root,
-    mode: best.mode,
-    pitchClasses: best.pitchClasses,
+    root: bestRoot,
+    mode: bestMode,
+    pitchClasses,
     confidence: clamp(coverage * 0.72 + margin * 2.4, 0, 1),
   };
 }
@@ -788,20 +822,21 @@ function detectHarmonicContext(chroma: Float32Array): HarmonicContext | null {
   const total = chroma.reduce((sum, value) => sum + value, 0);
   if (total < 0.0001) return null;
 
-  let best: HarmonicContext & { score: number } = { root: 0, mode: "major", confidence: 0, score: -Infinity };
+  let bestRoot = 0;
+  let bestMode: ScaleMode = "major";
+  let bestScore = -Infinity;
   let secondScore = -Infinity;
   for (let root = 0; root < 12; root += 1) {
-    for (const [mode, profile] of [
-      ["major", MAJOR_SCALE_PROFILE],
-      ["minor", MINOR_SCALE_PROFILE],
-    ] as const) {
+    for (const { mode, profile } of SCALE_PROFILES) {
       let score = 0;
       for (let degree = 0; degree < 12; degree += 1) {
         score += (chroma[modulo(root + degree, 12)] / total) * profile[degree];
       }
-      if (score > best.score) {
-        secondScore = best.score;
-        best = { root, mode, confidence: 0, score };
+      if (score > bestScore) {
+        secondScore = bestScore;
+        bestRoot = root;
+        bestMode = mode;
+        bestScore = score;
       } else if (score > secondScore) {
         secondScore = score;
       }
@@ -809,9 +844,9 @@ function detectHarmonicContext(chroma: Float32Array): HarmonicContext | null {
   }
 
   return {
-    root: best.root,
-    mode: best.mode,
-    confidence: clamp(((best.score - secondScore) / Math.max(0.001, best.score)) * 5, 0, 1),
+    root: bestRoot,
+    mode: bestMode,
+    confidence: clamp(((bestScore - secondScore) / Math.max(0.001, bestScore)) * 5, 0, 1),
   };
 }
 
@@ -876,10 +911,13 @@ function makeNoiseTile(size: number, alpha = 18, seed = 0x4a3035) {
   return tile;
 }
 
-function drawGrain(context: CanvasRenderingContext2D, width: number, height: number, tile: HTMLCanvasElement, alpha: number) {
-  const pattern = context.createPattern(tile, "repeat");
-  if (!pattern) return;
-
+function drawGrainPattern(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  pattern: CanvasPattern,
+  alpha: number,
+) {
   context.save();
   context.globalCompositeOperation = "overlay";
   context.globalAlpha = alpha;
@@ -1267,14 +1305,18 @@ function drawAuraComposition(
   height: number,
   now: number,
   replayProgress?: number,
+  startIndex = 0,
+  endIndex = blobs.length,
 ) {
   const shortSide = Math.min(width, height);
   const replayPosition = replayProgress === undefined ? Number.POSITIVE_INFINITY : replayProgress * (blobs.length + 0.9);
+  const limit = Math.min(endIndex, blobs.length);
 
   context.save();
-  blobs.forEach((blob, index) => {
+  for (let index = startIndex; index < limit; index += 1) {
+    const blob = blobs[index];
     const replayAge = replayPosition - index;
-    if (replayAge <= 0) return;
+    if (replayAge <= 0) continue;
 
     const age = replayProgress === undefined ? Math.max(0, now - blob.createdAt) : replayAge * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
@@ -1288,7 +1330,7 @@ function drawAuraComposition(
 
     context.globalCompositeOperation = blob.blendMode;
     drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha, preserveColor);
-  });
+  }
   context.restore();
 }
 
@@ -1317,6 +1359,7 @@ export function AuraToy() {
   const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
   const microphoneIntroductionShownRef = useRef(false);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
+  const exportGrainPatternsRef = useRef<WeakMap<HTMLCanvasElement, CanvasPattern>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
@@ -1690,6 +1733,9 @@ export function AuraToy() {
         chordChroma: new Float32Array(12),
         melodyChroma: new Float32Array(12),
         frameChroma: new Float32Array(12),
+        candidateScores: new Map<number, number>(),
+        upperRegisterBoost: new Float32Array(12),
+        melodyScores: new Float32Array(12),
         animationFrame: 0,
         analyze: () => undefined,
         lastAnalysisAt: -Infinity,
@@ -1752,7 +1798,9 @@ export function AuraToy() {
           runtime.noiseFloor = clamp(lerp(runtime.noiseFloor, rms, 0.08), 0.0008, 0.006);
         }
         const gate = clamp(runtime.noiseFloor * 1.55, 0.0022, 0.0085);
-        const [frequency, clarity] = detector.findPitch(runtime.timeDomain, audioContext.sampleRate);
+        const [frequency, clarity] = rms > runtime.noiseFloor * 1.08
+          ? detector.findPitch(runtime.timeDomain, audioContext.sampleRate)
+          : [0, 0];
         const midiFloat = frequency > 0 ? frequencyToMidi(frequency) : Number.NaN;
         const nearestMidi = Number.isFinite(midiFloat) ? Math.round(midiFloat) : null;
         const pitchedSignal =
@@ -1772,6 +1820,7 @@ export function AuraToy() {
             runtime.previousSpectrum,
             runtime.chroma,
             runtime.frameChroma,
+            runtime.candidateScores,
             audioContext.sampleRate,
             analyser.fftSize,
           );
@@ -1861,7 +1910,8 @@ export function AuraToy() {
           (bassMidi === null || nearestMidi >= bassMidi + 7)
             ? modulo(nearestMidi, 12)
             : null;
-        const upperRegisterBoost = new Float32Array(12);
+        const upperRegisterBoost = runtime.upperRegisterBoost;
+        upperRegisterBoost.fill(0);
         for (const candidate of noteCandidates) {
           if (bassMidi !== null && candidate.midi < bassMidi + 7) continue;
           const pitchClass = modulo(candidate.midi, 12);
@@ -1876,37 +1926,43 @@ export function AuraToy() {
             1.42,
           );
         }
-        const melodyNotes = Array.from(runtime.melodyChroma, (score, pitchClass) => ({
-          pitchClass,
-          score:
-            score *
+        const melodyScores = runtime.melodyScores;
+        let melodyLeaderPitchClass: number | null = null;
+        let melodyLeaderScore = -Infinity;
+        for (let pitchClass = 0; pitchClass < melodyScores.length; pitchClass += 1) {
+          const score =
+            runtime.melodyChroma[pitchClass] *
             (upperRegisterBoost[pitchClass] ||
               (pitchClass === runtime.melodyPitchClass && now - runtime.melodyLastSeenAt <= 220
                 ? 0.88
                 : 0.68)) *
-            (runtime.leftHandPitchClasses.includes(pitchClass) ? 0.58 : 1),
-        }))
-          .filter(({ score }) => score > 0.000001)
-          .sort((first, second) => second.score - first.score);
-        const melodyLeader = melodyNotes[0] ?? null;
-        const currentMelodyEvidence = melodyNotes.find(
-          ({ pitchClass }) => pitchClass === runtime.melodyPitchClass,
-        );
-        const pendingMelodyEvidence = melodyNotes.find(
-          ({ pitchClass }) => pitchClass === runtime.melodyCandidatePitchClass,
-        );
+            (runtime.leftHandPitchClasses.includes(pitchClass) ? 0.58 : 1);
+          melodyScores[pitchClass] = score;
+          if (score > 0.000001 && score > melodyLeaderScore) {
+            melodyLeaderPitchClass = pitchClass;
+            melodyLeaderScore = score;
+          }
+        }
+        const currentMelodyScore = runtime.melodyPitchClass === null
+          ? 0
+          : melodyScores[runtime.melodyPitchClass];
+        const pendingMelodyScore = runtime.melodyCandidatePitchClass === null
+          ? 0
+          : melodyScores[runtime.melodyCandidatePitchClass];
         const melodyCandidate = !activeSignal
           ? null
           : clearMelodyPitchClass ??
-            (currentMelodyEvidence &&
-            melodyLeader &&
-            currentMelodyEvidence.score >= melodyLeader.score * 0.56
-              ? currentMelodyEvidence.pitchClass
-              : pendingMelodyEvidence &&
-                  melodyLeader &&
-                  pendingMelodyEvidence.score >= melodyLeader.score * 0.68
-                ? pendingMelodyEvidence.pitchClass
-                : melodyLeader?.pitchClass ?? null);
+            (runtime.melodyPitchClass !== null &&
+            melodyLeaderPitchClass !== null &&
+            currentMelodyScore > 0.000001 &&
+            currentMelodyScore >= melodyLeaderScore * 0.56
+              ? runtime.melodyPitchClass
+              : runtime.melodyCandidatePitchClass !== null &&
+                  melodyLeaderPitchClass !== null &&
+                  pendingMelodyScore > 0.000001 &&
+                  pendingMelodyScore >= melodyLeaderScore * 0.68
+                ? runtime.melodyCandidatePitchClass
+                : melodyLeaderPitchClass);
         let melodyOnsetPitchClass: number | null = null;
 
         if (melodyCandidate !== null) {
@@ -1955,17 +2011,20 @@ export function AuraToy() {
         const chordContext = activeSignal
           ? detectChordContext(runtime.chordChroma, bassPitchClass)
           : null;
-        const chordEnergy = runtime.chordChroma.reduce((sum, value) => sum + value, 0);
-        const strongestChordTone = runtime.chordChroma.reduce(
-          (strongest, value) => Math.max(strongest, value),
-          0,
-        );
-        const chordEvidenceCount = runtime.chordChroma.reduce(
-          (count, value) =>
-            count +
-            (value >= strongestChordTone * 0.32 && value >= chordEnergy * 0.08 ? 1 : 0),
-          0,
-        );
+        let chordEnergy = 0;
+        let strongestChordTone = 0;
+        for (let pitchClass = 0; pitchClass < runtime.chordChroma.length; pitchClass += 1) {
+          const value = runtime.chordChroma[pitchClass];
+          chordEnergy += value;
+          strongestChordTone = Math.max(strongestChordTone, value);
+        }
+        let chordEvidenceCount = 0;
+        for (let pitchClass = 0; pitchClass < runtime.chordChroma.length; pitchClass += 1) {
+          const value = runtime.chordChroma[pitchClass];
+          if (value >= strongestChordTone * 0.32 && value >= chordEnergy * 0.08) {
+            chordEvidenceCount += 1;
+          }
+        }
         const hasChordEvidence = chordEvidenceCount >= 2;
         let leftHandCandidate =
           chordContext &&
@@ -2290,13 +2349,16 @@ export function AuraToy() {
     const offscreenContext = offscreen.getContext("2d", { alpha: true });
     const settled = document.createElement("canvas");
     const settledContext = settled.getContext("2d", { alpha: true });
+    const settledSnapshot = document.createElement("canvas");
+    const settledSnapshotContext = settledSnapshot.getContext("2d", { alpha: true });
     const saturationProbe = document.createElement("canvas");
     saturationProbe.width = 48;
     saturationProbe.height = 32;
     const saturationProbeContext = saturationProbe.getContext("2d", { willReadFrequently: true });
-    if (!offscreenContext || !settledContext || !saturationProbeContext) return;
+    if (!offscreenContext || !settledContext || !settledSnapshotContext || !saturationProbeContext) return;
 
     grainRef.current = makeNoiseTile(160, 20);
+    const grainPattern = context.createPattern(grainRef.current, "repeat");
     let width = 1;
     let height = 1;
     let dpr = 1;
@@ -2305,17 +2367,38 @@ export function AuraToy() {
     let lastDrawAt = -Infinity;
     let settledCount = 0;
 
-    const syncOffscreenSize = () => {
+    const syncOffscreenSize = (preserveSettled = false) => {
       const layerTotal = blobsRef.current.length;
       const renderScale = layerTotal > 320 ? 0.34 : layerTotal > 140 ? 0.42 : 0.5;
       const targetWidth = Math.max(1, Math.round(width * renderScale));
       const targetHeight = Math.max(1, Math.round(height * renderScale));
       if (offscreen.width !== targetWidth || offscreen.height !== targetHeight) {
+        const canPreserveSettled = preserveSettled && settledCount > 0;
+        if (canPreserveSettled) {
+          settledSnapshot.width = settled.width;
+          settledSnapshot.height = settled.height;
+          settledSnapshotContext.clearRect(0, 0, settledSnapshot.width, settledSnapshot.height);
+          settledSnapshotContext.drawImage(settled, 0, 0);
+        }
         offscreen.width = targetWidth;
         offscreen.height = targetHeight;
         settled.width = targetWidth;
         settled.height = targetHeight;
-        settledCount = 0;
+        if (canPreserveSettled) {
+          settledContext.drawImage(
+            settledSnapshot,
+            0,
+            0,
+            settledSnapshot.width,
+            settledSnapshot.height,
+            0,
+            0,
+            targetWidth,
+            targetHeight,
+          );
+        } else {
+          settledCount = 0;
+        }
       }
     };
 
@@ -2327,7 +2410,7 @@ export function AuraToy() {
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      syncOffscreenSize();
+      syncOffscreenSize(false);
     };
 
     const drawEmptyAura = () => {
@@ -2373,7 +2456,7 @@ export function AuraToy() {
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
 
-      syncOffscreenSize();
+      syncOffscreenSize(true);
       if (blobsRef.current.length < settledCount) {
         settledContext.clearRect(0, 0, settled.width, settled.height);
         settledCount = 0;
@@ -2383,10 +2466,13 @@ export function AuraToy() {
         if (!reducedMotionRef.current && now - blob.createdAt < BLOB_ARRIVAL_DURATION) break;
         drawAuraComposition(
           settledContext,
-          [blob],
+          blobsRef.current,
           settled.width,
           settled.height,
           blob.createdAt + BLOB_ARRIVAL_DURATION,
+          undefined,
+          settledCount,
+          settledCount + 1,
         );
         settledCount += 1;
         if (
@@ -2406,10 +2492,12 @@ export function AuraToy() {
         const effectiveNow = reducedMotionRef.current && newestBlob ? newestBlob.createdAt + BLOB_ARRIVAL_DURATION : now;
         drawAuraComposition(
           offscreenContext,
-          blobsRef.current.slice(settledCount),
+          blobsRef.current,
           offscreen.width,
           offscreen.height,
           effectiveNow,
+          undefined,
+          settledCount,
         );
       }
 
@@ -2419,13 +2507,15 @@ export function AuraToy() {
       context.drawImage(offscreen, 0, 0, width, height);
       context.restore();
 
-      if (grainRef.current) {
-        drawGrain(context, width, height, grainRef.current, 0.055);
+      if (grainPattern) {
+        drawGrainPattern(context, width, height, grainPattern, 0.055);
       }
 
+      const newestBlob = blobsRef.current.at(-1);
       const hasArrivingBlob =
         !reducedMotionRef.current &&
-        blobsRef.current.some((blob) => now - blob.createdAt < BLOB_ARRIVAL_DURATION);
+        newestBlob !== undefined &&
+        now - newestBlob.createdAt < BLOB_ARRIVAL_DURATION;
       if (hasArrivingBlob) {
         wakeRenderer();
       }
@@ -2495,7 +2585,12 @@ export function AuraToy() {
     outputContext.drawImage(auraLayer, 0, 0, output.width, output.height);
     outputContext.restore();
     if (grainRef.current) {
-      drawGrain(outputContext, output.width, output.height, grainRef.current, 0.035);
+      let grainPattern = exportGrainPatternsRef.current.get(output);
+      if (!grainPattern) {
+        grainPattern = outputContext.createPattern(grainRef.current, "repeat") ?? undefined;
+        if (grainPattern) exportGrainPatternsRef.current.set(output, grainPattern);
+      }
+      if (grainPattern) drawGrainPattern(outputContext, output.width, output.height, grainPattern, 0.035);
     }
   }, []);
 
