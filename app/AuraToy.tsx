@@ -48,7 +48,7 @@ function SolidControlIcon({
         </>
       ) : null}
       {name === "download" ? (
-        <path d="M12 3v13m-5-5 5 5 5-5M5 21h14" />
+        <path d="M12 1.75v14.5M5 9.5l7 6.75 7-6.75M3.5 21.5h17" />
       ) : null}
       {name === "close" ? (
         <path d="m6 6 12 12M18 6 6 18" />
