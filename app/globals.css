@@ -88,8 +88,9 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 100%;
-  padding: 0 16px;
+  width: 1080px;
+  height: 322px;
+  padding: 0;
   opacity: 1;
   pointer-events: auto;
   transform: translate(-50%, -50%);
@@ -99,29 +100,34 @@ button {
 }
 
 .instrument-body {
+  --instrument-scale: min(
+    1,
+    calc((100vw - 32px) / 1080px),
+    calc((100dvh - 32px) / 322px)
+  );
   position: relative;
-  width: min(1080px, calc(100vw - 32px));
-  min-height: 190px;
-  max-height: 322px;
-  aspect-ratio: 1080 / 322;
-  padding: clamp(12px, 2.35vw, 16px);
+  width: 1080px;
+  height: 322px;
+  padding: 16px;
   border: 1px solid rgba(137, 136, 146, 0.07);
-  border-radius: clamp(28px, 6.15vw, 42px);
+  border-radius: 42px;
   background: var(--instrument-surface);
   box-shadow: none;
+  transform: scale(var(--instrument-scale));
+  transform-origin: center;
 }
 
 .instrument-header {
-  --header-rule-gap: clamp(18px, 2.5vw, 30px);
+  --header-rule-gap: 30px;
   position: relative;
   z-index: 4;
   display: grid;
   grid-template-columns: 13px auto minmax(40px, 1fr) auto;
   align-items: center;
   gap: 0;
-  height: clamp(40px, 6vw, 44px);
-  margin-right: clamp(10px, 1.5vw, 18px);
-  margin-left: clamp(12px, 2.35vw, 28px);
+  height: 44px;
+  margin-right: 18px;
+  margin-left: 28px;
   transform: translateY(2px);
 }
 
@@ -174,7 +180,7 @@ button {
   z-index: 5;
   width: 112px;
   margin-right: var(--header-rule-gap);
-  margin-left: clamp(16px, 2.67vw, 32px);
+  margin-left: 32px;
 }
 
 .mode-screen {
@@ -375,8 +381,8 @@ button {
 .keybed {
   position: relative;
   z-index: 1;
-  height: calc(100% - clamp(40px, 6vw, 44px) - clamp(10px, 1.5vw, 15px));
-  margin-top: clamp(10px, 1.5vw, 15px);
+  height: calc(100% - 44px - 15px);
+  margin-top: 15px;
 }
 
 .white-keys {
@@ -427,17 +433,17 @@ button {
 }
 
 .white-key:first-child {
-  border-bottom-left-radius: clamp(20px, 4.4vw, 30px);
+  border-bottom-left-radius: 30px;
 }
 
 .white-key:last-child {
-  border-bottom-right-radius: clamp(20px, 4.4vw, 30px);
+  border-bottom-right-radius: 30px;
 }
 
 .upper-key-slot {
   --white-key-width: calc((100% - 130px) / 14);
   --upper-slot-width: calc(var(--white-key-width) * 0.84);
-  --upper-slot-depth: clamp(7px, 1.17vw, 14px);
+  --upper-slot-depth: 14px;
   position: absolute;
   top: 0;
   left: calc(var(--upper-left) - (var(--upper-slot-width) / 2));
@@ -935,41 +941,14 @@ button {
 }
 
 @media (max-width: 620px) {
-  .instrument-header {
-    grid-template-columns: 13px auto minmax(18px, 1fr) auto;
-  }
-
-  .transport {
-    gap: 8px;
-  }
-
-  .transport-button,
   .export-button,
   .preview-control {
     width: 32px;
     height: 32px;
   }
-
-  .white-keys {
-    gap: 3px;
-  }
-
-  .upper-key-slot {
-    --white-key-width: calc((100% - 39px) / 14);
-  }
-}
-
-@media (max-height: 700px) and (min-width: 621px) {
-  .instrument-body {
-    width: min(900px, calc(100vw - 32px));
-  }
 }
 
 @media (max-width: 420px) {
-  .mode-dial {
-    width: 96px;
-  }
-
   .microphone-permission-backdrop,
   .export-preview-backdrop {
     padding: 12px;
