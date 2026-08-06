@@ -228,6 +228,7 @@ const BLOB_ARRIVAL_DURATION = 550;
 const SATURATION_CHECK_INTERVAL = 6;
 const SATURATION_MINIMUM_LAYERS = 24;
 const MAXIMUM_ADDITIVE_LAYERS = 48;
+const COLOR_REBUILD_LAYERS = 18;
 const SATURATION_COVERAGE_THRESHOLD = 0.14;
 const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 30;
 const MICROPHONE_FFT_SIZE = 4096;
@@ -989,6 +990,18 @@ function drawTissueWash(
   context.restore();
 }
 
+function auraHighlightColor(blob: BlobParticle, alpha: number, preserveColor: boolean) {
+  if (!preserveColor) return `rgba(255, 255, 255, ${alpha})`;
+  return colorToHslar(
+    {
+      h: blob.accent.h,
+      s: clamp(blob.accent.s + 4, 0, 100),
+      l: clamp(blob.accent.l + 18, 0, 82),
+    },
+    Math.min(1, alpha * 1.16),
+  );
+}
+
 function drawAuraParticle(
   context: CanvasRenderingContext2D,
   blob: BlobParticle,
@@ -996,6 +1009,7 @@ function drawAuraParticle(
   centerY: number,
   radius: number,
   alpha: number,
+  preserveColor = false,
 ) {
   context.save();
   context.translate(centerX, centerY);
@@ -1018,7 +1032,7 @@ function drawAuraParticle(
     context.fill();
 
     const nucleus = context.createRadialGradient(radius * 0.12, -radius * 0.08, 0, radius * 0.12, -radius * 0.08, radius * 0.34);
-    nucleus.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.34})`);
+    nucleus.addColorStop(0, auraHighlightColor(blob, alpha * 0.34, preserveColor));
     nucleus.addColorStop(0.2, colorToHslar(blob.accent, alpha * 0.9));
     nucleus.addColorStop(1, colorToHslar(blob.accent, 0));
     context.fillStyle = nucleus;
@@ -1044,7 +1058,7 @@ function drawAuraParticle(
     context.stroke();
 
     context.shadowBlur = 0;
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.28})`;
+    context.strokeStyle = auraHighlightColor(blob, alpha * 0.28, preserveColor);
     context.lineWidth *= 0.16;
     traceRibbon();
     context.stroke();
@@ -1079,7 +1093,7 @@ function drawAuraParticle(
     context.stroke();
 
     context.shadowBlur = 0;
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.26})`;
+    context.strokeStyle = auraHighlightColor(blob, alpha * 0.26, preserveColor);
     context.lineWidth *= 0.14;
     context.beginPath();
     context.arc(0, 0, radius, startAngle + 0.08, endAngle - 0.08);
@@ -1101,7 +1115,7 @@ function drawAuraParticle(
     context.fill();
 
     context.shadowBlur = 0;
-    context.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.24})`;
+    context.strokeStyle = auraHighlightColor(blob, alpha * 0.24, preserveColor);
     context.lineWidth = Math.max(0.5, radius * 0.025);
     context.stroke();
   }
@@ -1145,7 +1159,7 @@ function drawAuraParticle(
       }
       context.strokeStyle =
         track === 0
-          ? `rgba(255, 255, 255, ${alpha * 0.24})`
+          ? auraHighlightColor(blob, alpha * 0.24, preserveColor)
           : makeLinearAuraGradient(context, blob, length, alpha * 0.68, track > 0);
       context.lineWidth = radius * (track === 0 ? 0.035 : 0.11 + blob.thickness * 0.08);
       context.stroke();
@@ -1163,7 +1177,7 @@ function drawAuraParticle(
       context.arc(0, 0, ringRadius, -Math.PI * (0.86 - ring * 0.05), Math.PI * (0.96 + ring * 0.08));
       context.strokeStyle =
         ring === 1
-          ? `rgba(255, 255, 255, ${alpha * 0.22})`
+          ? auraHighlightColor(blob, alpha * 0.22, preserveColor)
           : colorToHslar(ring === 0 ? blob.accent : blob.color, alpha * (0.62 - ring * 0.12));
       context.lineWidth = radius * (0.055 + blob.thickness * 0.055);
       context.stroke();
@@ -1182,13 +1196,15 @@ function drawAuraParticle(
       context.beginPath();
       context.moveTo(Math.cos(rayAngle) * inner, Math.sin(rayAngle) * inner);
       context.lineTo(Math.cos(rayAngle) * outer, Math.sin(rayAngle) * outer);
-      context.strokeStyle = ray % 3 === 0 ? `rgba(255, 255, 255, ${alpha * 0.24})` : colorToHslar(blob.color, alpha * 0.5);
+      context.strokeStyle = ray % 3 === 0
+        ? auraHighlightColor(blob, alpha * 0.24, preserveColor)
+        : colorToHslar(blob.color, alpha * 0.5);
       context.lineWidth = radius * (0.025 + blob.thickness * 0.035);
       context.stroke();
       context.shadowBlur = 0;
     }
     const core = context.createRadialGradient(0, 0, 0, 0, 0, radius * 0.36);
-    core.addColorStop(0, `rgba(255, 255, 255, ${alpha * 0.3})`);
+    core.addColorStop(0, auraHighlightColor(blob, alpha * 0.3, preserveColor));
     core.addColorStop(0.28, colorToHslar(blob.accent, alpha * 0.72));
     core.addColorStop(1, colorToHslar(blob.color, 0));
     context.fillStyle = core;
@@ -1263,10 +1279,15 @@ function drawAuraComposition(
     const age = replayProgress === undefined ? Math.max(0, now - blob.createdAt) : replayAge * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
-    const alpha = clamp((0.4 + blob.velocity * 0.48) * Math.min(1, replayAge), 0, 0.88);
+    const preserveColor = blob.blendMode === "source-over";
+    const alpha = clamp(
+      (0.4 + blob.velocity * 0.48) * Math.min(1, replayAge) * (preserveColor ? 1.12 : 1),
+      0,
+      preserveColor ? 0.96 : 0.88,
+    );
 
     context.globalCompositeOperation = blob.blendMode;
-    drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha);
+    drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha, preserveColor);
   });
   context.restore();
 }
@@ -1300,7 +1321,8 @@ export function AuraToy() {
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
   const grainRef = useRef<HTMLCanvasElement | null>(null);
-  const contrastLayeringRef = useRef(false);
+  const colorRebuildLayersRef = useRef(0);
+  const additiveLayerStartRef = useRef(0);
   const reducedMotionRef = useRef(false);
   const audioGenerationRef = useRef(0);
   const visualGenerationRef = useRef(0);
@@ -1555,8 +1577,18 @@ export function AuraToy() {
       l: clamp(51 + identityRng() * 14, 0, 69),
     };
 
-    if (blobsRef.current.length >= MAXIMUM_ADDITIVE_LAYERS) {
-      contrastLayeringRef.current = true;
+    const layerIndex = blobsRef.current.length;
+    if (
+      colorRebuildLayersRef.current === 0 &&
+      layerIndex - additiveLayerStartRef.current >= MAXIMUM_ADDITIVE_LAYERS
+    ) {
+      colorRebuildLayersRef.current = COLOR_REBUILD_LAYERS;
+    }
+
+    const blendMode: AuraBlendMode = colorRebuildLayersRef.current > 0 ? "source-over" : "lighter";
+    if (colorRebuildLayersRef.current > 0) {
+      colorRebuildLayersRef.current -= 1;
+      if (colorRebuildLayersRef.current === 0) additiveLayerStartRef.current = layerIndex + 1;
     }
 
     blobsRef.current.push({
@@ -1574,7 +1606,7 @@ export function AuraToy() {
       curvature: (identityRng() - 0.5) * 1.65 + Math.sin(repeat * 0.62) * 0.14,
       velocity,
       softness: clamp(profile.softness + (identityRng() - 0.5) * 0.18, 0.24, 0.98),
-      blendMode: contrastLayeringRef.current ? "source-over" : "lighter",
+      blendMode,
       createdAt: now,
     });
 
@@ -2312,7 +2344,8 @@ export function AuraToy() {
       settledContext.clearRect(0, 0, settled.width, settled.height);
       offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
       settledCount = 0;
-      contrastLayeringRef.current = false;
+      colorRebuildLayersRef.current = 0;
+      additiveLayerStartRef.current = 0;
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
     };
@@ -2357,12 +2390,12 @@ export function AuraToy() {
         );
         settledCount += 1;
         if (
-          !contrastLayeringRef.current &&
-          settledCount >= SATURATION_MINIMUM_LAYERS &&
+          colorRebuildLayersRef.current === 0 &&
+          settledCount - additiveLayerStartRef.current >= SATURATION_MINIMUM_LAYERS &&
           settledCount % SATURATION_CHECK_INTERVAL === 0 &&
           isAuraWashedOut(settled, saturationProbe, saturationProbeContext)
         ) {
-          contrastLayeringRef.current = true;
+          colorRebuildLayersRef.current = COLOR_REBUILD_LAYERS;
         }
       }
 
@@ -2648,7 +2681,8 @@ export function AuraToy() {
     blobsRef.current = [];
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
-    contrastLayeringRef.current = false;
+    colorRebuildLayersRef.current = 0;
+    additiveLayerStartRef.current = 0;
     resetRendererRef.current?.();
 
     const microphone = microphoneRef.current;
