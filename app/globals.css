@@ -368,7 +368,8 @@ button {
 .control-icon {
   display: block;
   flex: none;
-  stroke: currentColor;
+  fill: currentColor;
+  stroke: none;
 }
 
 .keybed {

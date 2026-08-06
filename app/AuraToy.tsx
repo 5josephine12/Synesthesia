@@ -2,16 +2,58 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-import {
-  Download,
-  Image as ImageIcon,
-  Mic,
-  MicOff,
-  Video as VideoIcon,
-  X,
-} from "lucide-react";
 import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
+
+type SolidControlIconName = "close" | "download" | "image" | "mic" | "mic-off" | "video";
+
+function SolidControlIcon({
+  name,
+  size = 15,
+}: {
+  name: SolidControlIconName;
+  size?: number;
+}) {
+  return (
+    <svg
+      className="control-icon solid-control-icon"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      data-solid-icon={name}
+    >
+      {name === "mic" || name === "mic-off" ? (
+        <>
+          <path d="M12 14.25a3.5 3.5 0 0 0 3.5-3.5V5.5a3.5 3.5 0 1 0-7 0v5.25a3.5 3.5 0 0 0 3.5 3.5Z" />
+          <path d="M18.75 10.25h-2a4.75 4.75 0 0 1-9.5 0h-2A6.75 6.75 0 0 0 11 16.93V20H8.5v2h7v-2H13v-3.07a6.75 6.75 0 0 0 5.75-6.68Z" />
+          {name === "mic-off" ? (
+            <path d="m3.55 4.96 1.41-1.41 15.49 15.49-1.41 1.41Z" />
+          ) : null}
+        </>
+      ) : null}
+      {name === "image" ? (
+        <>
+          <circle cx="8.1" cy="7.7" r="2.35" />
+          <path d="m2.75 20 6.7-8.2 3.55 4.1 2.55-3.1L21.25 20Z" />
+        </>
+      ) : null}
+      {name === "video" ? (
+        <>
+          <rect x="2.5" y="5.5" width="13.5" height="13" rx="2.5" />
+          <path d="m17.5 9 4-2.3v10.6l-4-2.3Z" />
+        </>
+      ) : null}
+      {name === "download" ? (
+        <path d="M10.75 2h2.5v11.05l3.48-3.48 1.77 1.77L12 17.84l-6.5-6.5 1.77-1.77 3.48 3.48ZM4 19h16v3H4Z" />
+      ) : null}
+      {name === "close" ? (
+        <path d="m5.1 6.87 1.77-1.77L12 10.23l5.13-5.13 1.77 1.77L13.77 12l5.13 5.13-1.77 1.77L12 13.77 6.87 18.9 5.1 17.13 10.23 12Z" />
+      ) : null}
+    </svg>
+  );
+}
 
 type Color = {
   h: number;
@@ -2759,9 +2801,9 @@ export function AuraToy() {
           onClick={toggleMicrophone}
         >
           {microphoneState === "error" || microphoneState === "unsupported" ? (
-            <MicOff className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+            <SolidControlIcon name="mic-off" size={15} />
           ) : (
-            <Mic className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+            <SolidControlIcon name="mic" size={15} />
           )}
         </button>
         <span className="sr-only" role="status" aria-live="polite">
@@ -2791,13 +2833,13 @@ export function AuraToy() {
                 title="Close microphone setup"
                 onClick={() => setMicrophonePromptOpen(false)}
               >
-                <X className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+                <SolidControlIcon name="close" size={14} />
               </button>
             </header>
             <div className="microphone-permission-screen">
               <div className="microphone-permission-content">
                 <span className="microphone-permission-icon" aria-hidden="true">
-                  <Mic className="control-icon" size={18} strokeWidth={1.5} />
+                  <SolidControlIcon name="mic" size={19} />
                 </span>
                 <p>Aura listens locally to pitch, rhythm, and volume. Audio is never saved.</p>
               </div>
@@ -2826,7 +2868,7 @@ export function AuraToy() {
           disabled={layerCount === 0 || exportState !== "idle"}
           onClick={() => setPreviewKind("image")}
         >
-          <ImageIcon className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+          <SolidControlIcon name="image" size={15} />
         </button>
         <button
           type="button"
@@ -2836,7 +2878,7 @@ export function AuraToy() {
           disabled={layerCount === 0 || exportState !== "idle"}
           onClick={() => setPreviewKind("video")}
         >
-          <VideoIcon className="control-icon" size={14} strokeWidth={1.6} aria-hidden="true" />
+          <SolidControlIcon name="video" size={15} />
         </button>
         <span className="sr-only" aria-live="polite">
           {exportState === "video" ? "Rendering Aura video" : ""}
@@ -2871,7 +2913,7 @@ export function AuraToy() {
                     else void downloadVideo();
                   }}
                 >
-                  <Download className="control-icon" size={15} strokeWidth={1.5} aria-hidden="true" />
+                  <SolidControlIcon name="download" size={15} />
                 </button>
                 <button
                   type="button"
@@ -2881,7 +2923,7 @@ export function AuraToy() {
                   disabled={exportState !== "idle"}
                   onClick={() => setPreviewKind(null)}
                 >
-                  <X className="control-icon" size={16} strokeWidth={1.5} aria-hidden="true" />
+                  <SolidControlIcon name="close" size={14} />
                 </button>
               </div>
             </header>
