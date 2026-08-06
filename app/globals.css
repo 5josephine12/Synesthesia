@@ -88,7 +88,7 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 1080px;
+  width: 1352px;
   height: 322px;
   padding: 0;
   opacity: 1;
@@ -102,11 +102,11 @@ button {
 .instrument-body {
   --instrument-scale: min(
     1,
-    calc((100vw - 32px) / 1080px),
+    calc((100vw - 32px) / 1352px),
     calc((100dvh - 32px) / 322px)
   );
   position: relative;
-  width: 1080px;
+  width: 1352px;
   height: 322px;
   padding: 16px;
   border: 1px solid rgba(137, 136, 146, 0.07);
@@ -376,6 +376,14 @@ button {
   flex: none;
   fill: currentColor;
   stroke: none;
+}
+
+.solid-control-icon.is-linear {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  stroke-width: 2.8;
 }
 
 .keybed {
@@ -816,8 +824,8 @@ button {
 }
 
 .dialog-close .control-icon {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   margin: 0;
 }
 

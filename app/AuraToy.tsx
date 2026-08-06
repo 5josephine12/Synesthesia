@@ -16,7 +16,9 @@ function SolidControlIcon({
 }) {
   return (
     <svg
-      className="control-icon solid-control-icon"
+      className={`control-icon solid-control-icon ${
+        name === "close" || name === "download" ? "is-linear" : ""
+      }`}
       width={size}
       height={size}
       viewBox="0 0 24 24"
@@ -46,10 +48,10 @@ function SolidControlIcon({
         </>
       ) : null}
       {name === "download" ? (
-        <path d="M10.75 2h2.5v11.05l3.48-3.48 1.77 1.77L12 17.84l-6.5-6.5 1.77-1.77 3.48 3.48ZM4 19h16v3H4Z" />
+        <path d="M12 3v13m-5-5 5 5 5-5M5 21h14" />
       ) : null}
       {name === "close" ? (
-        <path d="m5.1 6.87 1.77-1.77L12 10.23l5.13-5.13 1.77 1.77L13.77 12l5.13 5.13-1.77 1.77L12 13.77 6.87 18.9 5.1 17.13 10.23 12Z" />
+        <path d="m6 6 12 12M18 6 6 18" />
       ) : null}
     </svg>
   );
@@ -2833,7 +2835,7 @@ export function AuraToy() {
                 title="Close microphone setup"
                 onClick={() => setMicrophonePromptOpen(false)}
               >
-                <SolidControlIcon name="close" size={14} />
+                <SolidControlIcon name="close" />
               </button>
             </header>
             <div className="microphone-permission-screen">
@@ -2923,7 +2925,7 @@ export function AuraToy() {
                   disabled={exportState !== "idle"}
                   onClick={() => setPreviewKind(null)}
                 >
-                  <SolidControlIcon name="close" size={14} />
+                  <SolidControlIcon name="close" />
                 </button>
               </div>
             </header>
