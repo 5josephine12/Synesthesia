@@ -389,6 +389,10 @@ button {
   stroke-width: 2.8;
 }
 
+.solid-control-icon[data-solid-icon="download"] {
+  stroke-width: 2.4;
+}
+
 .keybed {
   position: relative;
   z-index: 1;
