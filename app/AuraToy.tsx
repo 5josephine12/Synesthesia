@@ -1447,7 +1447,8 @@ function hapticFeedback(kind: HapticFeedback) {
     success: [10, 34, 16],
     error: [18, 42, 18],
   };
-  vibration.call(navigator, patterns[kind]);
+  const pattern = patterns[kind];
+  vibration.call(navigator, Array.isArray(pattern) ? pattern : [pattern]);
 }
 
 function waitForPaint() {
@@ -2018,13 +2019,13 @@ export function AuraToy() {
         if (now - runtime.lastAnalysisAt < MICROPHONE_ANALYSIS_INTERVAL) return;
         runtime.lastAnalysisAt = now;
 
-        if (audioContext.state !== "running" && now - runtime.lastResumeAttemptAt >= 1000) {
+        if (runtime.context.state !== "running" && now - runtime.lastResumeAttemptAt >= 1000) {
           runtime.lastResumeAttemptAt = now;
-          void audioContext.resume().catch(() => undefined);
+          void runtime.context.resume().catch(() => undefined);
         }
 
-        analyser.getFloatTimeDomainData(runtime.timeDomain);
-        analyser.getFloatFrequencyData(runtime.frequencyData);
+        runtime.analyser.getFloatTimeDomainData(runtime.timeDomain as Float32Array<ArrayBuffer>);
+        runtime.analyser.getFloatFrequencyData(runtime.frequencyData as Float32Array<ArrayBuffer>);
         const rms = calculateRms(runtime.timeDomain);
         const previousEnergy = runtime.smoothedEnergy;
         const energyRise = rms / Math.max(0.0001, previousEnergy);
@@ -2038,7 +2039,7 @@ export function AuraToy() {
         let frequency = 0;
         let clarity = 0;
         if (rms > runtime.noiseFloor * 1.08) {
-          const detectedPitch = detector.findPitch(runtime.timeDomain, audioContext.sampleRate);
+          const detectedPitch = runtime.detector.findPitch(runtime.timeDomain, runtime.context.sampleRate);
           frequency = detectedPitch[0];
           clarity = detectedPitch[1];
         }
@@ -2072,8 +2073,8 @@ export function AuraToy() {
             runtime.frameChroma,
             runtime.candidateScores,
             runtime.spectrumAnalysis,
-            audioContext.sampleRate,
-            analyser.fftSize,
+            runtime.context.sampleRate,
+            runtime.analyser.fftSize,
           );
         for (let pitchClass = 0; pitchClass < runtime.chordChroma.length; pitchClass += 1) {
           runtime.chordChroma[pitchClass] =
@@ -2083,8 +2084,8 @@ export function AuraToy() {
         }
         const beatBandEnergy = calculateBandEnergy(
           runtime.frequencyData,
-          audioContext.sampleRate,
-          analyser.fftSize,
+          runtime.context.sampleRate,
+          runtime.analyser.fftSize,
           45,
           240,
         );
