@@ -4,6 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
+import {
+  drawStyle1Glyph,
+  style1GlyphBounds,
+  style1GlyphForBlob,
+} from "./art-styles/style-1";
 
 type SolidControlIconName = "check" | "close" | "download" | "image" | "mic" | "mic-off" | "video";
 
@@ -1271,12 +1276,29 @@ function drawAuraParticle(
   radius: number,
   alpha: number,
   preserveColor = false,
+  artStyle: ArtStyleId = "aura",
 ) {
   context.save();
   context.translate(centerX, centerY);
   context.rotate(blob.angle);
   context.shadowColor = colorToHslar(blob.color, alpha * 0.42);
   context.shadowBlur = radius * (0.16 + blob.softness * 0.34);
+
+  if (artStyle === "style-1") {
+    const glyphId = style1GlyphForBlob(blob.id, blob.repeat);
+    const bounds = style1GlyphBounds(glyphId);
+    const scale = (radius * 2) / Math.max(bounds.width, bounds.height);
+    context.shadowBlur = radius * 0.1;
+    context.shadowColor = colorToHslar(blob.color, alpha * 0.22);
+    context.scale(scale, scale);
+    context.translate(-bounds.width / 2, -bounds.height / 2);
+    context.fillStyle = colorToHslar(blob.color, Math.min(1, alpha * 1.08));
+    drawStyle1Glyph(context, glyphId);
+    context.fill();
+    context.restore();
+    return;
+  }
+
   drawTissueWash(context, blob, radius, alpha);
 
   if (blob.shape === "bloom") {
@@ -1530,6 +1552,7 @@ function drawAuraComposition(
   replayProgress?: number,
   startIndex = 0,
   endIndex = blobs.length,
+  artStyle: ArtStyleId = "aura",
 ) {
   const shortSide = Math.min(width, height);
   const replayPosition = replayProgress === undefined ? Number.POSITIVE_INFINITY : replayProgress * (blobs.length + 0.9);
@@ -1544,15 +1567,15 @@ function drawAuraComposition(
     const age = replayProgress === undefined ? Math.max(0, now - blob.createdAt) : replayAge * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
-    const preserveColor = blob.blendMode === "source-over";
+    const preserveColor = artStyle === "style-1" || blob.blendMode === "source-over";
     const alpha = clamp(
       (0.4 + blob.velocity * 0.48) * Math.min(1, replayAge) * (preserveColor ? 1.12 : 1),
       0,
       preserveColor ? 0.96 : 0.88,
     );
 
-    context.globalCompositeOperation = blob.blendMode;
-    drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha, preserveColor);
+    context.globalCompositeOperation = artStyle === "style-1" ? "source-over" : blob.blendMode;
+    drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha, preserveColor, artStyle);
   }
   context.restore();
 }
@@ -1647,6 +1670,7 @@ export function AuraToy() {
   const resetRendererRef = useRef<(() => void) | null>(null);
   const releaseTimersRef = useRef<Map<string, number>>(new Map());
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
+  const artStyleRef = useRef<ArtStyleId>("aura");
   const toneRef = useRef<{
     synth: AuraSynth | null;
     filter: AuraFilter | null;
@@ -1696,6 +1720,11 @@ export function AuraToy() {
   useEffect(() => {
     soundModeRef.current = soundMode;
   }, [soundMode]);
+
+  useEffect(() => {
+    artStyleRef.current = artStyle;
+    wakeRendererRef.current?.();
+  }, [artStyle]);
 
   useEffect(() => {
     microphoneModeRef.current = microphoneMode;
@@ -1971,8 +2000,10 @@ export function AuraToy() {
       registerScale;
     const [minimumStretch, maximumStretch] = AURA_STRETCH_BY_SHAPE[shape];
     const stretch =
-      lerp(minimumStretch, maximumStretch, identityRng()) *
-      (0.96 + Math.min(repeat, 8) * 0.018);
+      artStyleRef.current === "style-1"
+        ? lerp(0.94, 1.08, identityRng())
+        : lerp(minimumStretch, maximumStretch, identityRng()) *
+          (0.96 + Math.min(repeat, 8) * 0.018);
     const paletteOffset = AURA_MAPPING.seedHash % RADIOGRAPHIC_HUES.length;
     const accentHue = RADIOGRAPHIC_HUES[
       modulo(paletteOffset + note.pc * 5 + profile.accentStep, RADIOGRAPHIC_HUES.length)
@@ -1991,7 +2022,12 @@ export function AuraToy() {
       colorRebuildLayersRef.current = COLOR_REBUILD_LAYERS;
     }
 
-    const blendMode: AuraBlendMode = colorRebuildLayersRef.current > 0 ? "source-over" : "lighter";
+    const blendMode: AuraBlendMode =
+      artStyleRef.current === "style-1"
+        ? "source-over"
+        : colorRebuildLayersRef.current > 0
+          ? "source-over"
+          : "lighter";
     if (colorRebuildLayersRef.current > 0) {
       colorRebuildLayersRef.current -= 1;
       if (colorRebuildLayersRef.current === 0) additiveLayerStartRef.current = layerIndex + 1;
@@ -2006,7 +2042,10 @@ export function AuraToy() {
       x,
       y,
       radius,
-      angle: baseAngle + Math.sin(repeat * 0.62) * 0.055,
+      angle:
+        artStyleRef.current === "style-1"
+          ? (identityRng() - 0.5) * 0.32
+          : baseAngle + Math.sin(repeat * 0.62) * 0.055,
       stretch,
       thickness: 0.2 + identityRng() * 0.42 + velocity * 0.12 + Math.min(repeat, 8) * 0.012,
       curvature: (identityRng() - 0.5) * 1.65 + Math.sin(repeat * 0.62) * 0.14,
@@ -2903,6 +2942,7 @@ export function AuraToy() {
     let running = false;
     let lastDrawAt = -Infinity;
     let settledCount = 0;
+    let settledArtStyle: ArtStyleId = artStyleRef.current;
     let adaptiveRenderScale = 1;
     let overBudgetFrames = 0;
     let lastQualityAdjustmentAt = -Infinity;
@@ -3010,14 +3050,16 @@ export function AuraToy() {
         lastDrawAt = now;
       }
       const renderStartedAt = performance.now();
+      const currentArtStyle = artStyleRef.current;
 
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
 
       syncOffscreenSize(true);
-      if (blobsRef.current.length < settledCount) {
+      if (blobsRef.current.length < settledCount || settledArtStyle !== currentArtStyle) {
         settledContext.clearRect(0, 0, settled.width, settled.height);
         settledCount = 0;
+        settledArtStyle = currentArtStyle;
       }
       const settleStartedAt = performance.now();
       while (settledCount < blobsRef.current.length) {
@@ -3032,9 +3074,11 @@ export function AuraToy() {
           undefined,
           settledCount,
           settledCount + 1,
+          currentArtStyle,
         );
         settledCount += 1;
         if (
+          currentArtStyle !== "style-1" &&
           colorRebuildLayersRef.current === 0 &&
           settledCount - additiveLayerStartRef.current >= SATURATION_MINIMUM_LAYERS &&
           settledCount % SATURATION_CHECK_INTERVAL === 0 &&
@@ -3058,19 +3102,28 @@ export function AuraToy() {
           effectiveNow,
           undefined,
           settledCount,
+          blobsRef.current.length,
+          currentArtStyle,
         );
       }
 
       blurredContext.clearRect(0, 0, blurred.width, blurred.height);
       blurredContext.save();
       const blurScale = offscreen.width / Math.max(1, width);
-      const blurRadius = (reducedMotionRef.current ? 4 : 7) * blurScale;
+      const blurRadius =
+        (currentArtStyle === "style-1"
+          ? reducedMotionRef.current
+            ? 1.1
+            : 2
+          : reducedMotionRef.current
+            ? 4
+            : 7) * blurScale;
       blurredContext.filter = `blur(${Math.max(0.5, blurRadius)}px)`;
       blurredContext.drawImage(offscreen, 0, 0);
       blurredContext.restore();
 
       context.save();
-      context.globalCompositeOperation = "lighter";
+      context.globalCompositeOperation = currentArtStyle === "style-1" ? "source-over" : "lighter";
       context.drawImage(blurred, 0, 0, width, height);
       context.restore();
 
@@ -3159,6 +3212,10 @@ export function AuraToy() {
         layerWidth,
         layerHeight,
         settledAt,
+        undefined,
+        0,
+        blobsRef.current.length,
+        artStyleRef.current,
       );
     } else {
       let replayState = replayRenderStatesRef.current.get(output);
@@ -3188,6 +3245,9 @@ export function AuraToy() {
           layerHeight,
           settledAt,
           replayProgress,
+          0,
+          blobsRef.current.length,
+          artStyleRef.current,
         );
       } else {
         const blobTotal = blobsRef.current.length;
@@ -3220,6 +3280,7 @@ export function AuraToy() {
             undefined,
             blobIndex,
             blobIndex + 1,
+            artStyleRef.current,
           );
           replayState.settledCount += 1;
         }
@@ -3235,6 +3296,7 @@ export function AuraToy() {
             replayProgress,
             targetSettledCount,
             targetSettledCount + 1,
+            artStyleRef.current,
           );
         }
         replayState.lastProgress = replayProgress;
