@@ -155,6 +155,15 @@ type ExportKind = "image" | "video";
 type DownloadFeedback = "idle" | "preparing" | "complete" | "error";
 type HapticFeedback = "open" | "close" | "confirm" | "success" | "error";
 type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsupported";
+type MicrophoneModeId = "wide-spectrum" | "voice-isolation" | "standard" | "automatic";
+type MicrophoneMode = {
+  id: MicrophoneModeId;
+  label: string;
+  title: string;
+};
+type MicrophoneCaptureConstraints = MediaTrackConstraints & {
+  voiceIsolation?: boolean;
+};
 type ScaleMode = "major" | "minor";
 
 type HarmonicContext = {
@@ -189,6 +198,7 @@ type MicrophoneRuntime = {
   stream: MediaStream;
   context: AudioContext;
   source: MediaStreamAudioSourceNode;
+  processingNodes: AudioNode[];
   analyser: AnalyserNode;
   detector: PitchDetector<Float32Array>;
   timeDomain: Float32Array;
@@ -270,6 +280,7 @@ const AURA_MIN_ADAPTIVE_SCALE = 0.62;
 const OVERLAY_EXIT_DURATION = 240;
 const DOWNLOAD_COMPLETE_HOLD = 520;
 const DEFAULT_SOUND_MODE: SoundModeId = "piano";
+const DEFAULT_MICROPHONE_MODE: MicrophoneModeId = "wide-spectrum";
 const RADIOGRAPHIC_HUES = [338, 322, 300, 282, 260, 238, 220, 10, 18, 348, 312, 248] as const;
 const MAJOR_SCALE_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88] as const;
 const MINOR_SCALE_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17] as const;
@@ -958,10 +969,131 @@ function microphoneColor(base: Color, harmonicContext: HarmonicContext | null) {
   };
 }
 
+const MICROPHONE_MODES: readonly MicrophoneMode[] = [
+  { id: "wide-spectrum", label: "Wide Spectrum", title: "Wide Spectrum" },
+  { id: "voice-isolation", label: "Voice Isolation", title: "Voice Isolation" },
+  { id: "standard", label: "Standard", title: "Standard" },
+  { id: "automatic", label: "Automatic", title: "Automatic" },
+];
+
+const ART_STYLE_SLOTS = [
+  { id: "style-1", label: "Style 1" },
+  { id: "aura", label: "Aura" },
+  { id: "style-3", label: "Style 3" },
+  { id: "style-4", label: "Style 4" },
+] as const;
+type ArtStyleId = (typeof ART_STYLE_SLOTS)[number]["id"];
+
+function audioConstraintsForMicrophoneMode(mode: MicrophoneModeId): MicrophoneCaptureConstraints {
+  switch (mode) {
+    case "wide-spectrum":
+      return {
+        autoGainControl: false,
+        echoCancellation: false,
+        noiseSuppression: false,
+        voiceIsolation: false,
+      };
+    case "voice-isolation":
+      return {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        voiceIsolation: true,
+      };
+    case "standard":
+      return {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        voiceIsolation: false,
+      };
+    case "automatic":
+      return {};
+  }
+}
+
+function microphoneModeIndex(mode: MicrophoneModeId) {
+  const index = MICROPHONE_MODES.findIndex(({ id }) => id === mode);
+  return index < 0 ? 0 : index;
+}
+
+function setMicrophoneTrackHints(stream: MediaStream, mode: MicrophoneModeId) {
+  const contentHint =
+    mode === "wide-spectrum" ? "music" : mode === "voice-isolation" || mode === "standard" ? "speech" : "";
+  for (const track of stream.getAudioTracks()) {
+    try {
+      track.contentHint = contentHint;
+    } catch {
+      // Older browsers may expose contentHint as read-only or omit it.
+    }
+  }
+}
+
+function configureMicrophonePipeline(runtime: MicrophoneRuntime, mode: MicrophoneModeId) {
+  runtime.source.disconnect();
+  for (const node of runtime.processingNodes) node.disconnect();
+  runtime.processingNodes = [];
+
+  if (mode === "voice-isolation") {
+    // Browsers may ignore the voiceIsolation capture constraint. This local
+    // speech-band pipeline is the deterministic fallback used by Aura's analyser.
+    const highPass = runtime.context.createBiquadFilter();
+    highPass.type = "highpass";
+    highPass.frequency.value = 80;
+    highPass.Q.value = 0.72;
+
+    const lowPass = runtime.context.createBiquadFilter();
+    lowPass.type = "lowpass";
+    lowPass.frequency.value = 4200;
+    lowPass.Q.value = 0.72;
+
+    const compressor = runtime.context.createDynamicsCompressor();
+    compressor.threshold.value = -42;
+    compressor.knee.value = 10;
+    compressor.ratio.value = 8;
+    compressor.attack.value = 0.004;
+    compressor.release.value = 0.18;
+
+    runtime.source.connect(highPass);
+    highPass.connect(lowPass);
+    lowPass.connect(compressor);
+    compressor.connect(runtime.analyser);
+    runtime.processingNodes = [highPass, lowPass, compressor];
+    runtime.analyser.minDecibels = -82;
+    runtime.analyser.smoothingTimeConstant = 0.3;
+    runtime.detector.minVolumeDecibels = -52;
+  } else {
+    runtime.source.connect(runtime.analyser);
+    runtime.analyser.minDecibels = mode === "wide-spectrum" ? -105 : -100;
+    runtime.analyser.smoothingTimeConstant = mode === "wide-spectrum" ? 0.16 : 0.22;
+    runtime.detector.minVolumeDecibels = mode === "wide-spectrum" ? -66 : -62;
+  }
+
+  runtime.previousSpectrum.fill(0);
+  runtime.chroma.fill(0);
+  runtime.chordChroma.fill(0);
+  runtime.melodyChroma.fill(0);
+  runtime.frameChroma.fill(0);
+  runtime.candidateScores.clear();
+  runtime.detectedPitchClasses.length = 0;
+  runtime.nextHighlightedPitchClasses.length = 0;
+  runtime.highlightedPitchClasses.length = 0;
+  runtime.highlightedHarmonyPitchClasses.length = 0;
+  runtime.leftHandPitchClasses.length = 0;
+  runtime.leftHandCandidatePitchClasses.length = 0;
+  runtime.melodyPitchClass = null;
+  runtime.melodyCandidatePitchClass = null;
+  runtime.candidateMidi = null;
+  runtime.lastMidi = null;
+  runtime.candidateFrames = 0;
+  runtime.noiseFloor = mode === "voice-isolation" ? 0.004 : mode === "wide-spectrum" ? 0.0018 : 0.0028;
+}
+
 function disposeMicrophoneRuntime(runtime: MicrophoneRuntime | null) {
   if (!runtime) return;
   window.cancelAnimationFrame(runtime.animationFrame);
   runtime.source.disconnect();
+  for (const node of runtime.processingNodes) node.disconnect();
   runtime.analyser.disconnect();
   runtime.stream.getTracks().forEach((track) => track.stop());
   void runtime.context.close().catch(() => undefined);
@@ -1485,6 +1617,8 @@ export function AuraToy() {
   const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
   const microphoneAllowRef = useRef<HTMLButtonElement | null>(null);
   const microphoneIntroductionShownRef = useRef(false);
+  const microphoneModeRef = useRef<MicrophoneModeId>(DEFAULT_MICROPHONE_MODE);
+  const microphoneModeSyncRef = useRef(0);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const exportBlurLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const exportGrainPatternsRef = useRef<WeakMap<HTMLCanvasElement, CanvasPattern>>(new WeakMap());
@@ -1508,6 +1642,7 @@ export function AuraToy() {
   const downloadFeedbackTimerRef = useRef<number | null>(null);
   const microphoneAfterCloseRef = useRef<(() => void) | null>(null);
   const dialWheelTimerRef = useRef<number | null>(null);
+  const microphoneModeWheelTimerRef = useRef<number | null>(null);
   const wakeRendererRef = useRef<(() => void) | null>(null);
   const resetRendererRef = useRef<(() => void) | null>(null);
   const releaseTimersRef = useRef<Map<string, number>>(new Map());
@@ -1543,6 +1678,10 @@ export function AuraToy() {
   const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
   const [microphonePromptClosing, setMicrophonePromptClosing] = useState(false);
   const [microphonePromptGranting, setMicrophonePromptGranting] = useState(false);
+  const [microphoneMode, setMicrophoneMode] = useState<MicrophoneModeId>(DEFAULT_MICROPHONE_MODE);
+  const [microphoneModeDirection, setMicrophoneModeDirection] = useState<-1 | 1>(1);
+  const [artStyle, setArtStyle] = useState<ArtStyleId>("aura");
+  const [artStyleDirection, setArtStyleDirection] = useState<-1 | 1>(1);
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -1557,6 +1696,10 @@ export function AuraToy() {
   useEffect(() => {
     soundModeRef.current = soundMode;
   }, [soundMode]);
+
+  useEffect(() => {
+    microphoneModeRef.current = microphoneMode;
+  }, [microphoneMode]);
 
   useEffect(() => {
     if (!microphonePromptOpen || microphonePromptClosing) return;
@@ -1606,6 +1749,9 @@ export function AuraToy() {
         window.clearTimeout(downloadFeedbackTimerRef.current);
       }
       if (dialWheelTimerRef.current !== null) window.clearTimeout(dialWheelTimerRef.current);
+      if (microphoneModeWheelTimerRef.current !== null) {
+        window.clearTimeout(microphoneModeWheelTimerRef.current);
+      }
       releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       releaseTimersRef.current.clear();
       if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
@@ -1921,12 +2067,9 @@ export function AuraToy() {
     let audioContext: AudioContext | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          autoGainControl: false,
-          echoCancellation: false,
-          noiseSuppression: false,
-        },
+        audio: audioConstraintsForMicrophoneMode(microphoneModeRef.current),
       });
+      setMicrophoneTrackHints(stream, microphoneModeRef.current);
       if (generation !== microphoneGenerationRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -1940,7 +2083,6 @@ export function AuraToy() {
       analyser.smoothingTimeConstant = 0.22;
       analyser.minDecibels = -100;
       analyser.maxDecibels = -10;
-      source.connect(analyser);
 
       const detector = PitchDetector.forFloat32Array(MICROPHONE_FFT_SIZE);
       detector.minVolumeDecibels = -62;
@@ -1948,6 +2090,7 @@ export function AuraToy() {
         stream,
         context: audioContext,
         source,
+        processingNodes: [],
         analyser,
         detector,
         timeDomain: new Float32Array(MICROPHONE_FFT_SIZE),
@@ -2009,6 +2152,7 @@ export function AuraToy() {
         lastReading: "Listening",
         visualCursor: 0,
       };
+      configureMicrophonePipeline(runtime, microphoneModeRef.current);
       microphoneRef.current = runtime;
       setMicrophoneState("listening");
       hapticFeedback("success");
@@ -2026,33 +2170,49 @@ export function AuraToy() {
 
         runtime.analyser.getFloatTimeDomainData(runtime.timeDomain as Float32Array<ArrayBuffer>);
         runtime.analyser.getFloatFrequencyData(runtime.frequencyData as Float32Array<ArrayBuffer>);
+        const microphoneMode = microphoneModeRef.current;
+        const isolatesVoice = microphoneMode === "voice-isolation";
+        const capturesWideSpectrum = microphoneMode === "wide-spectrum";
         const rms = calculateRms(runtime.timeDomain);
         const previousEnergy = runtime.smoothedEnergy;
         const energyRise = rms / Math.max(0.0001, previousEnergy);
         runtime.smoothedEnergy = lerp(previousEnergy, rms, rms > previousEnergy ? 0.18 : 0.055);
         // Learn the room floor only from quiet frames so sustained music cannot raise its own gate.
-        const quietEnoughToLearn = rms <= Math.max(0.0045, runtime.noiseFloor * 1.32);
+        const quietEnoughToLearn =
+          rms <= Math.max(isolatesVoice ? 0.008 : capturesWideSpectrum ? 0.003 : 0.0045, runtime.noiseFloor * 1.32);
         if (quietEnoughToLearn) {
-          runtime.noiseFloor = clamp(lerp(runtime.noiseFloor, rms, 0.08), 0.0008, 0.006);
+          runtime.noiseFloor = clamp(
+            lerp(runtime.noiseFloor, rms, 0.08),
+            capturesWideSpectrum ? 0.0005 : isolatesVoice ? 0.0015 : 0.0008,
+            isolatesVoice ? 0.012 : capturesWideSpectrum ? 0.0045 : 0.006,
+          );
         }
-        const gate = clamp(runtime.noiseFloor * 1.55, 0.0022, 0.0085);
+        const gate = isolatesVoice
+          ? clamp(runtime.noiseFloor * 2.35, 0.006, 0.028)
+          : capturesWideSpectrum
+            ? clamp(runtime.noiseFloor * 1.18, 0.0012, 0.0055)
+            : clamp(runtime.noiseFloor * 1.55, 0.0022, 0.0085);
         let frequency = 0;
         let clarity = 0;
-        if (rms > runtime.noiseFloor * 1.08) {
+        if (rms > runtime.noiseFloor * (isolatesVoice ? 1.42 : 1.08)) {
           const detectedPitch = runtime.detector.findPitch(runtime.timeDomain, runtime.context.sampleRate);
           frequency = detectedPitch[0];
           clarity = detectedPitch[1];
         }
         const midiFloat = frequency > 0 ? frequencyToMidi(frequency) : Number.NaN;
         const nearestMidi = Number.isFinite(midiFloat) ? Math.round(midiFloat) : null;
+        const withinVoiceRange = nearestMidi !== null && nearestMidi >= 40 && nearestMidi <= 84;
         const pitchedSignal =
-          rms > runtime.noiseFloor * 1.08 &&
+          rms > runtime.noiseFloor * (isolatesVoice ? 1.42 : 1.08) &&
           nearestMidi !== null &&
           nearestMidi >= MIN_MIDI &&
           nearestMidi <= MAX_MIDI &&
-          clarity >= 0.72 &&
+          (!isolatesVoice || withinVoiceRange) &&
+          clarity >= (isolatesVoice ? 0.78 : 0.72) &&
           Math.abs(midiFloat - nearestMidi) <= 0.48;
-        const activeSignal = rms > gate || pitchedSignal;
+        // Voice Isolation intentionally rejects unpitched and polyphonic room
+        // noise; Wide Spectrum keeps the raw broadband energy path open.
+        const activeSignal = isolatesVoice ? pitchedSignal && rms > gate * 0.62 : rms > gate || pitchedSignal;
         const level = activeSignal ? clamp((rms - gate) / Math.max(0.012, 0.09 - gate), 0, 1) : 0;
         if (
           now - runtime.lastMeterAt >= 50 &&
@@ -2105,7 +2265,8 @@ export function AuraToy() {
           nearestMidi !== null &&
           nearestMidi >= MIN_MIDI &&
           nearestMidi <= MAX_MIDI &&
-          clarity >= 0.68 &&
+          (!isolatesVoice || withinVoiceRange) &&
+          clarity >= (isolatesVoice ? 0.78 : 0.68) &&
           Math.abs(midiFloat - nearestMidi) <= 0.48;
 
         if (clearPitch && nearestMidi !== null) {
@@ -2130,20 +2291,29 @@ export function AuraToy() {
         }
 
         const monophonicFrame =
-          clearPitch && clarity >= 0.82 && nearestMidi !== null && pitchClasses.length <= 1;
+          clearPitch &&
+          clarity >= (isolatesVoice ? 0.78 : 0.82) &&
+          nearestMidi !== null &&
+          (isolatesVoice || pitchClasses.length <= 1);
         const monophonicPitchClass = monophonicFrame ? modulo(nearestMidi, 12) : null;
         const recentStableMidi = now - runtime.lastValidPitchAt < 650 ? runtime.lastMidi : null;
         const spectralMidi =
           noteCandidates.length > 0
             ? noteCandidates[runtime.visualCursor % noteCandidates.length]
             : dominantMidi;
-        const detectedMidi = monophonicFrame
-          ? nearestMidi
-          : spectralMidi ?? stableMidi ?? (clearPitch ? nearestMidi : null) ?? recentStableMidi;
+        const detectedMidi = isolatesVoice
+          ? clearPitch
+            ? nearestMidi
+            : recentStableMidi
+          : monophonicFrame
+            ? nearestMidi
+            : spectralMidi ?? stableMidi ?? (clearPitch ? nearestMidi : null) ?? recentStableMidi;
         const detectedPitchClasses = runtime.detectedPitchClasses;
         detectedPitchClasses.length = 0;
         if (activeSignal) {
-          if (monophonicPitchClass !== null) {
+          if (isolatesVoice && detectedMidi !== null) {
+            detectedPitchClasses.push(modulo(detectedMidi, 12));
+          } else if (monophonicPitchClass !== null) {
             detectedPitchClasses.push(monophonicPitchClass);
           } else if (pitchClasses.length > 0) {
             copyPitchClasses(pitchClasses, detectedPitchClasses);
@@ -2161,9 +2331,9 @@ export function AuraToy() {
 
         const clearMelodyPitchClass =
           clearPitch &&
-          clarity >= 0.74 &&
+          clarity >= (isolatesVoice ? 0.78 : 0.74) &&
           nearestMidi !== null &&
-          (bassMidi === null || nearestMidi >= bassMidi + 7)
+          (isolatesVoice || bassMidi === null || nearestMidi >= bassMidi + 7)
             ? modulo(nearestMidi, 12)
             : null;
         const upperRegisterBoost = runtime.upperRegisterBoost;
@@ -2263,8 +2433,9 @@ export function AuraToy() {
           setMicrophoneMelodyPitchClass(null);
         }
 
-        const bassPitchClass = activeSignal && bassMidi !== null ? modulo(bassMidi, 12) : null;
-        const chordContext = activeSignal
+        const bassPitchClass =
+          !isolatesVoice && activeSignal && bassMidi !== null ? modulo(bassMidi, 12) : null;
+        const chordContext = !isolatesVoice && activeSignal
           ? detectChordContext(runtime.chordChroma, bassPitchClass)
           : null;
         let chordEnergy = 0;
@@ -2419,10 +2590,10 @@ export function AuraToy() {
         if (now - runtime.lastVisualAt < visualInterval) return;
         if (!clearPitch && !beatDetected && recentStableMidi === null && level < 0.1) return;
 
-        const harmonicContext = detectHarmonicContext(runtime.chroma);
+        const harmonicContext = isolatesVoice ? null : detectHarmonicContext(runtime.chroma);
         const velocity = clamp(0.26 + level * 0.64 + (beatDetected ? 0.1 : 0), 0.26, 1);
         const beatCompanion =
-          beatDetected && !monophonicFrame && noteCandidates.length > 1
+          !isolatesVoice && beatDetected && !monophonicFrame && noteCandidates.length > 1
             ? noteCandidates[(runtime.visualCursor + 1) % noteCandidates.length]
             : null;
         const primaryVisualNote = midiToNote(clamp(detectedMidi, MIN_MIDI, MAX_MIDI));
@@ -2466,7 +2637,12 @@ export function AuraToy() {
       runtime.animationFrame = window.requestAnimationFrame(runtime.analyze);
       stream.getAudioTracks().forEach((track) => {
         track.addEventListener("ended", () => {
-          if (generation === microphoneGenerationRef.current) stopMicrophone();
+          if (generation !== microphoneGenerationRef.current) return;
+          const current = microphoneRef.current;
+          if (!current) return;
+          if (current.stream.getAudioTracks().some((active) => active.id === track.id)) {
+            stopMicrophone();
+          }
         });
       });
     } catch {
@@ -2520,6 +2696,79 @@ export function AuraToy() {
     }
     void prepareMicrophone();
   }, [closeMicrophonePrompt, microphonePromptOpen, microphoneState, prepareMicrophone, stopMicrophone]);
+
+  const replaceLiveMicrophoneStream = useCallback(async (runtime: MicrophoneRuntime, generation: number) => {
+    const sync = microphoneModeSyncRef.current + 1;
+    microphoneModeSyncRef.current = sync;
+    const mode = microphoneModeRef.current;
+    let nextStream: MediaStream;
+    try {
+      nextStream = await navigator.mediaDevices.getUserMedia({
+        audio: audioConstraintsForMicrophoneMode(mode),
+      });
+      setMicrophoneTrackHints(nextStream, mode);
+    } catch {
+      return;
+    }
+    if (
+      sync !== microphoneModeSyncRef.current ||
+      generation !== microphoneGenerationRef.current ||
+      microphoneRef.current !== runtime
+    ) {
+      nextStream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+
+    const previousSource = runtime.source;
+    const previousStream = runtime.stream;
+    runtime.stream = nextStream;
+    runtime.source = runtime.context.createMediaStreamSource(nextStream);
+    configureMicrophonePipeline(runtime, mode);
+    previousSource.disconnect();
+    previousStream.getTracks().forEach((track) => track.stop());
+    nextStream.getAudioTracks().forEach((track) => {
+      track.addEventListener("ended", () => {
+        if (generation !== microphoneGenerationRef.current) return;
+        const current = microphoneRef.current;
+        if (!current) return;
+        if (current.stream.getAudioTracks().some((active) => active.id === track.id)) {
+          stopMicrophone();
+        }
+      });
+    });
+  }, [stopMicrophone]);
+
+  const selectMicrophoneMode = useCallback(
+    (mode: MicrophoneModeId, direction?: -1 | 1) => {
+      const currentIndex = microphoneModeIndex(microphoneModeRef.current);
+      const nextIndex = microphoneModeIndex(mode);
+      if (MICROPHONE_MODES[nextIndex]?.id !== mode || nextIndex === currentIndex) return;
+
+      microphoneModeRef.current = mode;
+      setMicrophoneModeDirection(direction ?? (nextIndex > currentIndex ? 1 : -1));
+      setMicrophoneMode(mode);
+      hapticFeedback("open");
+
+      const runtime = microphoneRef.current;
+      if (!runtime || runtime.context.state === "closed" || !runtime.stream.active) return;
+      configureMicrophonePipeline(runtime, mode);
+      setMicrophoneHarmonyPitchClasses([]);
+      setMicrophoneMelodyPitchClass(null);
+      setMicrophoneBeatPitchClasses([]);
+      setMicrophoneReading("Listening");
+      void replaceLiveMicrophoneStream(runtime, microphoneGenerationRef.current);
+    },
+    [replaceLiveMicrophoneStream],
+  );
+
+  const cycleMicrophoneMode = useCallback(
+    (direction: -1 | 1) => {
+      const currentIndex = microphoneModeIndex(microphoneModeRef.current);
+      const nextMode = MICROPHONE_MODES[modulo(currentIndex + direction, MICROPHONE_MODES.length)];
+      selectMicrophoneMode(nextMode.id, direction);
+    },
+    [selectMicrophoneMode],
+  );
 
   const shiftedNote = useCallback(
     (key: KeySpec): NoteChoice => {
@@ -3235,6 +3484,13 @@ export function AuraToy() {
         event.ctrlKey ||
         event.repeat
       ) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest("input, textarea, select, .microphone-mode-dial")
+      ) {
+        return;
+      }
       if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
       event.preventDefault();
       cycleSoundMode(event.key === "ArrowUp" ? -1 : 1);
@@ -3274,6 +3530,20 @@ export function AuraToy() {
   }, []);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
+  const activeMicrophoneMode =
+    MICROPHONE_MODES.find(({ id }) => id === microphoneMode) ?? MICROPHONE_MODES[0];
+  const activeArtStyle =
+    ART_STYLE_SLOTS.find(({ id }) => id === artStyle) ?? ART_STYLE_SLOTS[1];
+  const randomizeArtStyle = () => {
+    const currentIndex = ART_STYLE_SLOTS.findIndex(({ id }) => id === artStyle);
+    const randomOffset = 1 + Math.floor(Math.random() * (ART_STYLE_SLOTS.length - 1));
+    const nextIndex = (currentIndex + randomOffset) % ART_STYLE_SLOTS.length;
+    const nextStyle = ART_STYLE_SLOTS[nextIndex];
+
+    setArtStyleDirection(nextIndex >= currentIndex ? 1 : -1);
+    setArtStyle(nextStyle.id);
+    hapticFeedback("confirm");
+  };
   const microphoneLabel =
     microphoneState === "listening"
       ? `Stop microphone listening, detecting ${microphoneReading}`
@@ -3309,8 +3579,10 @@ export function AuraToy() {
       <canvas ref={canvasRef} className="aura-canvas" aria-hidden="true" />
 
       <section className="instrument-zone" aria-label="Aura instrument">
-        <div className="instrument-body">
-          <div className="instrument-header">
+        <div className="instrument-cluster">
+          <div className="instrument-body-frame">
+            <div className="instrument-body">
+            <div className="instrument-header">
             <button
               type="button"
               className="power-led"
@@ -3435,11 +3707,66 @@ export function AuraToy() {
               );
             })}
           </div>
+            </div>
+          </div>
+          <div className="art-style-bank-frame">
+            <div className="art-style-bank">
+              <div className="art-style-header">
+                <div
+                  className="mode-screen art-style-screen"
+                  role="status"
+                  aria-live="polite"
+                  aria-label={`Aesthetic: ${activeArtStyle.label}`}
+                >
+                  <span className="mode-screen-glass" aria-hidden="true">
+                    <span
+                      key={`${artStyle}-${artStyleDirection}`}
+                      className={`mode-readout ${artStyleDirection > 0 ? "is-forward" : "is-backward"}`}
+                    >
+                      {activeArtStyle.label}
+                    </span>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="power-led art-style-randomizer"
+                  aria-label="Randomize aesthetic"
+                  title="Choose a random aesthetic"
+                  aria-controls="art-style-grid"
+                  onClick={randomizeArtStyle}
+                />
+              </div>
+              <div id="art-style-grid" className="art-style-grid" role="group" aria-label="Art styles">
+                {ART_STYLE_SLOTS.map((style, nextIndex) => {
+                  const selected = style.id === artStyle;
+                  return (
+                    <button
+                      key={style.id}
+                      type="button"
+                      className={`art-style-pad ${selected ? "is-active" : ""}`}
+                      aria-label={`${style.label} art style${selected ? ", selected" : ""}`}
+                      aria-pressed={selected}
+                      title={style.label}
+                      onClick={() => {
+                        if (selected) return;
+                        const currentIndex = ART_STYLE_SLOTS.findIndex(({ id }) => id === artStyle);
+                        setArtStyleDirection(nextIndex >= currentIndex ? 1 : -1);
+                        setArtStyle(style.id);
+                        hapticFeedback("confirm");
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </div>
-
       </section>
 
-      <div className="microphone-dock" aria-label="Microphone input">
+      <div
+        className={`microphone-dock ${microphoneState === "listening" ? "is-listening" : ""}`}
+        aria-label="Microphone input"
+      >
         <button
           ref={microphoneButtonRef}
           type="button"
@@ -3455,6 +3782,57 @@ export function AuraToy() {
             <SolidControlIcon name="mic" size={15} />
           )}
         </button>
+        <div
+          className="mode-dial microphone-mode-dial"
+          onWheel={(event) => {
+            event.preventDefault();
+            if (microphoneState === "unsupported") return;
+            if (microphoneModeWheelTimerRef.current !== null || event.deltaY === 0) return;
+            const direction = event.deltaY > 0 ? 1 : -1;
+            cycleMicrophoneMode(direction);
+            microphoneModeWheelTimerRef.current = window.setTimeout(() => {
+              microphoneModeWheelTimerRef.current = null;
+            }, 180);
+          }}
+        >
+          <div
+            className="mode-screen"
+            role="status"
+            aria-live="polite"
+            aria-label={`Microphone mode: ${activeMicrophoneMode.title}`}
+          >
+            <span className="mode-screen-glass" aria-hidden="true">
+              <span
+                key={`${microphoneMode}-${microphoneModeDirection}`}
+                className={`mode-readout ${microphoneModeDirection > 0 ? "is-forward" : "is-backward"}`}
+              >
+                {activeMicrophoneMode.label}
+              </span>
+            </span>
+            <div className="mode-stepper" aria-label="Microphone mode controls">
+              <button
+                type="button"
+                className="mode-step-button"
+                aria-label="Previous microphone mode"
+                title="Previous microphone mode"
+                disabled={microphoneState === "unsupported"}
+                onClick={() => cycleMicrophoneMode(-1)}
+              >
+                <span className="filled-triangle is-up" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="mode-step-button"
+                aria-label="Next microphone mode"
+                title="Next microphone mode"
+                disabled={microphoneState === "unsupported"}
+                onClick={() => cycleMicrophoneMode(1)}
+              >
+                <span className="filled-triangle is-down" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </div>
         <span className="sr-only" role="status" aria-live="polite">
           {microphoneState === "listening" ? microphoneReading : microphoneLabel}
         </span>

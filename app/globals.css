@@ -59,10 +59,11 @@ button {
 .aura-page {
   --instrument-scale: min(
     1,
-    calc((100vw - 32px) / 1352px),
-    calc((100dvh - 32px) / 322px)
+    calc((100vw - 32px) / 1286px),
+    calc((100dvh - 32px) / 258px)
   );
-  --instrument-rendered-height: calc(322px * var(--instrument-scale));
+  --instrument-rendered-width: calc(1286px * var(--instrument-scale));
+  --instrument-rendered-height: calc(258px * var(--instrument-scale));
   position: relative;
   width: 100%;
   height: 100vh;
@@ -96,8 +97,8 @@ button {
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  width: 1352px;
-  height: 322px;
+  width: 1286px;
+  height: 258px;
   padding: 0;
   opacity: 1;
   pointer-events: auto;
@@ -107,17 +108,175 @@ button {
     transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.instrument-cluster {
+  position: relative;
+  display: flex;
+  width: 1286px;
+  height: 258px;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 34px;
+  background: var(--instrument-surface);
+  box-shadow: inset 0 0 0 1px rgba(137, 136, 146, 0.07);
+  transform: scale(var(--instrument-scale));
+  transform-origin: center bottom;
+}
+
+.art-style-bank-frame {
+  width: 211px;
+  height: 258px;
+  margin-left: -8px;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.art-style-bank {
+  position: relative;
+  display: block;
+  width: 263px;
+  height: 322px;
+  padding: 16px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 42px 46px 40px 39px / 42px 47px 41px 40px;
+  background: transparent;
+  box-shadow: none;
+  transform: scale(0.801242);
+  transform-origin: left top;
+}
+
+.art-style-header {
+  position: relative;
+  display: flex;
+  height: 44px;
+  align-items: center;
+  transform: translateY(2px);
+}
+
+.mode-screen.art-style-screen {
+  width: 158px;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.art-style-randomizer {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 13px;
+  margin-left: 32px;
+}
+
+.art-style-grid {
+  display: grid;
+  width: 231px;
+  height: calc(100% - 44px - 15px);
+  margin: 15px auto 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  /* Large pads need a slight optical correction to read like the 10px key gaps. */
+  gap: 12px;
+}
+
+.art-style-pad {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: var(--control-surface);
+  box-shadow: var(--key-depth-shadow);
+  cursor: pointer;
+  opacity: 1;
+  touch-action: manipulation;
+  transition:
+    transform 320ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 320ms ease,
+    background 320ms ease,
+    filter 320ms ease;
+}
+
+.art-style-pad:nth-child(1) {
+  border-radius: 4px;
+}
+
+.art-style-pad:nth-child(2) {
+  border-radius: 4px;
+}
+
+.art-style-pad:nth-child(3) {
+  border-radius: 4px 4px 14px 14px;
+}
+
+.art-style-pad:nth-child(4) {
+  border-radius: 4px 4px 30px 14px;
+}
+
+.art-style-pad::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.2), transparent 52%);
+}
+
+.art-style-pad.is-active {
+  background:
+    radial-gradient(
+      circle at 49% 51%,
+      rgba(255, 254, 226, 0.96) 0 38%,
+      rgba(255, 248, 221, 0.92) 57%,
+      rgba(255, 232, 216, 0.82) 78%,
+      rgba(249, 211, 217, 0.72) 100%
+    ),
+    var(--control-surface);
+  box-shadow:
+    var(--key-depth-shadow),
+    inset 1px 1px 3px rgba(255, 255, 255, 0.58),
+    inset -2px -2px 6px rgba(234, 165, 181, 0.14),
+    inset 0 0 18px rgba(255, 220, 166, 0.2);
+}
+
+.art-style-pad.is-active:hover,
+.art-style-pad.is-active:focus-visible {
+  filter: saturate(1.04) brightness(1.012);
+}
+
+.art-style-pad:active {
+  transform: translateY(2px);
+  box-shadow:
+    inset 1px 2px 5px rgba(70, 70, 90, 0.08),
+    0 1px 2px rgba(70, 70, 90, 0.1);
+}
+
+.art-style-pad:focus-visible {
+  outline: 1px solid rgba(126, 125, 134, 0.4);
+  outline-offset: -4px;
+}
+
+.instrument-body-frame {
+  width: 1083px;
+  height: 258px;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 .instrument-body {
   position: relative;
   width: 1352px;
   height: 322px;
   padding: 16px;
-  border: 1px solid rgba(137, 136, 146, 0.07);
-  border-radius: 42px;
-  background: var(--instrument-surface);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
-  transform: scale(var(--instrument-scale));
-  transform-origin: center bottom;
+  transform: scale(0.801242);
+  transform-origin: left top;
 }
 
 .instrument-header {
@@ -452,7 +611,7 @@ button {
 }
 
 .white-key:last-child {
-  border-bottom-right-radius: 30px;
+  border-bottom-right-radius: 14px;
 }
 
 .upper-key-slot {
@@ -530,7 +689,7 @@ button {
 
 .export-dock {
   position: absolute;
-  right: clamp(16px, 3vw, 36px);
+  right: max(16px, calc(50% - (var(--instrument-rendered-width) / 2)));
   bottom: calc(var(--instrument-rendered-height) + clamp(16px, 3vw, 32px));
   z-index: 4;
   display: flex;
@@ -552,8 +711,16 @@ button {
 .microphone-dock {
   position: absolute;
   bottom: calc(var(--instrument-rendered-height) + clamp(16px, 3vw, 32px));
-  left: clamp(16px, 3vw, 36px);
+  left: max(16px, calc(50% - (var(--instrument-rendered-width) / 2)));
   z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.microphone-mode-dial {
+  width: 136px;
+  margin: 0;
 }
 
 .export-button,
