@@ -1608,17 +1608,29 @@ function drawDottedSigilFlowLayer(
   now: number,
   reducedMotion: boolean,
   fallbackArtStyle: ArtStyleId,
+  startIndex = 0,
+  endIndex = blobs.length,
+  replayProgress?: number,
 ) {
   const shortSide = Math.min(width, height);
-  const dottedBlobs = blobs.filter(
-    (blob) => (blob.artStyle ?? fallbackArtStyle) === "style-2",
+  const replayPosition = replayProgress === undefined
+    ? Number.POSITIVE_INFINITY
+    : replayProgress * (blobs.length + 0.9);
+  const dottedBlobs = blobs.slice(startIndex, Math.min(endIndex, blobs.length)).filter(
+    (blob, offset) =>
+      (blob.artStyle ?? fallbackArtStyle) === "style-2" &&
+      replayPosition - (startIndex + offset) > 0,
   );
   const visibleBlobs = dottedBlobs.slice(-32);
 
   context.save();
   context.globalCompositeOperation = "source-over";
   for (const blob of visibleBlobs) {
-    const age = Math.max(0, now - blob.createdAt);
+    const blobIndex = blobs.indexOf(blob);
+    const replayAge = replayPosition - blobIndex;
+    const age = replayProgress === undefined
+      ? Math.max(0, now - blob.createdAt)
+      : Math.max(0, replayAge) * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
     context.save();
@@ -1638,6 +1650,92 @@ function drawDottedSigilFlowLayer(
     context.restore();
   }
   context.restore();
+}
+
+function drawChronologicalAuraLayers(
+  context: CanvasRenderingContext2D,
+  organicLayer: HTMLCanvasElement,
+  organicContext: CanvasRenderingContext2D,
+  blurredLayer: HTMLCanvasElement,
+  blurredContext: CanvasRenderingContext2D,
+  blobs: readonly BlobParticle[],
+  width: number,
+  height: number,
+  now: number,
+  reducedMotion: boolean,
+  fallbackArtStyle: ArtStyleId,
+  blurRadius: number,
+  replayProgress?: number,
+) {
+  const replayPosition = replayProgress === undefined
+    ? Number.POSITIVE_INFINITY
+    : replayProgress * (blobs.length + 0.9);
+  const visibleLimit = Math.min(blobs.length, Math.max(0, Math.ceil(replayPosition)));
+  const renderNow = reducedMotion
+    ? (blobs[Math.max(0, visibleLimit - 1)]?.createdAt ?? now) + BLOB_ARRIVAL_DURATION
+    : now;
+  let dottedWindowStart = 0;
+  let dottedCount = 0;
+  for (let index = visibleLimit - 1; index >= 0; index -= 1) {
+    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") continue;
+    dottedCount += 1;
+    if (dottedCount === 32) {
+      dottedWindowStart = index;
+      break;
+    }
+  }
+
+  let runStart = 0;
+  while (runStart < visibleLimit) {
+    const isDottedRun = (blobs[runStart].artStyle ?? fallbackArtStyle) === "style-2";
+    let runEnd = runStart + 1;
+    while (
+      runEnd < visibleLimit &&
+      ((blobs[runEnd].artStyle ?? fallbackArtStyle) === "style-2") === isDottedRun
+    ) {
+      runEnd += 1;
+    }
+
+    if (isDottedRun) {
+      drawDottedSigilFlowLayer(
+        context,
+        blobs,
+        width,
+        height,
+        renderNow,
+        reducedMotion,
+        fallbackArtStyle,
+        Math.max(runStart, dottedWindowStart),
+        runEnd,
+        replayProgress,
+      );
+    } else {
+      organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
+      drawAuraComposition(
+        organicContext,
+        blobs,
+        organicLayer.width,
+        organicLayer.height,
+        renderNow,
+        replayProgress,
+        runStart,
+        runEnd,
+        fallbackArtStyle,
+      );
+      blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
+      blurredContext.save();
+      blurredContext.filter = `blur(${Math.max(0.35, blurRadius)}px)`;
+      blurredContext.drawImage(organicLayer, 0, 0);
+      blurredContext.restore();
+
+      context.save();
+      context.globalCompositeOperation = "source-over";
+      context.drawImage(blurredLayer, 0, 0, width, height);
+      context.restore();
+    }
+
+    runStart = runEnd;
+  }
 }
 
 function downloadBlob(blob: Blob, fileName: string) {
@@ -3355,12 +3453,22 @@ export function AuraToy() {
       blurredContext.drawImage(offscreen, 0, 0);
       blurredContext.restore();
 
-      context.save();
-      context.globalCompositeOperation = containsOrganicStyle ? "lighter" : "source-over";
-      context.drawImage(blurred, 0, 0, width, height);
-      context.restore();
-
-      if (hasDottedStyle) {
+      if (hasDottedStyle && containsOrganicStyle) {
+        drawChronologicalAuraLayers(
+          context,
+          offscreen,
+          offscreenContext,
+          blurred,
+          blurredContext,
+          blobsRef.current,
+          width,
+          height,
+          now,
+          reducedMotionRef.current,
+          currentArtStyle,
+          blurRadius,
+        );
+      } else if (hasDottedStyle) {
         drawDottedSigilFlowLayer(
           context,
           blobsRef.current,
@@ -3370,6 +3478,11 @@ export function AuraToy() {
           reducedMotionRef.current,
           currentArtStyle,
         );
+      } else {
+        context.save();
+        context.globalCompositeOperation = "lighter";
+        context.drawImage(blurred, 0, 0, width, height);
+        context.restore();
       }
 
       if (grainPattern) {
@@ -3600,16 +3713,30 @@ export function AuraToy() {
     blurredLayerContext.drawImage(auraLayer, 0, 0);
     blurredLayerContext.restore();
 
+    const hasDottedStyle = blobsRef.current.some(
+      (blob) => (blob.artStyle ?? artStyleRef.current) === "style-2",
+    );
+    const containsOrganicStyle = blobsRef.current.some(
+      (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
+    );
     paintArtworkBackground(outputContext, output.width, output.height);
-    outputContext.save();
-    outputContext.globalCompositeOperation = "source-over";
-    outputContext.drawImage(blurredAuraLayer, 0, 0, output.width, output.height);
-    outputContext.restore();
-    if (
-      blobsRef.current.some(
-        (blob) => (blob.artStyle ?? artStyleRef.current) === "style-2",
-      )
-    ) {
+    if (hasDottedStyle && containsOrganicStyle) {
+      drawChronologicalAuraLayers(
+        outputContext,
+        auraLayer,
+        layerContext,
+        blurredAuraLayer,
+        blurredLayerContext,
+        blobsRef.current,
+        output.width,
+        output.height,
+        performance.now(),
+        replayProgress === undefined,
+        artStyleRef.current,
+        outputBlurRadius * layerScale,
+        replayProgress,
+      );
+    } else if (hasDottedStyle) {
       drawDottedSigilFlowLayer(
         outputContext,
         blobsRef.current,
@@ -3618,7 +3745,15 @@ export function AuraToy() {
         performance.now(),
         replayProgress === undefined,
         artStyleRef.current,
+        0,
+        blobsRef.current.length,
+        replayProgress,
       );
+    } else {
+      outputContext.save();
+      outputContext.globalCompositeOperation = "source-over";
+      outputContext.drawImage(blurredAuraLayer, 0, 0, output.width, output.height);
+      outputContext.restore();
     }
     if (grainRef.current) {
       let grainPattern = exportGrainPatternsRef.current.get(output);
@@ -4123,8 +4258,8 @@ export function AuraToy() {
               <button
                 type="button"
                 className="transport-button"
-                aria-label="Shift both octaves down"
-                title="Lower both octaves"
+                aria-label="Shift piano octave down"
+                title="Lower piano octave"
                 disabled={octave === MIN_OCTAVE}
                 onClick={() => shiftOctave(-1)}
               >
@@ -4133,8 +4268,8 @@ export function AuraToy() {
               <button
                 type="button"
                 className="transport-button"
-                aria-label="Shift both octaves up"
-                title="Raise both octaves"
+                aria-label="Shift piano octave up"
+                title="Raise piano octave"
                 disabled={octave === MAX_OCTAVE}
                 onClick={() => shiftOctave(1)}
               >
@@ -4171,7 +4306,11 @@ export function AuraToy() {
                 <div
                   key={key.id}
                   className="upper-key-slot"
-                  style={{ "--upper-left": `${(key.left ?? 0) * 100}%` } as CSSProperties}
+                  data-hand={key.hand}
+                  style={{
+                    "--upper-left": `${(key.left ?? 0) * 100}%`,
+                    "--mobile-upper-left": `${(key.left ?? 0) * 200}%`,
+                  } as CSSProperties}
                 >
                   <button
                     type="button"
