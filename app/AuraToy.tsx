@@ -4,13 +4,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
-import {
-  drawStyle1Glyph,
-  style1GlyphBounds,
-  style1GlyphForBlob,
-} from "./art-styles/style-1";
+import { drawDottedSigil } from "./art-styles/style-2";
+import { drawTelemetryOverlay, telemetryNeedsFrame } from "./art-styles/telemetry";
 
-type SolidControlIconName = "check" | "close" | "download" | "image" | "mic" | "mic-off" | "video";
+type SolidControlIconName =
+  | "check"
+  | "close"
+  | "download"
+  | "fullscreen"
+  | "image"
+  | "mic"
+  | "mic-off"
+  | "video";
 
 function SolidControlIcon({
   name,
@@ -52,6 +57,9 @@ function SolidControlIcon({
           <path d="m17.5 9 4-2.3v10.6l-4-2.3Z" />
         </>
       ) : null}
+      {name === "fullscreen" ? (
+        <path d="M3 3h7v2H5v5H3V3Zm11 0h7v7h-2V5h-5V3ZM3 14h2v5h5v2H3v-7Zm16 0h2v7h-7v-2h5v-5Z" />
+      ) : null}
       {name === "download" ? (
         <path d="M12 1.75v14.5M5 9.5l7 6.75 7-6.75M3.5 21.5h17" />
       ) : null}
@@ -87,9 +95,12 @@ type AuraBlendMode = "lighter" | "source-over";
 
 type BlobParticle = {
   id: number;
+  artStyle: ArtStyleId;
   color: Color;
   accent: Color;
   shape: AuraShape;
+  note: string;
+  midi: number;
   repeat: number;
   x: number;
   y: number;
@@ -268,6 +279,7 @@ const MAX_OCTAVE = HIGHEST_PIANO_OCTAVE - 1;
 const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
 const MAX_MIDI = (HIGHEST_PIANO_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
+const TELEMETRY_TOGGLE_FADE_DURATION = 560;
 const SATURATION_CHECK_INTERVAL = 6;
 const SATURATION_MINIMUM_LAYERS = 24;
 const MAXIMUM_ADDITIVE_LAYERS = 48;
@@ -982,8 +994,8 @@ const MICROPHONE_MODES: readonly MicrophoneMode[] = [
 ];
 
 const ART_STYLE_SLOTS = [
-  { id: "style-1", label: "Style 1" },
   { id: "aura", label: "Aura" },
+  { id: "style-2", label: "Style 2" },
   { id: "style-3", label: "Style 3" },
   { id: "style-4", label: "Style 4" },
 ] as const;
@@ -1118,6 +1130,11 @@ function lerp(from: number, to: number, amount: number) {
 
 function easeOutCubic(value: number) {
   return 1 - Math.pow(1 - clamp(value, 0, 1), 3);
+}
+
+function easeInOutSmooth(value: number) {
+  const progress = clamp(value, 0, 1);
+  return progress * progress * (3 - 2 * progress);
 }
 
 function makeNoiseTile(size: number, alpha = 18, seed = 0x4a3035) {
@@ -1277,24 +1294,16 @@ function drawAuraParticle(
   alpha: number,
   preserveColor = false,
   artStyle: ArtStyleId = "aura",
+  now = performance.now(),
 ) {
+  void now;
   context.save();
   context.translate(centerX, centerY);
   context.rotate(blob.angle);
   context.shadowColor = colorToHslar(blob.color, alpha * 0.42);
   context.shadowBlur = radius * (0.16 + blob.softness * 0.34);
 
-  if (artStyle === "style-1") {
-    const glyphId = style1GlyphForBlob(blob.id, blob.repeat);
-    const bounds = style1GlyphBounds(glyphId);
-    const scale = (radius * 2) / Math.max(bounds.width, bounds.height);
-    context.shadowBlur = radius * 0.1;
-    context.shadowColor = colorToHslar(blob.color, alpha * 0.22);
-    context.scale(scale, scale);
-    context.translate(-bounds.width / 2, -bounds.height / 2);
-    context.fillStyle = colorToHslar(blob.color, Math.min(1, alpha * 1.08));
-    drawStyle1Glyph(context, glyphId);
-    context.fill();
+  if (artStyle === "style-2") {
     context.restore();
     return;
   }
@@ -1552,7 +1561,7 @@ function drawAuraComposition(
   replayProgress?: number,
   startIndex = 0,
   endIndex = blobs.length,
-  artStyle: ArtStyleId = "aura",
+  fallbackArtStyle: ArtStyleId = "aura",
 ) {
   const shortSide = Math.min(width, height);
   const replayPosition = replayProgress === undefined ? Number.POSITIVE_INFINITY : replayProgress * (blobs.length + 0.9);
@@ -1567,15 +1576,66 @@ function drawAuraComposition(
     const age = replayProgress === undefined ? Math.max(0, now - blob.createdAt) : replayAge * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
-    const preserveColor = artStyle === "style-1" || blob.blendMode === "source-over";
+    const artStyle = blob.artStyle ?? fallbackArtStyle;
+    const preserveColor = artStyle === "style-2" || blob.blendMode === "source-over";
     const alpha = clamp(
       (0.4 + blob.velocity * 0.48) * Math.min(1, replayAge) * (preserveColor ? 1.12 : 1),
       0,
       preserveColor ? 0.96 : 0.88,
     );
 
-    context.globalCompositeOperation = artStyle === "style-1" ? "source-over" : blob.blendMode;
-    drawAuraParticle(context, blob, blob.x * width, blob.y * height, radius, alpha, preserveColor, artStyle);
+    context.globalCompositeOperation = artStyle === "style-2" ? "source-over" : blob.blendMode;
+    drawAuraParticle(
+      context,
+      blob,
+      blob.x * width,
+      blob.y * height,
+      radius,
+      alpha,
+      preserveColor,
+      artStyle,
+      now,
+    );
+  }
+  context.restore();
+}
+
+function drawDottedSigilFlowLayer(
+  context: CanvasRenderingContext2D,
+  blobs: readonly BlobParticle[],
+  width: number,
+  height: number,
+  now: number,
+  reducedMotion: boolean,
+  fallbackArtStyle: ArtStyleId,
+) {
+  const shortSide = Math.min(width, height);
+  const dottedBlobs = blobs.filter(
+    (blob) => (blob.artStyle ?? fallbackArtStyle) === "style-2",
+  );
+  const visibleBlobs = dottedBlobs.slice(-32);
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  for (const blob of visibleBlobs) {
+    const age = Math.max(0, now - blob.createdAt);
+    const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
+    const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
+    context.save();
+    context.translate(blob.x * width, blob.y * height);
+    context.rotate(blob.angle);
+    drawDottedSigil(context, {
+      seed: blob.id * 4099 + blob.midi * 131 + blob.repeat * 17,
+      midi: blob.midi,
+      radius,
+      alpha: clamp((0.62 + blob.velocity * 0.28) * arrival, 0, 0.94),
+      time: reducedMotion ? BLOB_ARRIVAL_DURATION : age,
+      velocity: blob.velocity,
+      repeat: blob.repeat,
+      stretch: blob.stretch,
+      curvature: blob.curvature,
+    });
+    context.restore();
   }
   context.restore();
 }
@@ -1636,6 +1696,7 @@ export function AuraToy() {
   const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
   const imagePreviewButtonRef = useRef<HTMLButtonElement | null>(null);
   const videoPreviewButtonRef = useRef<HTMLButtonElement | null>(null);
+  const fullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
   const microphoneAllowRef = useRef<HTMLButtonElement | null>(null);
@@ -1671,6 +1732,7 @@ export function AuraToy() {
   const releaseTimersRef = useRef<Map<string, number>>(new Map());
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
   const artStyleRef = useRef<ArtStyleId>("aura");
+  const telemetryTransitionRef = useRef({ from: 0, to: 0, startedAt: 0 });
   const toneRef = useRef<{
     synth: AuraSynth | null;
     filter: AuraFilter | null;
@@ -1683,6 +1745,9 @@ export function AuraToy() {
     ready: null,
   });
   const activeToneNotesRef = useRef<Map<string, string>>(new Map());
+  const heldToneKeysRef = useRef<Set<string>>(new Set());
+  const pendingToneAttacksRef = useRef<Map<string, number>>(new Map());
+  const toneAttackSequenceRef = useRef(0);
 
   const [activeKeys, setActiveKeys] = useState<Set<string>>(() => new Set());
   const [octave, setOctave] = useState(BASE_OCTAVE);
@@ -1692,6 +1757,8 @@ export function AuraToy() {
   const [exportState, setExportState] = useState<ExportState>("idle");
   const [previewKind, setPreviewKind] = useState<ExportKind | null>(null);
   const [previewClosing, setPreviewClosing] = useState(false);
+  const [interfaceHidden, setInterfaceHidden] = useState(false);
+  const [shortcutGuideVersion, setShortcutGuideVersion] = useState(0);
   const [downloadFeedback, setDownloadFeedback] = useState<DownloadFeedback>("idle");
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
@@ -1705,6 +1772,7 @@ export function AuraToy() {
   const [microphoneMode, setMicrophoneMode] = useState<MicrophoneModeId>(DEFAULT_MICROPHONE_MODE);
   const [microphoneModeDirection, setMicrophoneModeDirection] = useState<-1 | 1>(1);
   const [artStyle, setArtStyle] = useState<ArtStyleId>("aura");
+  const [telemetry, setTelemetry] = useState(false);
   const [artStyleDirection, setArtStyleDirection] = useState<-1 | 1>(1);
 
   const keyboardMap = useMemo(() => {
@@ -1718,6 +1786,85 @@ export function AuraToy() {
   }, []);
 
   useEffect(() => {
+    // #region agent log
+    let warnCount = 0;
+    let rejectionCount = 0;
+    fetch("http://127.0.0.1:7309/ingest/fca0f173-9f0b-4ef4-9876-1cfc13a2da0e", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d73d09" },
+      body: JSON.stringify({
+        sessionId: "d73d09",
+        runId: "pre-fix",
+        hypothesisId: "C",
+        location: "app/AuraToy.tsx:mount",
+        message: "AuraToy mounted",
+        data: {
+          href: window.location.href,
+          port: window.location.port,
+          hasHot: Boolean((import.meta as { hot?: unknown }).hot),
+          readyState: document.readyState,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      const text = args.map(String).join(" ");
+      if (text.includes("polyphony") || text.includes("send was called")) {
+        warnCount += 1;
+        if (warnCount <= 6) {
+          fetch("http://127.0.0.1:7309/ingest/fca0f173-9f0b-4ef4-9876-1cfc13a2da0e", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d73d09" },
+            body: JSON.stringify({
+              sessionId: "d73d09",
+              runId: "pre-fix",
+              hypothesisId: "B",
+              location: "app/AuraToy.tsx:console.warn",
+              message: "forwarded console.warn",
+              data: { warnCount, text: text.slice(0, 200), href: window.location.href },
+              timestamp: Date.now(),
+            }),
+          }).catch(() => {});
+        }
+      }
+      originalWarn.apply(console, args);
+    };
+    const onReject = (event: PromiseRejectionEvent) => {
+      rejectionCount += 1;
+      const reason = event.reason as { message?: string; stack?: string } | string;
+      const message = typeof reason === "string" ? reason : String(reason?.message ?? reason);
+      if (rejectionCount <= 8 || rejectionCount % 25 === 0) {
+        fetch("http://127.0.0.1:7309/ingest/fca0f173-9f0b-4ef4-9876-1cfc13a2da0e", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d73d09" },
+          body: JSON.stringify({
+            sessionId: "d73d09",
+            runId: "pre-fix",
+            hypothesisId: "B",
+            location: "app/AuraToy.tsx:unhandledrejection",
+            message: "unhandledrejection",
+            data: {
+              rejectionCount,
+              reason: message.slice(0, 300),
+              stack:
+                typeof reason === "object" && reason?.stack ? String(reason.stack).slice(0, 400) : "",
+              href: window.location.href,
+            },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener("unhandledrejection", onReject);
+    return () => {
+      console.warn = originalWarn;
+      window.removeEventListener("unhandledrejection", onReject);
+    };
+    // #endregion
+  }, []);
+
+  useEffect(() => {
     soundModeRef.current = soundMode;
   }, [soundMode]);
 
@@ -1725,6 +1872,36 @@ export function AuraToy() {
     artStyleRef.current = artStyle;
     wakeRendererRef.current?.();
   }, [artStyle]);
+
+  useEffect(() => {
+    const now = performance.now();
+    const previous = telemetryTransitionRef.current;
+    const previousProgress = easeInOutSmooth(
+      (now - previous.startedAt) / TELEMETRY_TOGGLE_FADE_DURATION,
+    );
+    const currentOpacity = lerp(previous.from, previous.to, previousProgress);
+    telemetryTransitionRef.current = {
+      from: currentOpacity,
+      to: telemetry ? 1 : 0,
+      startedAt: now,
+    };
+    wakeRendererRef.current?.();
+  }, [telemetry]);
+
+  useEffect(() => {
+    if (!interfaceHidden) return;
+    const restoreInterface = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (previewKind || microphonePromptOpen) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setInterfaceHidden(false);
+      setShortcutGuideVersion(0);
+      window.requestAnimationFrame(() => fullscreenButtonRef.current?.focus({ preventScroll: true }));
+    };
+    window.addEventListener("keydown", restoreInterface, true);
+    return () => window.removeEventListener("keydown", restoreInterface, true);
+  }, [interfaceHidden, microphonePromptOpen, previewKind]);
 
   useEffect(() => {
     microphoneModeRef.current = microphoneMode;
@@ -1752,6 +1929,8 @@ export function AuraToy() {
     filter?.dispose();
     reverb?.dispose();
     activeToneNotesRef.current.clear();
+    heldToneKeysRef.current.clear();
+    pendingToneAttacksRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -1929,9 +2108,22 @@ export function AuraToy() {
   const triggerAttack = useCallback(
     (keyId: string, noteName: string, velocity: number) => {
       const generation = visualGenerationRef.current;
+      const attackSequence = toneAttackSequenceRef.current + 1;
+      toneAttackSequenceRef.current = attackSequence;
+      heldToneKeysRef.current.add(keyId);
+      pendingToneAttacksRef.current.set(keyId, attackSequence);
       void ensureTone()
         .then(() => {
           if (generation !== visualGenerationRef.current) return;
+          if (
+            pendingToneAttacksRef.current.get(keyId) !== attackSequence ||
+            !heldToneKeysRef.current.has(keyId)
+          ) {
+            return;
+          }
+          pendingToneAttacksRef.current.delete(keyId);
+          const previousNote = activeToneNotesRef.current.get(keyId);
+          if (previousNote) toneRef.current.synth?.triggerRelease(previousNote);
           activeToneNotesRef.current.set(keyId, noteName);
           toneRef.current.synth?.triggerAttack(noteName, undefined, velocity);
         })
@@ -1941,10 +2133,19 @@ export function AuraToy() {
   );
 
   const triggerRelease = useCallback((keyId: string) => {
+    heldToneKeysRef.current.delete(keyId);
+    pendingToneAttacksRef.current.delete(keyId);
     const noteName = activeToneNotesRef.current.get(keyId);
     if (!noteName) return;
     toneRef.current.synth?.triggerRelease(noteName);
     activeToneNotesRef.current.delete(keyId);
+  }, []);
+
+  const releaseAllToneNotes = useCallback(() => {
+    heldToneKeysRef.current.clear();
+    pendingToneAttacksRef.current.clear();
+    toneRef.current.synth?.releaseAll();
+    activeToneNotesRef.current.clear();
   }, []);
 
   const spawnBlob = useCallback((note: NoteChoice, color: Color, velocity: number) => {
@@ -1952,6 +2153,7 @@ export function AuraToy() {
     const id = blobIdRef.current;
     blobIdRef.current += 1;
     const mode = soundModeRef.current;
+    const currentArtStyle = artStyleRef.current;
     const profile = VISUAL_MODES[mode];
     const modeIndex = SOUND_MODE_INDEX[mode];
     const identity = `AURA|${mode}|${note.name}`;
@@ -2000,8 +2202,8 @@ export function AuraToy() {
       registerScale;
     const [minimumStretch, maximumStretch] = AURA_STRETCH_BY_SHAPE[shape];
     const stretch =
-      artStyleRef.current === "style-1"
-        ? lerp(0.94, 1.08, identityRng())
+      currentArtStyle === "style-2"
+        ? lerp(0.78, 1.32, identityRng())
         : lerp(minimumStretch, maximumStretch, identityRng()) *
           (0.96 + Math.min(repeat, 8) * 0.018);
     const paletteOffset = AURA_MAPPING.seedHash % RADIOGRAPHIC_HUES.length;
@@ -2023,7 +2225,7 @@ export function AuraToy() {
     }
 
     const blendMode: AuraBlendMode =
-      artStyleRef.current === "style-1"
+      currentArtStyle === "style-2"
         ? "source-over"
         : colorRebuildLayersRef.current > 0
           ? "source-over"
@@ -2035,16 +2237,19 @@ export function AuraToy() {
 
     blobsRef.current.push({
       id,
+      artStyle: currentArtStyle,
       color,
       accent,
       shape,
+      note: note.name,
+      midi: note.midi,
       repeat,
       x,
       y,
       radius,
       angle:
-        artStyleRef.current === "style-1"
-          ? (identityRng() - 0.5) * 0.32
+        currentArtStyle === "style-2"
+          ? (identityRng() - 0.5) * 1.35 + (note.pc - 5.5) * 0.08
           : baseAngle + Math.sin(repeat * 0.62) * 0.055,
       stretch,
       thickness: 0.2 + identityRng() * 0.42 + velocity * 0.12 + Math.min(repeat, 8) * 0.012,
@@ -2899,14 +3104,38 @@ export function AuraToy() {
       downKeys.delete(event.key);
       endKey(key);
     };
+    const clearDownKeys = () => downKeys.clear();
 
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", clearDownKeys);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", clearDownKeys);
     };
   }, [endKey, keyboardMap, microphonePromptOpen, previewKind, startKey]);
+
+  useEffect(() => {
+    const releaseInterruptedNotes = () => {
+      // A hidden or unfocused tab must be silent immediately; disposing also
+      // removes long pad/reverb tails that releaseAll intentionally preserves.
+      disposeToneEngine();
+      releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      releaseTimersRef.current.clear();
+      setActiveKeys(new Set());
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) releaseInterruptedNotes();
+    };
+
+    window.addEventListener("blur", releaseInterruptedNotes);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", releaseInterruptedNotes);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [disposeToneEngine]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2942,7 +3171,6 @@ export function AuraToy() {
     let running = false;
     let lastDrawAt = -Infinity;
     let settledCount = 0;
-    let settledArtStyle: ArtStyleId = artStyleRef.current;
     let adaptiveRenderScale = 1;
     let overBudgetFrames = 0;
     let lastQualityAdjustmentAt = -Infinity;
@@ -3056,10 +3284,9 @@ export function AuraToy() {
       drawEmptyAura();
 
       syncOffscreenSize(true);
-      if (blobsRef.current.length < settledCount || settledArtStyle !== currentArtStyle) {
+      if (blobsRef.current.length < settledCount) {
         settledContext.clearRect(0, 0, settled.width, settled.height);
         settledCount = 0;
-        settledArtStyle = currentArtStyle;
       }
       const settleStartedAt = performance.now();
       while (settledCount < blobsRef.current.length) {
@@ -3078,7 +3305,7 @@ export function AuraToy() {
         );
         settledCount += 1;
         if (
-          currentArtStyle !== "style-1" &&
+          (blob.artStyle ?? currentArtStyle) !== "style-2" &&
           colorRebuildLayersRef.current === 0 &&
           settledCount - additiveLayerStartRef.current >= SATURATION_MINIMUM_LAYERS &&
           settledCount % SATURATION_CHECK_INTERVAL === 0 &&
@@ -3110,25 +3337,71 @@ export function AuraToy() {
       blurredContext.clearRect(0, 0, blurred.width, blurred.height);
       blurredContext.save();
       const blurScale = offscreen.width / Math.max(1, width);
+      const hasDottedStyle = blobsRef.current.some(
+        (blob) => (blob.artStyle ?? currentArtStyle) === "style-2",
+      );
+      const containsOrganicStyle = blobsRef.current.some(
+        (blob) => (blob.artStyle ?? currentArtStyle) !== "style-2",
+      );
       const blurRadius =
-        (currentArtStyle === "style-1"
+        (containsOrganicStyle
           ? reducedMotionRef.current
-            ? 1.1
-            : 2
-          : reducedMotionRef.current
             ? 4
-            : 7) * blurScale;
-      blurredContext.filter = `blur(${Math.max(0.5, blurRadius)}px)`;
+            : 7
+          : reducedMotionRef.current
+            ? 0.4
+            : 0.65) * blurScale;
+      blurredContext.filter = `blur(${Math.max(0.35, blurRadius)}px)`;
       blurredContext.drawImage(offscreen, 0, 0);
       blurredContext.restore();
 
       context.save();
-      context.globalCompositeOperation = currentArtStyle === "style-1" ? "source-over" : "lighter";
+      context.globalCompositeOperation = containsOrganicStyle ? "lighter" : "source-over";
       context.drawImage(blurred, 0, 0, width, height);
       context.restore();
 
+      if (hasDottedStyle) {
+        drawDottedSigilFlowLayer(
+          context,
+          blobsRef.current,
+          width,
+          height,
+          now,
+          reducedMotionRef.current,
+          currentArtStyle,
+        );
+      }
+
       if (grainPattern) {
         drawGrainPattern(context, width, height, grainPattern, 0.055);
+      }
+
+      const telemetryTransition = telemetryTransitionRef.current;
+      const telemetryTransitionProgress = clamp(
+        (now - telemetryTransition.startedAt) / TELEMETRY_TOGGLE_FADE_DURATION,
+        0,
+        1,
+      );
+      const telemetryOpacity = lerp(
+        telemetryTransition.from,
+        telemetryTransition.to,
+        easeInOutSmooth(telemetryTransitionProgress),
+      );
+      const telemetryIsTransitioning =
+        telemetryTransitionProgress < 1 &&
+        Math.abs(telemetryTransition.to - telemetryTransition.from) > 0.001;
+
+      // Screen-only: exports render from drawAuraComposition without this pass.
+      if (telemetryOpacity > 0.001) {
+        drawTelemetryOverlay(
+          context,
+          blobsRef.current,
+          width,
+          height,
+          now,
+          currentArtStyle,
+          telemetryOpacity,
+        );
       }
 
       const newestBlob = blobsRef.current.at(-1);
@@ -3151,7 +3424,13 @@ export function AuraToy() {
         overBudgetFrames = 0;
         lastQualityAdjustmentAt = now;
       }
-      if (hasArrivingBlob || settledCount < blobsRef.current.length) {
+      if (
+        hasArrivingBlob ||
+        (hasDottedStyle && !reducedMotionRef.current) ||
+        settledCount < blobsRef.current.length ||
+        telemetryIsTransitioning ||
+        (telemetryOpacity > 0.001 && telemetryNeedsFrame(blobsRef.current, now))
+      ) {
         wakeRenderer();
       }
     };
@@ -3326,6 +3605,21 @@ export function AuraToy() {
     outputContext.globalCompositeOperation = "source-over";
     outputContext.drawImage(blurredAuraLayer, 0, 0, output.width, output.height);
     outputContext.restore();
+    if (
+      blobsRef.current.some(
+        (blob) => (blob.artStyle ?? artStyleRef.current) === "style-2",
+      )
+    ) {
+      drawDottedSigilFlowLayer(
+        outputContext,
+        blobsRef.current,
+        output.width,
+        output.height,
+        performance.now(),
+        replayProgress === undefined,
+        artStyleRef.current,
+      );
+    }
     if (grainRef.current) {
       let grainPattern = exportGrainPatternsRef.current.get(output);
       if (!grainPattern) {
@@ -3499,11 +3793,10 @@ export function AuraToy() {
   }, [closePreview, createExportCanvas, exportState, holdDownloadFeedback, renderArtwork]);
 
   const shiftOctave = useCallback((direction: -1 | 1) => {
-    toneRef.current.synth?.releaseAll();
-    activeToneNotesRef.current.clear();
+    releaseAllToneNotes();
     setActiveKeys(new Set());
     setOctave((current) => clamp(current + direction, MIN_OCTAVE, MAX_OCTAVE));
-  }, []);
+  }, [releaseAllToneNotes]);
 
   const selectSoundMode = useCallback(
     (nextMode: SoundModeId, direction?: -1 | 1) => {
@@ -3562,6 +3855,9 @@ export function AuraToy() {
   }, [cycleSoundMode, microphonePromptOpen, previewKind]);
 
   const resetAura = useCallback(() => {
+    disposeToneEngine();
+    releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    releaseTimersRef.current.clear();
     blobsRef.current = [];
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
@@ -3583,29 +3879,130 @@ export function AuraToy() {
     if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
     setResetting(true);
     setLayerCount(0);
+    setActiveKeys(new Set());
     setOctave(BASE_OCTAVE);
     wakeRendererRef.current?.();
     resetFrameRef.current = window.requestAnimationFrame(() => {
       resetFrameRef.current = null;
       setResetting(false);
     });
-  }, []);
+  }, [disposeToneEngine]);
+
+  const selectArtStyleByIndex = useCallback(
+    (nextIndex: number) => {
+      const nextStyle = ART_STYLE_SLOTS[nextIndex];
+      if (!nextStyle || nextStyle.id === artStyle) return;
+      const currentIndex = ART_STYLE_SLOTS.findIndex(({ id }) => id === artStyle);
+      setArtStyleDirection(nextIndex >= currentIndex ? 1 : -1);
+      setArtStyle(nextStyle.id);
+      hapticFeedback("confirm");
+    },
+    [artStyle],
+  );
+
+  const enterFullscreenView = useCallback(() => {
+    if (layerCount === 0 || exportState !== "idle") return;
+    fullscreenButtonRef.current?.blur();
+    setShortcutGuideVersion(0);
+    setInterfaceHidden(true);
+    hapticFeedback("open");
+  }, [exportState, layerCount]);
+
+  useEffect(() => {
+    const handleFeatureShortcut = (event: KeyboardEvent) => {
+      if (
+        event.repeat ||
+        event.metaKey ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      const run = (action: () => void) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        action();
+      };
+
+      if (previewKind) return;
+
+      if (microphonePromptOpen) return;
+
+      if (event.key === "?") {
+        run(() => setShortcutGuideVersion((current) => current + 1));
+      } else if (key === "r") {
+        run(resetAura);
+      } else if (event.key === "T") {
+        run(() => {
+          setTelemetry((current) => !current);
+          hapticFeedback("confirm");
+        });
+      } else if (/^[1-4]$/.test(key)) {
+        run(() => selectArtStyleByIndex(Number(key) - 1));
+      } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        run(() => cycleSoundMode(event.key === "ArrowUp" ? -1 : 1));
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const direction = event.key === "ArrowLeft" ? -1 : 1;
+        if (
+          (direction === -1 && octave > MIN_OCTAVE) ||
+          (direction === 1 && octave < MAX_OCTAVE)
+        ) {
+          run(() => shiftOctave(direction));
+        }
+      } else if (key === "," || key === "<" || key === "." || key === ">") {
+        if (microphoneState !== "unsupported") {
+          run(() => cycleMicrophoneMode(key === "," || key === "<" ? -1 : 1));
+        }
+      } else if (key === "m") {
+        if (microphoneState !== "unsupported") run(toggleMicrophone);
+      } else if (event.key === "F") {
+        if (interfaceHidden) {
+          run(() => {
+            setInterfaceHidden(false);
+            setShortcutGuideVersion(0);
+            window.requestAnimationFrame(() =>
+              fullscreenButtonRef.current?.focus({ preventScroll: true }),
+            );
+          });
+        } else if (layerCount > 0 && exportState === "idle") {
+          run(enterFullscreenView);
+        }
+      } else if (event.key === "P") {
+        if (layerCount > 0 && exportState === "idle") run(() => openPreview("image"));
+      } else if (key === "v") {
+        if (layerCount > 0 && exportState === "idle") run(() => openPreview("video"));
+      }
+    };
+
+    window.addEventListener("keydown", handleFeatureShortcut, true);
+    return () => window.removeEventListener("keydown", handleFeatureShortcut, true);
+  }, [
+    cycleMicrophoneMode,
+    cycleSoundMode,
+    enterFullscreenView,
+    exportState,
+    interfaceHidden,
+    layerCount,
+    microphonePromptOpen,
+    microphoneState,
+    octave,
+    openPreview,
+    previewKind,
+    resetAura,
+    selectArtStyleByIndex,
+    shiftOctave,
+    toggleMicrophone,
+  ]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
   const activeMicrophoneMode =
     MICROPHONE_MODES.find(({ id }) => id === microphoneMode) ?? MICROPHONE_MODES[0];
   const activeArtStyle =
-    ART_STYLE_SLOTS.find(({ id }) => id === artStyle) ?? ART_STYLE_SLOTS[1];
-  const randomizeArtStyle = () => {
-    const currentIndex = ART_STYLE_SLOTS.findIndex(({ id }) => id === artStyle);
-    const randomOffset = 1 + Math.floor(Math.random() * (ART_STYLE_SLOTS.length - 1));
-    const nextIndex = (currentIndex + randomOffset) % ART_STYLE_SLOTS.length;
-    const nextStyle = ART_STYLE_SLOTS[nextIndex];
-
-    setArtStyleDirection(nextIndex >= currentIndex ? 1 : -1);
-    setArtStyle(nextStyle.id);
-    hapticFeedback("confirm");
-  };
+    ART_STYLE_SLOTS.find(({ id }) => id === artStyle) ?? ART_STYLE_SLOTS[0];
   const microphoneLabel =
     microphoneState === "listening"
       ? `Stop microphone listening, detecting ${microphoneReading}`
@@ -3637,17 +4034,19 @@ export function AuraToy() {
   };
 
   return (
-    <main className={`aura-page ${resetting ? "is-resetting" : ""}`}>
+    <main
+      className={`aura-page ${resetting ? "is-resetting" : ""} ${interfaceHidden ? "is-interface-hidden" : ""}`}
+    >
       <canvas ref={canvasRef} className="aura-canvas" aria-hidden="true" />
 
-      <section className="instrument-zone" aria-label="Aura instrument">
+      <section className="instrument-zone" aria-label="Aura instrument" aria-hidden={interfaceHidden}>
         <div className="instrument-cluster">
           <div className="instrument-body-frame">
             <div className="instrument-body">
             <div className="instrument-header">
             <button
               type="button"
-              className="power-led"
+              className="power-led reset-led"
               aria-label="Reset aura"
               title="Reset aura"
               onClick={resetAura}
@@ -3702,6 +4101,25 @@ export function AuraToy() {
             </div>
             <span className="header-rule" aria-hidden="true" />
             <div className="transport" aria-label="Octave controls">
+              <span
+                className="octave-indicator"
+                role="status"
+                aria-live="polite"
+                aria-label={`Octave ${octave}`}
+              >
+                {Array.from({ length: MAX_OCTAVE - MIN_OCTAVE + 1 }, (_, index) => {
+                  const indicatorOctave = MIN_OCTAVE + index;
+                  return (
+                    <span
+                      key={indicatorOctave}
+                      className={`octave-indicator-dot ${
+                        indicatorOctave === octave ? "is-active" : ""
+                      }`}
+                      aria-hidden="true"
+                    />
+                  );
+                })}
+              </span>
               <button
                 type="button"
                 className="transport-button"
@@ -3791,16 +4209,22 @@ export function AuraToy() {
                 </div>
                 <button
                   type="button"
-                  className="power-led art-style-randomizer"
-                  aria-label="Randomize aesthetic"
-                  title="Choose a random aesthetic"
-                  aria-controls="art-style-grid"
-                  onClick={randomizeArtStyle}
+                  className={`power-led art-style-telemetry ${telemetry ? "is-active" : ""}`}
+                  aria-label={`TouchDesigner overlay${telemetry ? ", on" : ", off"}`}
+                  role="switch"
+                  aria-checked={telemetry}
+                  title="Toggle TouchDesigner overlay"
+                  onClick={() => {
+                    setTelemetry((current) => !current);
+                    hapticFeedback("confirm");
+                  }}
                 />
               </div>
               <div id="art-style-grid" className="art-style-grid" role="group" aria-label="Art styles">
                 {ART_STYLE_SLOTS.map((style, nextIndex) => {
                   const selected = style.id === artStyle;
+                  const selectStyle = () => selectArtStyleByIndex(nextIndex);
+
                   return (
                     <button
                       key={style.id}
@@ -3809,13 +4233,10 @@ export function AuraToy() {
                       aria-label={`${style.label} art style${selected ? ", selected" : ""}`}
                       aria-pressed={selected}
                       title={style.label}
-                      onClick={() => {
-                        if (selected) return;
-                        const currentIndex = ART_STYLE_SLOTS.findIndex(({ id }) => id === artStyle);
-                        setArtStyleDirection(nextIndex >= currentIndex ? 1 : -1);
-                        setArtStyle(style.id);
-                        hapticFeedback("confirm");
+                      onPointerDown={(event) => {
+                        if (event.button === 0) selectStyle();
                       }}
+                      onClick={selectStyle}
                     />
                   );
                 })}
@@ -3828,6 +4249,7 @@ export function AuraToy() {
       <div
         className={`microphone-dock ${microphoneState === "listening" ? "is-listening" : ""}`}
         aria-label="Microphone input"
+        aria-hidden={interfaceHidden}
       >
         <button
           ref={microphoneButtonRef}
@@ -3952,7 +4374,22 @@ export function AuraToy() {
         </div>
       ) : null}
 
-      <div className={`export-dock ${layerCount > 0 ? "is-ready" : ""}`} aria-label="Export visual">
+      <div
+        className={`export-dock ${layerCount > 0 ? "is-ready" : ""}`}
+        aria-label="Export visual"
+        aria-hidden={interfaceHidden}
+      >
+        <button
+          ref={fullscreenButtonRef}
+          type="button"
+          className="export-button"
+          aria-label="Hide interface for fullscreen view"
+          title="Fullscreen view (Shift+F)"
+          disabled={layerCount === 0 || exportState !== "idle"}
+          onClick={enterFullscreenView}
+        >
+          <SolidControlIcon name="fullscreen" size={15} />
+        </button>
         <button
           ref={imagePreviewButtonRef}
           type="button"
@@ -3979,6 +4416,34 @@ export function AuraToy() {
           {exportState === "video" ? "Rendering Aura video" : ""}
         </span>
       </div>
+
+      {interfaceHidden && shortcutGuideVersion === 0 ? (
+        <div className="interface-hidden-hint" role="status" aria-live="polite">
+          <span>Esc returns the interface</span>
+          <span className="interface-hidden-hint-divider" aria-hidden="true">|</span>
+          <span>? shows shortcuts</span>
+        </div>
+      ) : null}
+
+      {shortcutGuideVersion > 0 ? (
+        <div
+          key={shortcutGuideVersion}
+          className="presentation-shortcut-guide"
+          role="status"
+          aria-live="polite"
+        >
+          <span><kbd>R</kbd> Reset</span>
+          <span><kbd>↑ ↓</kbd> Sound</span>
+          <span><kbd>← →</kbd> Octave</span>
+          <span><kbd>1–4</kbd> Style</span>
+          <span><kbd>⇧ T</kbd> TouchDesigner</span>
+          <span><kbd>M</kbd> Microphone</span>
+          <span><kbd>&lt; &gt;</kbd> Mic mode</span>
+          <span><kbd>⇧ P</kbd> Photo</span>
+          <span><kbd>V</kbd> Video</span>
+          <span><kbd>⇧ F</kbd> Fullscreen</span>
+        </div>
+      ) : null}
 
       {previewKind ? (
         <div
