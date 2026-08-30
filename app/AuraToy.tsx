@@ -4133,7 +4133,7 @@ export function AuraToy() {
         }
       } else if (key === "m") {
         if (microphoneState !== "unsupported") run(toggleMicrophone);
-      } else if (event.key === "F") {
+      } else if (event.shiftKey && key === "f") {
         if (interfaceHidden) {
           run(() => {
             setInterfaceHidden(false);
