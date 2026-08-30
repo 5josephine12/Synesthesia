@@ -39,9 +39,10 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="Next sound mode"/);
   assert.match(html, /aria-label="Art styles"/);
   assert.match(html, /aria-label="Aesthetic: Aura"/);
-  assert.match(html, /aria-label="Randomize aesthetic"/);
+  assert.match(html, /aria-label="TouchDesigner overlay, off"/);
+  assert.match(html, /role="switch" aria-checked="false"/);
   assert.match(html, /aria-label="Aura art style, selected"/);
-  assert.match(html, /aria-label="Style 1 art style"/);
+  assert.match(html, /aria-label="Style 2 art style"/);
   assert.match(html, /aria-label="Style 4 art style"/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /filled-triangle is-up/);
@@ -50,8 +51,8 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="B4"/);
   assert.match(html, /data-hand="left"/);
   assert.match(html, /data-hand="right"/);
-  assert.match(html, /aria-label="Shift both octaves down"/);
-  assert.match(html, /aria-label="Shift both octaves up"/);
+  assert.match(html, /aria-label="Shift piano octave down"/);
+  assert.match(html, /aria-label="Shift piano octave up"/);
   assert.match(html, /aria-label="Preview visual as PNG"/);
   assert.match(html, /aria-label="Preview visual as video"/);
   assert.match(html, /data-solid-icon="mic"/);

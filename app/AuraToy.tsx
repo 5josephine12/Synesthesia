@@ -5,7 +5,11 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
 import { drawDottedSigil } from "./art-styles/style-2";
-import { drawTelemetryOverlay, telemetryNeedsFrame } from "./art-styles/telemetry";
+import {
+  drawTelemetryOverlay,
+  telemetryNeedsFrame,
+  type TelemetryBeatClock,
+} from "./art-styles/telemetry";
 
 type SolidControlIconName =
   | "check"
@@ -1831,6 +1835,11 @@ export function AuraToy() {
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
   const artStyleRef = useRef<ArtStyleId>("aura");
   const telemetryTransitionRef = useRef({ from: 0, to: 0, startedAt: 0 });
+  const telemetryBeatRef = useRef<TelemetryBeatClock>({
+    anchorAt: 0,
+    interval: 500,
+    strength: 0.82,
+  });
   const toneRef = useRef<{
     synth: AuraSynth | null;
     filter: AuraFilter | null;
@@ -1872,6 +1881,26 @@ export function AuraToy() {
   const [artStyle, setArtStyle] = useState<ArtStyleId>("aura");
   const [telemetry, setTelemetry] = useState(false);
   const [artStyleDirection, setArtStyleDirection] = useState<-1 | 1>(1);
+
+  const registerTelemetryBeat = useCallback(
+    (at = performance.now(), detectedInterval?: number, strength = 1) => {
+      const previous = telemetryBeatRef.current;
+      const elapsed = at - previous.anchorAt;
+      let interval = previous.interval;
+      if (detectedInterval !== undefined && Number.isFinite(detectedInterval)) {
+        interval = normalizeBeatInterval(detectedInterval);
+      } else if (previous.anchorAt > 0 && elapsed >= 150 && elapsed <= 1520) {
+        interval = lerp(previous.interval, normalizeBeatInterval(elapsed), 0.38);
+      }
+      telemetryBeatRef.current = {
+        anchorAt: at,
+        interval: clamp(interval, 360, 760),
+        strength: clamp(strength, 0.35, 1),
+      };
+      wakeRendererRef.current?.();
+    },
+    [],
+  );
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -2599,6 +2628,13 @@ export function AuraToy() {
           spectralFlux,
           beatBandEnergy,
         );
+        if (beatDetected) {
+          registerTelemetryBeat(
+            runtime.lastBeatAt,
+            runtime.beatInterval,
+            clamp(0.72 + level * 0.28, 0.72, 1),
+          );
+        }
         const previousFlux = runtime.smoothedFlux;
         runtime.smoothedFlux = lerp(previousFlux, spectralFlux, 0.085);
 
@@ -3000,7 +3036,7 @@ export function AuraToy() {
       setMicrophoneReading("Microphone unavailable");
       hapticFeedback("error");
     }
-  }, [spawnBlob, stopMicrophone]);
+  }, [registerTelemetryBeat, spawnBlob, stopMicrophone]);
 
   const prepareMicrophone = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -3130,6 +3166,7 @@ export function AuraToy() {
 
       const note = shiftedNote(key);
       const color = AURA_MAPPING.pitches[note.pc];
+      registerTelemetryBeat(performance.now(), undefined, velocity);
       spawnBlob(note, color, velocity);
       setActiveKeys((current) => {
         const next = new Set(current);
@@ -3138,7 +3175,7 @@ export function AuraToy() {
       });
       triggerAttack(key.id, note.name, velocity);
     },
-    [shiftedNote, spawnBlob, triggerAttack],
+    [registerTelemetryBeat, shiftedNote, spawnBlob, triggerAttack],
   );
 
   const endKey = useCallback(
@@ -3514,6 +3551,7 @@ export function AuraToy() {
           now,
           currentArtStyle,
           telemetryOpacity,
+          telemetryBeatRef.current,
         );
       }
 
@@ -3542,7 +3580,8 @@ export function AuraToy() {
         (hasDottedStyle && !reducedMotionRef.current) ||
         settledCount < blobsRef.current.length ||
         telemetryIsTransitioning ||
-        (telemetryOpacity > 0.001 && telemetryNeedsFrame(blobsRef.current, now))
+        (telemetryOpacity > 0.001 &&
+          telemetryNeedsFrame(blobsRef.current, now, telemetryBeatRef.current))
       ) {
         wakeRenderer();
       }

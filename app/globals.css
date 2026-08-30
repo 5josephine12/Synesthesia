@@ -37,7 +37,7 @@ html {
 }
 
 body {
-  min-width: 320px;
+  min-width: 0;
   margin: 0;
   overflow: hidden;
   background: var(--bg);
@@ -1714,8 +1714,9 @@ button {
 
   .instrument-zone {
     bottom: var(--instrument-edge-gap);
-    width: 754px;
-    height: 258px;
+    display: block;
+    width: var(--instrument-rendered-width);
+    height: var(--instrument-rendered-height);
   }
 
   .instrument-cluster {
@@ -1725,8 +1726,11 @@ button {
     width: 754px;
     height: 258px;
     border-radius: 34px;
+    position: absolute;
+    bottom: 0;
+    left: 0;
     transform: scale(var(--compact-instrument-scale));
-    transform-origin: center bottom;
+    transform-origin: left bottom;
   }
 
   .instrument-body-frame {
