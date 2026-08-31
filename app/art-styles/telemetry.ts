@@ -32,12 +32,6 @@ export type TelemetryNode = {
   createdAt: number;
 };
 
-export type TelemetryBeatClock = {
-  anchorAt: number;
-  interval: number;
-  strength: number;
-};
-
 type Rect = {
   x: number;
   y: number;
@@ -86,7 +80,6 @@ type OverlayMorphState = {
   to: FocusPresentation;
   startedAt: number;
   sessionStartedAt: number;
-  targetActivatedAt: number;
   lastRenderedAt: number;
   width: number;
   height: number;
@@ -105,7 +98,7 @@ const ENTER_MS = 680;
 const HOLD_MS = 4300;
 const EXIT_MS = 1000;
 const LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
-const MORPH_MS = 1120;
+const MORPH_MS = 820;
 const SESSION_BREAK_MS = 1400;
 
 const MAX_PANELS = 4;
@@ -124,6 +117,10 @@ const HUD_GLOW = "255, 255, 255";
 let snapshotStrip: HTMLCanvasElement | null = null;
 let morphStates: OverlayMorphState[] = [];
 let processedNodeKeys = new Set<string>();
+let cachedChordLabels = new Map<number, string | null>();
+let cachedChordFirstId = -1;
+let cachedChordLastId = -1;
+let cachedChordNodeCount = -1;
 
 const CHORD_SHAPES: readonly { readonly intervals: readonly number[]; readonly suffix: string }[] = [
   { intervals: [0, 4, 7], suffix: "" },
@@ -164,31 +161,8 @@ function easeInOutCubic(value: number) {
     : 1 - Math.pow(-2 * clamped + 2, 3) / 2;
 }
 
-function easeInOutSmoother(value: number) {
-  const clamped = clamp(value, 0, 1);
-  return clamped * clamped * clamped * (clamped * (clamped * 6 - 15) + 10);
-}
-
 function lerp(from: number, to: number, amount: number) {
   return from + (to - from) * amount;
-}
-
-/** A fast attack and musical decay, phase-locked to the shared beat grid. */
-export function telemetryBeatPulse(now: number, clock?: TelemetryBeatClock) {
-  if (!clock || !Number.isFinite(clock.anchorAt)) return 0;
-  const interval = clamp(clock.interval, 240, 1200);
-  const elapsed = Math.max(0, now - clock.anchorAt);
-  const phase = ((elapsed % interval) + interval) % interval / interval;
-  const attackDecay = Math.pow(1 - phase, 4.2);
-  return attackDecay * clamp(clock.strength, 0.35, 1);
-}
-
-/** Queues between-beat visual events onto the next shared beat boundary. */
-export function telemetryActivationAt(createdAt: number, clock?: TelemetryBeatClock) {
-  if (!clock || !Number.isFinite(clock.anchorAt)) return createdAt;
-  const interval = clamp(clock.interval, 240, 1200);
-  const beatNumber = Math.ceil((createdAt - clock.anchorAt - 36) / interval);
-  return clock.anchorAt + beatNumber * interval;
 }
 
 function pitchClass(midi: number) {
@@ -250,6 +224,22 @@ function chordLabels(nodes: readonly TelemetryNode[]) {
   }
 
   return labels;
+}
+
+function chordLabelsForActiveNodes(nodes: readonly TelemetryNode[]) {
+  const firstId = nodes[0]?.id ?? -1;
+  const lastId = nodes.at(-1)?.id ?? -1;
+  if (
+    firstId !== cachedChordFirstId ||
+    lastId !== cachedChordLastId ||
+    nodes.length !== cachedChordNodeCount
+  ) {
+    cachedChordLabels = chordLabels(nodes);
+    cachedChordFirstId = firstId;
+    cachedChordLastId = lastId;
+    cachedChordNodeCount = nodes.length;
+  }
+  return cachedChordLabels;
 }
 
 function accentColor(_color: TelemetryColor, alpha: number) {
@@ -462,7 +452,7 @@ function panelPlacement(
   };
 }
 
-/** A transient curved link makes the previous visualization flow into the next. */
+/** A transient straight link makes the previous visualization hand off to the next. */
 function drawMorphConnector(
   context: CanvasRenderingContext2D,
   from: VisualizationFrame,
@@ -477,25 +467,19 @@ function drawMorphConnector(
   const fromEdge = frameAnchor(from, to.centerX, to.centerY);
   const toEdge = frameAnchor(to, from.centerX, from.centerY);
   const length = Math.hypot(toEdge.x - fromEdge.x, toEdge.y - fromEdge.y);
-  const reveal = easeInOutSmoother(clamp(progress / 0.7, 0, 1));
-  const deltaX = toEdge.x - fromEdge.x;
-  const deltaY = toEdge.y - fromEdge.y;
-  const bend = Math.min(18, length * 0.09) * Math.sin(progress * Math.PI);
-  const direction = from.centerX + from.centerY <= to.centerX + to.centerY ? 1 : -1;
-  const controlX = (fromEdge.x + toEdge.x) * 0.5 - (deltaY / Math.max(1, length)) * bend * direction;
-  const controlY = (fromEdge.y + toEdge.y) * 0.5 + (deltaX / Math.max(1, length)) * bend * direction;
+  const reveal = easeInOutCubic(clamp(progress / 0.62, 0, 1));
 
   context.save();
   context.globalCompositeOperation = "source-over";
   context.lineCap = "round";
-  context.lineWidth = 0.9;
-  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.42 * alpha);
-  context.shadowColor = glowColor(0.52 * alpha);
-  context.shadowBlur = 4;
+  context.lineWidth = 1;
+  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.5 * alpha);
+  context.shadowColor = glowColor(0.65 * alpha);
+  context.shadowBlur = 5;
   context.setLineDash([Math.max(0.01, length * reveal), length]);
   context.beginPath();
   context.moveTo(fromEdge.x, fromEdge.y);
-  context.quadraticCurveTo(controlX, controlY, toEdge.x, toEdge.y);
+  context.lineTo(toEdge.x, toEdge.y);
   context.stroke();
   context.setLineDash([]);
   context.restore();
@@ -506,24 +490,20 @@ function drawVisualizationFrame(
   context: CanvasRenderingContext2D,
   frame: VisualizationFrame,
   life: number,
-  beatPulse: number,
 ) {
-  const pulseScale = 1 + beatPulse * 0.018;
-  const beatLife = life * (0.9 + beatPulse * 0.1);
   context.save();
   context.globalCompositeOperation = "source-over";
   context.translate(frame.centerX, frame.centerY);
   context.rotate(frame.angle);
-  context.scale(pulseScale, pulseScale);
 
-  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.78 * beatLife);
-  context.shadowColor = glowColor(0.9 * beatLife);
-  context.shadowBlur = 5 + beatPulse * 3;
-  context.lineWidth = 1.05 + beatPulse * 0.12;
+  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.78 * life);
+  context.shadowColor = glowColor(0.9 * life);
+  context.shadowBlur = 6;
+  context.lineWidth = 1.15;
   context.strokeRect(-frame.halfWidth, -frame.halfHeight, frame.width, frame.height);
 
-  context.shadowBlur = 4 + beatPulse * 2.5;
-  context.fillStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.9 * beatLife);
+  context.shadowBlur = 5;
+  context.fillStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.9 * life);
   context.fillRect(-frame.halfWidth - 1.5, -frame.halfHeight - 1.5, 3, 3);
   context.fillRect(frame.halfWidth - 1.5, frame.halfHeight - 1.5, 3, 3);
 
@@ -706,34 +686,12 @@ function interpolatePresentation(
   from: FocusPresentation,
   to: FocusPresentation,
   amount: number,
-  rawProgress = amount,
 ): FocusPresentation {
-  const frame = interpolateFrame(from.frame, to.frame, amount);
-  const pose = interpolatePose(from.pose, to.pose, amount);
-  const deltaX = to.frame.centerX - from.frame.centerX;
-  const deltaY = to.frame.centerY - from.frame.centerY;
-  const distance = Math.hypot(deltaX, deltaY);
-  const arc = Math.sin(clamp(rawProgress, 0, 1) * Math.PI) * Math.min(14, distance * 0.075);
-  const direction = (from.node.id + to.node.id) % 2 === 0 ? 1 : -1;
-  const offsetX = -(deltaY / Math.max(1, distance)) * arc * direction;
-  const offsetY = (deltaX / Math.max(1, distance)) * arc * direction;
-
-  frame.x += offsetX;
-  frame.y += offsetY;
-  frame.centerX += offsetX;
-  frame.centerY += offsetY;
-  pose.viewport.x += offsetX;
-  pose.viewport.y += offsetY;
-  pose.metadataX += offsetX;
-  pose.metadataY += offsetY;
-  pose.dockX += offsetX;
-  pose.dockY += offsetY;
-
   return {
     node: amount < 0.5 ? from.node : to.node,
     chord: amount < 0.5 ? from.chord : to.chord,
-    frame,
-    pose,
+    frame: interpolateFrame(from.frame, to.frame, amount),
+    pose: interpolatePose(from.pose, to.pose, amount),
   };
 }
 
@@ -923,26 +881,20 @@ function drawPanel(
   progress: number,
   life: number,
   changing: boolean,
-  beatPulse: number,
 ) {
-  const beatLife = life * (0.91 + beatPulse * 0.09);
   const { pose, frame } = current;
   const viewport = pose.viewport;
   const edge = frameAnchor(frame, pose.dockX, pose.dockY);
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = accentColor(to.node.color, 0.62 * beatLife);
-  context.shadowColor = glowColor(0.8 * beatLife);
-  context.shadowBlur = 5 + beatPulse * 3;
-  context.lineWidth = 1 + beatPulse * 0.12;
-  const connectorDistance = Math.hypot(pose.dockX - edge.x, pose.dockY - edge.y);
-  const connectorBend = Math.min(7, connectorDistance * 0.1);
-  const connectorControlX = (edge.x + pose.dockX) * 0.5;
-  const connectorControlY = (edge.y + pose.dockY) * 0.5 - connectorBend;
+  context.strokeStyle = accentColor(to.node.color, 0.62 * life);
+  context.shadowColor = glowColor(0.8 * life);
+  context.shadowBlur = 6;
+  context.lineWidth = 1.1;
   context.beginPath();
   context.moveTo(edge.x, edge.y);
-  context.quadraticCurveTo(connectorControlX, connectorControlY, pose.dockX, pose.dockY);
+  context.lineTo(pose.dockX, pose.dockY);
   context.stroke();
   context.restore();
 
@@ -950,38 +902,38 @@ function drawPanel(
   context.globalCompositeOperation = "source-over";
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.clip();
-  context.fillStyle = `rgba(244, 250, 251, ${0.48 * beatLife})`;
+  context.fillStyle = `rgba(244, 250, 251, ${0.48 * life})`;
   context.fillRect(viewport.x, viewport.y, viewport.width, viewport.height);
   if (changing) {
-    const blend = easeInOutSmoother(progress);
-    drawSnapshot(context, snapshots, snapshotBase, viewport, beatLife * (1 - blend) * 0.94);
-    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, beatLife * blend * 0.94);
+    const blend = easeInOutCubic(progress);
+    drawSnapshot(context, snapshots, snapshotBase, viewport, life * (1 - blend) * 0.94);
+    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, life * blend * 0.94);
   } else {
-    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, beatLife * 0.94);
+    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, life * 0.94);
   }
   context.restore();
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = accentColor(to.node.color, 0.76 * beatLife);
-  context.shadowColor = glowColor(0.9 * beatLife);
-  context.shadowBlur = 6 + beatPulse * 3;
+  context.strokeStyle = accentColor(to.node.color, 0.76 * life);
+  context.shadowColor = glowColor(0.9 * life);
+  context.shadowBlur = 7;
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.stroke();
   context.restore();
 
   if (changing) {
-    const oldAlpha = 1 - easeInOutSmoother(clamp((progress - 0.04) / 0.78, 0, 1));
-    const newAlpha = easeInOutSmoother(clamp((progress - 0.2) / 0.8, 0, 1));
-    drawMetadata(context, from, pose, beatLife * oldAlpha, -progress * 2.5);
-    drawMetadata(context, to, pose, beatLife * newAlpha, (1 - progress) * 2.5);
+    const oldAlpha = 1 - easeOutCubic(progress / 0.52);
+    const newAlpha = easeOutCubic((progress - 0.38) / 0.62);
+    drawMetadata(context, from, pose, life * oldAlpha, -progress * 4);
+    drawMetadata(context, to, pose, life * newAlpha, (1 - progress) * 4);
   } else {
-    drawMetadata(context, to, pose, beatLife, 0);
+    drawMetadata(context, to, pose, life, 0);
   }
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.fillStyle = accentColor(to.node.color, 0.75 * beatLife);
+  context.fillStyle = accentColor(to.node.color, 0.75 * life);
   context.beginPath();
   context.arc(pose.dockX, pose.dockY, 1.7, 0, Math.PI * 2);
   context.fill();
@@ -989,21 +941,18 @@ function drawPanel(
 }
 
 /** True while any mark is still animating, so the renderer keeps waking. */
-export function telemetryNeedsFrame(
-  nodes: readonly TelemetryNode[],
-  now: number,
-  beatClock?: TelemetryBeatClock,
-) {
+export function telemetryNeedsFrame(nodes: readonly TelemetryNode[], now: number) {
   const newest = nodes.at(-1);
-  return (
-    newest !== undefined &&
-    now - telemetryActivationAt(newest.createdAt, beatClock) < LIFETIME_MS
-  );
+  return newest !== undefined && now - newest.createdAt < LIFETIME_MS;
 }
 
 function clearMorphStates() {
   morphStates = [];
   processedNodeKeys = new Set<string>();
+  cachedChordLabels = new Map<number, string | null>();
+  cachedChordFirstId = -1;
+  cachedChordLastId = -1;
+  cachedChordNodeCount = -1;
 }
 
 export function drawTelemetryOverlay(
@@ -1014,7 +963,6 @@ export function drawTelemetryOverlay(
   now: number,
   artStyle = "aura",
   opacity = 1,
-  beatClock?: TelemetryBeatClock,
 ) {
   if (nodes.length === 0) {
     clearMorphStates();
@@ -1022,10 +970,7 @@ export function drawTelemetryOverlay(
   }
 
   let firstActive = nodes.length;
-  while (
-    firstActive > 0 &&
-    now - telemetryActivationAt(nodes[firstActive - 1].createdAt, beatClock) < LIFETIME_MS
-  ) {
+  while (firstActive > 0 && now - nodes[firstActive - 1].createdAt < LIFETIME_MS) {
     firstActive -= 1;
   }
   const active = nodes.slice(firstActive);
@@ -1037,8 +982,7 @@ export function drawTelemetryOverlay(
   context.save();
   context.globalCompositeOperation = "source-over";
 
-  const chords = chordLabels(active);
-  const beatPulse = telemetryBeatPulse(now, beatClock);
+  const chords = chordLabelsForActiveNodes(active);
   const trackedContext = context as TrackedContext;
   const shortSide = Math.min(width, height);
   const stateIsStale = morphStates.some(
@@ -1049,13 +993,15 @@ export function drawTelemetryOverlay(
   );
   if (stateIsStale) clearMorphStates();
 
-  morphStates = morphStates.filter((state) => now - state.targetActivatedAt < LIFETIME_MS);
+  for (let index = morphStates.length - 1; index >= 0; index -= 1) {
+    if (now - morphStates[index].to.node.createdAt >= LIFETIME_MS) {
+      morphStates.splice(index, 1);
+    }
+  }
 
   for (const node of active) {
     const targetKey = nodeKey(node);
     if (processedNodeKeys.has(targetKey)) continue;
-    const activatedAt = telemetryActivationAt(node.createdAt, beatClock);
-    if (now < activatedAt) continue;
     processedNodeKeys.add(targetKey);
 
     const targetFrame = visualizationFrame(
@@ -1098,14 +1044,8 @@ export function drawTelemetryOverlay(
     );
     if (closestIndex >= 0) {
       const previous = morphStates[closestIndex];
-      const previousRawProgress = clamp((now - previous.startedAt) / MORPH_MS, 0, 1);
-      const previousProgress = easeInOutSmoother(previousRawProgress);
-      const current = interpolatePresentation(
-        previous.from,
-        previous.to,
-        previousProgress,
-        previousRawProgress,
-      );
+      const previousProgress = easeInOutCubic((now - previous.startedAt) / MORPH_MS);
+      const current = interpolatePresentation(previous.from, previous.to, previousProgress);
       const anchoredTarget: FocusPresentation = {
         ...presentation,
         pose: anchoredMorphPose(current.pose, presentation.pose, presentation.frame, width, height),
@@ -1119,8 +1059,7 @@ export function drawTelemetryOverlay(
           chord: previous.to.chord,
         },
         to: anchoredTarget,
-        startedAt: activatedAt,
-        targetActivatedAt: activatedAt,
+        startedAt: now,
         lastRenderedAt: now,
       };
     } else {
@@ -1128,9 +1067,8 @@ export function drawTelemetryOverlay(
         targetKey,
         from: presentation,
         to: presentation,
-        startedAt: activatedAt,
-        sessionStartedAt: activatedAt,
-        targetActivatedAt: activatedAt,
+        startedAt: now,
+        sessionStartedAt: now,
         lastRenderedAt: now,
         width,
         height,
@@ -1152,9 +1090,9 @@ export function drawTelemetryOverlay(
   const rendered = morphStates.map((state) => {
     state.lastRenderedAt = now;
     const rawProgress = clamp((now - state.startedAt) / MORPH_MS, 0, 1);
-    const progress = easeInOutSmoother(rawProgress);
-    const current = interpolatePresentation(state.from, state.to, progress, rawProgress);
-    const targetAge = now - state.targetActivatedAt;
+    const progress = easeInOutCubic(rawProgress);
+    const current = interpolatePresentation(state.from, state.to, progress);
+    const targetAge = now - state.to.node.createdAt;
     const entrance = easeOutCubic((now - state.sessionStartedAt) / ENTER_MS);
     const departure =
       targetAge < ENTER_MS + HOLD_MS
@@ -1184,12 +1122,12 @@ export function drawTelemetryOverlay(
         item.state.from.frame,
         item.state.to.frame,
         item.progress,
-        item.life * (0.92 + beatPulse * 0.08),
+        item.life,
       );
     }
   }
   for (const item of rendered) {
-    drawVisualizationFrame(context, item.current.frame, item.life, beatPulse);
+    drawVisualizationFrame(context, item.current.frame, item.life);
   }
   rendered.forEach((item, index) => {
     drawPanel(
@@ -1202,7 +1140,6 @@ export function drawTelemetryOverlay(
       item.progress,
       item.life,
       item.changing,
-      beatPulse,
     );
   });
 

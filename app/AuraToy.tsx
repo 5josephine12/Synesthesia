@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+// gifenc does not publish TypeScript declarations, but its browser ESM API is stable and exercised by tests.
+// @ts-expect-error -- upstream package has no declaration file
+import { GIFEncoder, quantize } from "gifenc";
 import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
 import { drawDottedSigil } from "./art-styles/style-2";
 import {
   drawTelemetryOverlay,
   telemetryNeedsFrame,
-  type TelemetryBeatClock,
 } from "./art-styles/telemetry";
 
 type SolidControlIconName =
@@ -19,6 +21,7 @@ type SolidControlIconName =
   | "image"
   | "mic"
   | "mic-off"
+  | "system-audio"
   | "video";
 
 function SolidControlIcon({
@@ -53,6 +56,12 @@ function SolidControlIcon({
         <>
           <circle cx="8.1" cy="7.7" r="2.35" />
           <path d="m2.75 20 6.7-8.2 3.55 4.1 2.55-3.1L21.25 20Z" />
+        </>
+      ) : null}
+      {name === "system-audio" ? (
+        <>
+          <path d="M3.25 3.75h10.5A2.25 2.25 0 0 1 16 6v8.75H1V6a2.25 2.25 0 0 1 2.25-2.25ZM4.5 16.5h8v2h-8Z" />
+          <path d="M18.1 8.1a3.2 3.2 0 0 1 0 4.8l1.35 1.35a5.1 5.1 0 0 0 0-7.5Zm2.55-2.55a6.8 6.8 0 0 1 0 9.9L22 16.8a8.7 8.7 0 0 0 0-12.6Z" />
         </>
       ) : null}
       {name === "video" ? (
@@ -170,11 +179,12 @@ type VisualMode = {
   softness: number;
 };
 
-type ExportState = "idle" | "image" | "video";
-type ExportKind = "image" | "video";
+type ExportState = "idle" | "image" | "gif";
+type ExportKind = "image" | "gif";
 type DownloadFeedback = "idle" | "preparing" | "complete" | "error";
 type HapticFeedback = "open" | "close" | "confirm" | "success" | "error";
 type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsupported";
+type AudioInputSource = "microphone" | "system";
 type MicrophoneModeId = "wide-spectrum" | "voice-isolation" | "standard" | "automatic";
 type MicrophoneMode = {
   id: MicrophoneModeId;
@@ -283,6 +293,7 @@ const MAX_OCTAVE = HIGHEST_PIANO_OCTAVE - 1;
 const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
 const MAX_MIDI = (HIGHEST_PIANO_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
+const DOTTED_MOTION_IDLE_DURATION = 12000;
 const TELEMETRY_TOGGLE_FADE_DURATION = 560;
 const SATURATION_CHECK_INTERVAL = 6;
 const SATURATION_MINIMUM_LAYERS = 24;
@@ -300,6 +311,10 @@ const AURA_RENDER_BUDGET_MS = 12;
 const AURA_MIN_ADAPTIVE_SCALE = 0.62;
 const OVERLAY_EXIT_DURATION = 240;
 const DOWNLOAD_COMPLETE_HOLD = 520;
+const GIF_FRAME_DELAY = 60;
+const GIF_HOLD_DURATION = 1100;
+const GIF_MAX_DIMENSION = 1200;
+const GIF_PALETTE_SIZE = 256;
 const DEFAULT_SOUND_MODE: SoundModeId = "piano";
 const DEFAULT_MICROPHONE_MODE: MicrophoneModeId = "wide-spectrum";
 const RADIOGRAPHIC_HUES = [338, 322, 300, 282, 260, 238, 220, 10, 18, 348, 312, 248] as const;
@@ -1110,13 +1125,16 @@ function configureMicrophonePipeline(runtime: MicrophoneRuntime, mode: Microphon
   runtime.noiseFloor = mode === "voice-isolation" ? 0.004 : mode === "wide-spectrum" ? 0.0018 : 0.0028;
 }
 
-function disposeMicrophoneRuntime(runtime: MicrophoneRuntime | null) {
+function disposeMicrophoneRuntime(runtime: MicrophoneRuntime | null, stopStream = true) {
   if (!runtime) return;
   window.cancelAnimationFrame(runtime.animationFrame);
   runtime.source.disconnect();
   for (const node of runtime.processingNodes) node.disconnect();
   runtime.analyser.disconnect();
-  runtime.stream.getTracks().forEach((track) => track.stop());
+  runtime.stream.getTracks().forEach((track) => {
+    if (stopStream) track.stop();
+    else track.enabled = false;
+  });
   void runtime.context.close().catch(() => undefined);
 }
 
@@ -1620,18 +1638,22 @@ function drawDottedSigilFlowLayer(
   const replayPosition = replayProgress === undefined
     ? Number.POSITIVE_INFINITY
     : replayProgress * (blobs.length + 0.9);
-  const dottedBlobs = blobs.slice(startIndex, Math.min(endIndex, blobs.length)).filter(
-    (blob, offset) =>
-      (blob.artStyle ?? fallbackArtStyle) === "style-2" &&
-      replayPosition - (startIndex + offset) > 0,
-  );
-  const visibleBlobs = dottedBlobs.slice(-32);
+  const limit = Math.min(endIndex, blobs.length, Math.ceil(replayPosition));
+  let visibleStart = limit;
+  let visibleCount = 0;
+  for (let index = limit - 1; index >= startIndex; index -= 1) {
+    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") continue;
+    visibleStart = index;
+    visibleCount += 1;
+    if (visibleCount === 32) break;
+  }
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  for (const blob of visibleBlobs) {
-    const blobIndex = blobs.indexOf(blob);
-    const replayAge = replayPosition - blobIndex;
+  for (let index = visibleStart; index < limit; index += 1) {
+    const blob = blobs[index];
+    if ((blob.artStyle ?? fallbackArtStyle) !== "style-2") continue;
+    const replayAge = replayPosition - index;
     const age = replayProgress === undefined
       ? Math.max(0, now - blob.createdAt)
       : Math.max(0, replayAge) * BLOB_ARRIVAL_DURATION;
@@ -1701,11 +1723,12 @@ function drawChronologicalAuraLayers(
     }
 
     if (isDottedRun) {
+      organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
       drawDottedSigilFlowLayer(
-        context,
+        organicContext,
         blobs,
-        width,
-        height,
+        organicLayer.width,
+        organicLayer.height,
         renderNow,
         reducedMotion,
         fallbackArtStyle,
@@ -1713,6 +1736,10 @@ function drawChronologicalAuraLayers(
         runEnd,
         replayProgress,
       );
+      context.save();
+      context.globalCompositeOperation = "source-over";
+      context.drawImage(organicLayer, 0, 0, width, height);
+      context.restore();
     } else {
       organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
       drawAuraComposition(
@@ -1783,13 +1810,53 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string) {
   });
 }
 
-function exportFileStem() {
-  return "aura-composition";
+function createGifPaletteIndexer(palette: number[][]) {
+  const rgb565Cache = new Int16Array(65536);
+  rgb565Cache.fill(-1);
+
+  return (rgba: Uint8ClampedArray) => {
+    const pixelCount = rgba.byteLength / 4;
+    const pixels = new Uint32Array(rgba.buffer, rgba.byteOffset, pixelCount);
+    const indexed = new Uint8Array(pixelCount);
+
+    for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex += 1) {
+      const color = pixels[pixelIndex];
+      const red = color & 0xff;
+      const green = (color >> 8) & 0xff;
+      const blue = (color >> 16) & 0xff;
+      const cacheKey = ((red << 8) & 0xf800) | ((green << 2) & 0x03e0) | (blue >> 3);
+      let paletteIndex = rgb565Cache[cacheKey];
+
+      if (paletteIndex < 0) {
+        let nearestDistance = Number.POSITIVE_INFINITY;
+        paletteIndex = 0;
+        for (let index = 0; index < palette.length; index += 1) {
+          const paletteColor = palette[index];
+          const redDistance = paletteColor[0] - red;
+          let distance = redDistance * redDistance;
+          if (distance > nearestDistance) continue;
+          const greenDistance = paletteColor[1] - green;
+          distance += greenDistance * greenDistance;
+          if (distance > nearestDistance) continue;
+          const blueDistance = paletteColor[2] - blue;
+          distance += blueDistance * blueDistance;
+          if (distance < nearestDistance) {
+            nearestDistance = distance;
+            paletteIndex = index;
+          }
+        }
+        rgb565Cache[cacheKey] = paletteIndex;
+      }
+
+      indexed[pixelIndex] = paletteIndex;
+    }
+
+    return indexed;
+  };
 }
 
-function supportedVideoType() {
-  const candidates = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
-  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? "";
+function exportFileStem() {
+  return "aura-composition";
 }
 
 export function AuraToy() {
@@ -1797,12 +1864,15 @@ export function AuraToy() {
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewDownloadRef = useRef<HTMLButtonElement | null>(null);
   const imagePreviewButtonRef = useRef<HTMLButtonElement | null>(null);
-  const videoPreviewButtonRef = useRef<HTMLButtonElement | null>(null);
+  const gifPreviewButtonRef = useRef<HTMLButtonElement | null>(null);
   const fullscreenButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
+  const systemAudioButtonRef = useRef<HTMLButtonElement | null>(null);
   const microphoneAllowRef = useRef<HTMLButtonElement | null>(null);
   const microphoneIntroductionShownRef = useRef(false);
+  const systemAudioIntroductionShownRef = useRef(false);
+  const systemAudioStreamRef = useRef<MediaStream | null>(null);
   const microphoneModeRef = useRef<MicrophoneModeId>(DEFAULT_MICROPHONE_MODE);
   const microphoneModeSyncRef = useRef(0);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
@@ -1820,6 +1890,7 @@ export function AuraToy() {
   const visualGenerationRef = useRef(0);
   const microphoneGenerationRef = useRef(0);
   const microphoneRef = useRef<MicrophoneRuntime | null>(null);
+  const audioInputSourceRef = useRef<AudioInputSource | null>(null);
   const microphoneBeatTimerRef = useRef<number | null>(null);
   const resetFrameRef = useRef<number | null>(null);
   const previewFrameRef = useRef<number | null>(null);
@@ -1835,11 +1906,6 @@ export function AuraToy() {
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
   const artStyleRef = useRef<ArtStyleId>("aura");
   const telemetryTransitionRef = useRef({ from: 0, to: 0, startedAt: 0 });
-  const telemetryBeatRef = useRef<TelemetryBeatClock>({
-    anchorAt: 0,
-    interval: 500,
-    strength: 0.82,
-  });
   const toneRef = useRef<{
     synth: AuraSynth | null;
     filter: AuraFilter | null;
@@ -1869,6 +1935,7 @@ export function AuraToy() {
   const [downloadFeedback, setDownloadFeedback] = useState<DownloadFeedback>("idle");
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
+  const [systemAudioState, setSystemAudioState] = useState<MicrophoneState>("idle");
   const [microphoneHarmonyPitchClasses, setMicrophoneHarmonyPitchClasses] = useState<number[]>([]);
   const [microphoneMelodyPitchClass, setMicrophoneMelodyPitchClass] = useState<number | null>(null);
   const [microphoneBeatPitchClasses, setMicrophoneBeatPitchClasses] = useState<number[]>([]);
@@ -1876,31 +1943,12 @@ export function AuraToy() {
   const [microphonePromptOpen, setMicrophonePromptOpen] = useState(false);
   const [microphonePromptClosing, setMicrophonePromptClosing] = useState(false);
   const [microphonePromptGranting, setMicrophonePromptGranting] = useState(false);
+  const [permissionPromptSource, setPermissionPromptSource] = useState<AudioInputSource>("microphone");
   const [microphoneMode, setMicrophoneMode] = useState<MicrophoneModeId>(DEFAULT_MICROPHONE_MODE);
   const [microphoneModeDirection, setMicrophoneModeDirection] = useState<-1 | 1>(1);
   const [artStyle, setArtStyle] = useState<ArtStyleId>("aura");
   const [telemetry, setTelemetry] = useState(false);
   const [artStyleDirection, setArtStyleDirection] = useState<-1 | 1>(1);
-
-  const registerTelemetryBeat = useCallback(
-    (at = performance.now(), detectedInterval?: number, strength = 1) => {
-      const previous = telemetryBeatRef.current;
-      const elapsed = at - previous.anchorAt;
-      let interval = previous.interval;
-      if (detectedInterval !== undefined && Number.isFinite(detectedInterval)) {
-        interval = normalizeBeatInterval(detectedInterval);
-      } else if (previous.anchorAt > 0 && elapsed >= 150 && elapsed <= 1520) {
-        interval = lerp(previous.interval, normalizeBeatInterval(elapsed), 0.38);
-      }
-      telemetryBeatRef.current = {
-        anchorAt: at,
-        interval: clamp(interval, 360, 760),
-        strength: clamp(strength, 0.35, 1),
-      };
-      wakeRendererRef.current?.();
-    },
-    [],
-  );
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -1910,85 +1958,6 @@ export function AuraToy() {
         return pianoKey ? [[keyboardKey, pianoKey] as const] : [];
       }),
     );
-  }, []);
-
-  useEffect(() => {
-    // #region agent log
-    let warnCount = 0;
-    let rejectionCount = 0;
-    fetch("http://127.0.0.1:7309/ingest/fca0f173-9f0b-4ef4-9876-1cfc13a2da0e", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d73d09" },
-      body: JSON.stringify({
-        sessionId: "d73d09",
-        runId: "pre-fix",
-        hypothesisId: "C",
-        location: "app/AuraToy.tsx:mount",
-        message: "AuraToy mounted",
-        data: {
-          href: window.location.href,
-          port: window.location.port,
-          hasHot: Boolean((import.meta as { hot?: unknown }).hot),
-          readyState: document.readyState,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    const originalWarn = console.warn;
-    console.warn = (...args: unknown[]) => {
-      const text = args.map(String).join(" ");
-      if (text.includes("polyphony") || text.includes("send was called")) {
-        warnCount += 1;
-        if (warnCount <= 6) {
-          fetch("http://127.0.0.1:7309/ingest/fca0f173-9f0b-4ef4-9876-1cfc13a2da0e", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d73d09" },
-            body: JSON.stringify({
-              sessionId: "d73d09",
-              runId: "pre-fix",
-              hypothesisId: "B",
-              location: "app/AuraToy.tsx:console.warn",
-              message: "forwarded console.warn",
-              data: { warnCount, text: text.slice(0, 200), href: window.location.href },
-              timestamp: Date.now(),
-            }),
-          }).catch(() => {});
-        }
-      }
-      originalWarn.apply(console, args);
-    };
-    const onReject = (event: PromiseRejectionEvent) => {
-      rejectionCount += 1;
-      const reason = event.reason as { message?: string; stack?: string } | string;
-      const message = typeof reason === "string" ? reason : String(reason?.message ?? reason);
-      if (rejectionCount <= 8 || rejectionCount % 25 === 0) {
-        fetch("http://127.0.0.1:7309/ingest/fca0f173-9f0b-4ef4-9876-1cfc13a2da0e", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "d73d09" },
-          body: JSON.stringify({
-            sessionId: "d73d09",
-            runId: "pre-fix",
-            hypothesisId: "B",
-            location: "app/AuraToy.tsx:unhandledrejection",
-            message: "unhandledrejection",
-            data: {
-              rejectionCount,
-              reason: message.slice(0, 300),
-              stack:
-                typeof reason === "object" && reason?.stack ? String(reason.stack).slice(0, 400) : "",
-              href: window.location.href,
-            },
-            timestamp: Date.now(),
-          }),
-        }).catch(() => {});
-      }
-    };
-    window.addEventListener("unhandledrejection", onReject);
-    return () => {
-      console.warn = originalWarn;
-      window.removeEventListener("unhandledrejection", onReject);
-    };
-    // #endregion
   }, []);
 
   useEffect(() => {
@@ -2091,19 +2060,25 @@ export function AuraToy() {
       releaseTimersRef.current.clear();
       if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
       microphoneGenerationRef.current += 1;
+      const activeMicrophoneStream = microphoneRef.current?.stream ?? null;
       disposeMicrophoneRuntime(microphoneRef.current);
       microphoneRef.current = null;
+      if (systemAudioStreamRef.current && systemAudioStreamRef.current !== activeMicrophoneStream) {
+        systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      systemAudioStreamRef.current = null;
       disposeToneEngine();
     },
     [disposeToneEngine],
   );
 
-  const openMicrophonePrompt = useCallback(() => {
+  const openMicrophonePrompt = useCallback((inputSource: AudioInputSource = "microphone") => {
     if (microphonePromptCloseTimerRef.current !== null) {
       window.clearTimeout(microphonePromptCloseTimerRef.current);
       microphonePromptCloseTimerRef.current = null;
     }
     microphoneAfterCloseRef.current = null;
+    setPermissionPromptSource(inputSource);
     setMicrophonePromptGranting(false);
     setMicrophonePromptClosing(false);
     setMicrophonePromptOpen(true);
@@ -2130,10 +2105,16 @@ export function AuraToy() {
         const nextAction = microphoneAfterCloseRef.current;
         microphoneAfterCloseRef.current = null;
         if (nextAction) nextAction();
-        else microphoneButtonRef.current?.focus({ preventScroll: true });
+        else {
+          const promptButton =
+            permissionPromptSource === "system"
+              ? systemAudioButtonRef.current
+              : microphoneButtonRef.current;
+          promptButton?.focus({ preventScroll: true });
+        }
       }, reducedMotionRef.current ? 0 : OVERLAY_EXIT_DURATION);
     },
-    [microphonePromptOpen],
+    [microphonePromptOpen, permissionPromptSource],
   );
 
   useEffect(() => {
@@ -2151,7 +2132,7 @@ export function AuraToy() {
       previewCloseTimerRef.current = null;
     }
     lastPreviewTriggerRef.current =
-      kind === "image" ? imagePreviewButtonRef.current : videoPreviewButtonRef.current;
+      kind === "image" ? imagePreviewButtonRef.current : gifPreviewButtonRef.current;
     setDownloadFeedback("idle");
     setPreviewClosing(false);
     setPreviewKind(kind);
@@ -2393,9 +2374,19 @@ export function AuraToy() {
 
   const stopMicrophone = useCallback(() => {
     microphoneGenerationRef.current += 1;
-    disposeMicrophoneRuntime(microphoneRef.current);
+    const runtime = microphoneRef.current;
+    const retainSystemAudio =
+      audioInputSourceRef.current === "system" &&
+      runtime?.stream === systemAudioStreamRef.current &&
+      runtime.stream.getAudioTracks().some((track) => track.readyState === "live");
+    disposeMicrophoneRuntime(runtime, !retainSystemAudio);
+    if (!retainSystemAudio && runtime?.stream === systemAudioStreamRef.current) {
+      systemAudioStreamRef.current = null;
+    }
     microphoneRef.current = null;
+    audioInputSourceRef.current = null;
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
+    systemAudioButtonRef.current?.style.setProperty("--mic-level", "0");
     if (microphoneBeatTimerRef.current !== null) {
       window.clearTimeout(microphoneBeatTimerRef.current);
       microphoneBeatTimerRef.current = null;
@@ -2409,15 +2400,22 @@ export function AuraToy() {
     setMicrophonePromptClosing(false);
     setMicrophonePromptGranting(false);
     setMicrophoneState("idle");
+    setSystemAudioState("idle");
     setMicrophoneHarmonyPitchClasses([]);
     setMicrophoneMelodyPitchClass(null);
     setMicrophoneBeatPitchClasses([]);
     setMicrophoneReading("Listening");
   }, []);
 
-  const startMicrophone = useCallback(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setMicrophoneState("unsupported");
+  const startAudioInput = useCallback(async (inputSource: AudioInputSource) => {
+    const mediaDevices = navigator.mediaDevices;
+    const isSystemAudio = inputSource === "system";
+    const inputSupported = isSystemAudio
+      ? typeof mediaDevices?.getDisplayMedia === "function"
+      : typeof mediaDevices?.getUserMedia === "function";
+    if (!inputSupported) {
+      if (isSystemAudio) setSystemAudioState("unsupported");
+      else setMicrophoneState("unsupported");
       return;
     }
 
@@ -2425,24 +2423,65 @@ export function AuraToy() {
       window.AudioContext ??
       (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextConstructor) {
-      setMicrophoneState("unsupported");
+      if (isSystemAudio) setSystemAudioState("unsupported");
+      else setMicrophoneState("unsupported");
       return;
     }
 
+    const previousRuntime = microphoneRef.current;
+    const retainPreviousSystemAudio =
+      audioInputSourceRef.current === "system" &&
+      previousRuntime?.stream === systemAudioStreamRef.current &&
+      previousRuntime.stream.getAudioTracks().some((track) => track.readyState === "live");
+    disposeMicrophoneRuntime(previousRuntime, !retainPreviousSystemAudio);
+    microphoneRef.current = null;
     const generation = microphoneGenerationRef.current + 1;
     microphoneGenerationRef.current = generation;
-    setMicrophoneState("requesting");
-    setMicrophoneReading("Listening");
+    audioInputSourceRef.current = inputSource;
+    setMicrophoneState(isSystemAudio ? "idle" : "requesting");
+    setSystemAudioState(isSystemAudio ? "requesting" : "idle");
+    setMicrophoneReading(isSystemAudio ? "Choose a tab or screen with audio" : "Listening");
 
     let stream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
+    let reusedSystemAudio = false;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraintsForMicrophoneMode(microphoneModeRef.current),
-      });
-      setMicrophoneTrackHints(stream, microphoneModeRef.current);
+      if (isSystemAudio) {
+        const rememberedStream = systemAudioStreamRef.current;
+        if (rememberedStream?.getAudioTracks().some((track) => track.readyState === "live")) {
+          stream = rememberedStream;
+          reusedSystemAudio = true;
+          stream.getTracks().forEach((track) => {
+            track.enabled = true;
+          });
+        } else {
+          systemAudioStreamRef.current = null;
+          stream = await mediaDevices.getDisplayMedia({ video: true, audio: true });
+        }
+        if (stream.getAudioTracks().length === 0) {
+          stream.getTracks().forEach((track) => track.stop());
+          if (stream === systemAudioStreamRef.current) systemAudioStreamRef.current = null;
+          stream = null;
+          throw new Error("No device audio was shared");
+        }
+        systemAudioStreamRef.current = stream;
+        stream.getAudioTracks().forEach((track) => {
+          if ("contentHint" in track) track.contentHint = "music";
+        });
+      } else {
+        stream = await mediaDevices.getUserMedia({
+          audio: audioConstraintsForMicrophoneMode(microphoneModeRef.current),
+        });
+        setMicrophoneTrackHints(stream, microphoneModeRef.current);
+      }
       if (generation !== microphoneGenerationRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
+        stream.getTracks().forEach((track) => {
+          if (reusedSystemAudio) track.enabled = false;
+          else track.stop();
+        });
+        if (!reusedSystemAudio && stream === systemAudioStreamRef.current) {
+          systemAudioStreamRef.current = null;
+        }
         return;
       }
 
@@ -2523,9 +2562,11 @@ export function AuraToy() {
         lastReading: "Listening",
         visualCursor: 0,
       };
-      configureMicrophonePipeline(runtime, microphoneModeRef.current);
+      configureMicrophonePipeline(runtime, isSystemAudio ? "wide-spectrum" : microphoneModeRef.current);
       microphoneRef.current = runtime;
-      setMicrophoneState("listening");
+      setMicrophoneState(isSystemAudio ? "idle" : "listening");
+      setSystemAudioState(isSystemAudio ? "listening" : "idle");
+      setMicrophoneReading("Listening");
       hapticFeedback("success");
 
       const analyze = (now: number) => {
@@ -2541,7 +2582,7 @@ export function AuraToy() {
 
         runtime.analyser.getFloatTimeDomainData(runtime.timeDomain as Float32Array<ArrayBuffer>);
         runtime.analyser.getFloatFrequencyData(runtime.frequencyData as Float32Array<ArrayBuffer>);
-        const microphoneMode = microphoneModeRef.current;
+        const microphoneMode = isSystemAudio ? "wide-spectrum" : microphoneModeRef.current;
         const isolatesVoice = microphoneMode === "voice-isolation";
         const capturesWideSpectrum = microphoneMode === "wide-spectrum";
         const rms = calculateRms(runtime.timeDomain);
@@ -2591,7 +2632,8 @@ export function AuraToy() {
             (level === 0 && runtime.lastMeterLevel !== 0) ||
             (level === 1 && runtime.lastMeterLevel !== 1))
         ) {
-          microphoneButtonRef.current?.style.setProperty("--mic-level", level.toFixed(3));
+          const inputButton = isSystemAudio ? systemAudioButtonRef.current : microphoneButtonRef.current;
+          inputButton?.style.setProperty("--mic-level", level.toFixed(3));
           runtime.lastMeterLevel = level;
           runtime.lastMeterAt = now;
         }
@@ -2628,13 +2670,6 @@ export function AuraToy() {
           spectralFlux,
           beatBandEnergy,
         );
-        if (beatDetected) {
-          registerTelemetryBeat(
-            runtime.lastBeatAt,
-            runtime.beatInterval,
-            clamp(0.72 + level * 0.28, 0.72, 1),
-          );
-        }
         const previousFlux = runtime.smoothedFlux;
         runtime.smoothedFlux = lerp(previousFlux, spectralFlux, 0.085);
 
@@ -3013,30 +3048,43 @@ export function AuraToy() {
 
       runtime.analyze = analyze;
       runtime.animationFrame = window.requestAnimationFrame(runtime.analyze);
-      stream.getAudioTracks().forEach((track) => {
+      stream.getTracks().forEach((track) => {
         track.addEventListener("ended", () => {
           if (generation !== microphoneGenerationRef.current) return;
+          if (audioInputSourceRef.current !== inputSource) return;
           const current = microphoneRef.current;
           if (!current) return;
-          if (current.stream.getAudioTracks().some((active) => active.id === track.id)) {
+          if (current.stream.getTracks().some((active) => active.id === track.id)) {
+            if (isSystemAudio && systemAudioStreamRef.current === current.stream) {
+              systemAudioStreamRef.current = null;
+            }
             stopMicrophone();
           }
-        });
+        }, { once: true });
       });
     } catch {
-      stream?.getTracks().forEach((track) => track.stop());
+      stream?.getTracks().forEach((track) => {
+        if (reusedSystemAudio) track.enabled = false;
+        else track.stop();
+      });
+      if (!reusedSystemAudio && stream === systemAudioStreamRef.current) {
+        systemAudioStreamRef.current = null;
+      }
       if (audioContext) void audioContext.close().catch(() => undefined);
       if (generation !== microphoneGenerationRef.current) return;
       microphoneRef.current = null;
-      microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
-      setMicrophoneState("error");
+      audioInputSourceRef.current = null;
+      const inputButton = isSystemAudio ? systemAudioButtonRef.current : microphoneButtonRef.current;
+      inputButton?.style.setProperty("--mic-level", "0");
+      setMicrophoneState(isSystemAudio ? "idle" : "error");
+      setSystemAudioState(isSystemAudio ? "error" : "idle");
       setMicrophoneHarmonyPitchClasses([]);
       setMicrophoneMelodyPitchClass(null);
       setMicrophoneBeatPitchClasses([]);
-      setMicrophoneReading("Microphone unavailable");
+      setMicrophoneReading(isSystemAudio ? "Device audio unavailable" : "Microphone unavailable");
       hapticFeedback("error");
     }
-  }, [registerTelemetryBeat, spawnBlob, stopMicrophone]);
+  }, [spawnBlob, stopMicrophone]);
 
   const prepareMicrophone = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -3056,11 +3104,11 @@ export function AuraToy() {
     }
 
     if (microphoneIntroductionShownRef.current) {
-      void startMicrophone();
+      void startAudioInput("microphone");
       return;
     }
-    openMicrophonePrompt();
-  }, [openMicrophonePrompt, startMicrophone]);
+    openMicrophonePrompt("microphone");
+  }, [openMicrophonePrompt, startAudioInput]);
 
   const toggleMicrophone = useCallback(() => {
     if (microphonePromptOpen) {
@@ -3072,8 +3120,46 @@ export function AuraToy() {
       stopMicrophone();
       return;
     }
+    if (systemAudioState === "listening" || systemAudioState === "requesting") {
+      stopMicrophone();
+    }
     void prepareMicrophone();
-  }, [closeMicrophonePrompt, microphonePromptOpen, microphoneState, prepareMicrophone, stopMicrophone]);
+  }, [
+    closeMicrophonePrompt,
+    microphonePromptOpen,
+    microphoneState,
+    prepareMicrophone,
+    stopMicrophone,
+    systemAudioState,
+  ]);
+
+  const toggleSystemAudio = useCallback(() => {
+    if (systemAudioState === "listening" || systemAudioState === "requesting") {
+      hapticFeedback("close");
+      stopMicrophone();
+      return;
+    }
+    if (microphonePromptOpen) closeMicrophonePrompt();
+    if (microphoneState === "listening" || microphoneState === "requesting") {
+      stopMicrophone();
+    }
+    const hasRememberedSystemAudio =
+      systemAudioStreamRef.current?.getAudioTracks().some((track) => track.readyState === "live") ??
+      false;
+    if (!systemAudioIntroductionShownRef.current && !hasRememberedSystemAudio) {
+      openMicrophonePrompt("system");
+      return;
+    }
+    void startAudioInput("system");
+  }, [
+    closeMicrophonePrompt,
+    microphonePromptOpen,
+    microphoneState,
+    openMicrophonePrompt,
+    startAudioInput,
+    stopMicrophone,
+    systemAudioState,
+  ]);
 
   const replaceLiveMicrophoneStream = useCallback(async (runtime: MicrophoneRuntime, generation: number) => {
     const sync = microphoneModeSyncRef.current + 1;
@@ -3128,7 +3214,12 @@ export function AuraToy() {
       hapticFeedback("open");
 
       const runtime = microphoneRef.current;
-      if (!runtime || runtime.context.state === "closed" || !runtime.stream.active) return;
+      if (
+        audioInputSourceRef.current !== "microphone" ||
+        !runtime ||
+        runtime.context.state === "closed" ||
+        !runtime.stream.active
+      ) return;
       configureMicrophonePipeline(runtime, mode);
       setMicrophoneHarmonyPitchClasses([]);
       setMicrophoneMelodyPitchClass(null);
@@ -3166,7 +3257,6 @@ export function AuraToy() {
 
       const note = shiftedNote(key);
       const color = AURA_MAPPING.pitches[note.pc];
-      registerTelemetryBeat(performance.now(), undefined, velocity);
       spawnBlob(note, color, velocity);
       setActiveKeys((current) => {
         const next = new Set(current);
@@ -3175,7 +3265,7 @@ export function AuraToy() {
       });
       triggerAttack(key.id, note.name, velocity);
     },
-    [registerTelemetryBeat, shiftedNote, spawnBlob, triggerAttack],
+    [shiftedNote, spawnBlob, triggerAttack],
   );
 
   const endKey = useCallback(
@@ -3309,6 +3399,9 @@ export function AuraToy() {
     let adaptiveRenderScale = 1;
     let overBudgetFrames = 0;
     let lastQualityAdjustmentAt = -Infinity;
+    let blurredSettledCount = -1;
+    let blurredBlobCount = -1;
+    let blurredFallbackArtStyle: ArtStyleId | null = null;
 
     const syncOffscreenSize = (preserveSettled = false) => {
       const layerTotal = blobsRef.current.length;
@@ -3332,6 +3425,9 @@ export function AuraToy() {
         offscreen.height = targetHeight;
         blurred.width = targetWidth;
         blurred.height = targetHeight;
+        blurredSettledCount = -1;
+        blurredBlobCount = -1;
+        blurredFallbackArtStyle = null;
         settled.width = targetWidth;
         settled.height = targetHeight;
         if (canPreserveSettled) {
@@ -3379,6 +3475,9 @@ export function AuraToy() {
       offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
       blurredContext.clearRect(0, 0, blurred.width, blurred.height);
       settledCount = 0;
+      blurredSettledCount = -1;
+      blurredBlobCount = -1;
+      blurredFallbackArtStyle = null;
       colorRebuildLayersRef.current = 0;
       additiveLayerStartRef.current = 0;
       context.clearRect(0, 0, width, height);
@@ -3427,17 +3526,19 @@ export function AuraToy() {
       while (settledCount < blobsRef.current.length) {
         const blob = blobsRef.current[settledCount];
         if (!reducedMotionRef.current && now - blob.createdAt < BLOB_ARRIVAL_DURATION) break;
-        drawAuraComposition(
-          settledContext,
-          blobsRef.current,
-          settled.width,
-          settled.height,
-          blob.createdAt + BLOB_ARRIVAL_DURATION,
-          undefined,
-          settledCount,
-          settledCount + 1,
-          currentArtStyle,
-        );
+        if ((blob.artStyle ?? currentArtStyle) !== "style-2") {
+          drawAuraComposition(
+            settledContext,
+            blobsRef.current,
+            settled.width,
+            settled.height,
+            blob.createdAt + BLOB_ARRIVAL_DURATION,
+            undefined,
+            settledCount,
+            settledCount + 1,
+            currentArtStyle,
+          );
+        }
         settledCount += 1;
         if (
           (blob.artStyle ?? currentArtStyle) !== "style-2" &&
@@ -3451,33 +3552,22 @@ export function AuraToy() {
         if (performance.now() - settleStartedAt >= AURA_SETTLE_BUDGET_MS) break;
       }
 
-      offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
-      offscreenContext.drawImage(settled, 0, 0);
-      if (settledCount < blobsRef.current.length) {
-        const newestBlob = blobsRef.current.at(-1);
-        const effectiveNow = reducedMotionRef.current && newestBlob ? newestBlob.createdAt + BLOB_ARRIVAL_DURATION : now;
-        drawAuraComposition(
-          offscreenContext,
-          blobsRef.current,
-          offscreen.width,
-          offscreen.height,
-          effectiveNow,
-          undefined,
-          settledCount,
-          blobsRef.current.length,
-          currentArtStyle,
-        );
-      }
-
-      blurredContext.clearRect(0, 0, blurred.width, blurred.height);
-      blurredContext.save();
       const blurScale = offscreen.width / Math.max(1, width);
-      const hasDottedStyle = blobsRef.current.some(
-        (blob) => (blob.artStyle ?? currentArtStyle) === "style-2",
-      );
+      let newestDottedCreatedAt = Number.NEGATIVE_INFINITY;
+      for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
+        const blob = blobsRef.current[index];
+        if ((blob.artStyle ?? currentArtStyle) !== "style-2") continue;
+        newestDottedCreatedAt = blob.createdAt;
+        break;
+      }
+      const hasDottedStyle = Number.isFinite(newestDottedCreatedAt);
       const containsOrganicStyle = blobsRef.current.some(
         (blob) => (blob.artStyle ?? currentArtStyle) !== "style-2",
       );
+      const dottedMotionIsActive =
+        hasDottedStyle &&
+        !reducedMotionRef.current &&
+        now - newestDottedCreatedAt < DOTTED_MOTION_IDLE_DURATION;
       const blurRadius =
         (containsOrganicStyle
           ? reducedMotionRef.current
@@ -3486,9 +3576,43 @@ export function AuraToy() {
           : reducedMotionRef.current
             ? 0.4
             : 0.65) * blurScale;
-      blurredContext.filter = `blur(${Math.max(0.35, blurRadius)}px)`;
-      blurredContext.drawImage(offscreen, 0, 0);
-      blurredContext.restore();
+      if (!hasDottedStyle) {
+        const organicLayerNeedsRefresh =
+          settledCount < blobsRef.current.length ||
+          blurredSettledCount !== settledCount ||
+          blurredBlobCount !== blobsRef.current.length ||
+          blurredFallbackArtStyle !== currentArtStyle;
+        if (organicLayerNeedsRefresh) {
+          offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
+          offscreenContext.drawImage(settled, 0, 0);
+          if (settledCount < blobsRef.current.length) {
+            const newestBlob = blobsRef.current.at(-1);
+            const effectiveNow = reducedMotionRef.current && newestBlob
+              ? newestBlob.createdAt + BLOB_ARRIVAL_DURATION
+              : now;
+            drawAuraComposition(
+              offscreenContext,
+              blobsRef.current,
+              offscreen.width,
+              offscreen.height,
+              effectiveNow,
+              undefined,
+              settledCount,
+              blobsRef.current.length,
+              currentArtStyle,
+            );
+          }
+
+          blurredContext.clearRect(0, 0, blurred.width, blurred.height);
+          blurredContext.save();
+          blurredContext.filter = `blur(${Math.max(0.35, blurRadius)}px)`;
+          blurredContext.drawImage(offscreen, 0, 0);
+          blurredContext.restore();
+          blurredSettledCount = settledCount;
+          blurredBlobCount = blobsRef.current.length;
+          blurredFallbackArtStyle = currentArtStyle;
+        }
+      }
 
       if (hasDottedStyle && containsOrganicStyle) {
         drawChronologicalAuraLayers(
@@ -3506,15 +3630,20 @@ export function AuraToy() {
           blurRadius,
         );
       } else if (hasDottedStyle) {
+        offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
         drawDottedSigilFlowLayer(
-          context,
+          offscreenContext,
           blobsRef.current,
-          width,
-          height,
+          offscreen.width,
+          offscreen.height,
           now,
           reducedMotionRef.current,
           currentArtStyle,
         );
+        context.save();
+        context.globalCompositeOperation = "source-over";
+        context.drawImage(offscreen, 0, 0, width, height);
+        context.restore();
       } else {
         context.save();
         context.globalCompositeOperation = "lighter";
@@ -3551,7 +3680,6 @@ export function AuraToy() {
           now,
           currentArtStyle,
           telemetryOpacity,
-          telemetryBeatRef.current,
         );
       }
 
@@ -3577,11 +3705,10 @@ export function AuraToy() {
       }
       if (
         hasArrivingBlob ||
-        (hasDottedStyle && !reducedMotionRef.current) ||
+        dottedMotionIsActive ||
         settledCount < blobsRef.current.length ||
         telemetryIsTransitioning ||
-        (telemetryOpacity > 0.001 &&
-          telemetryNeedsFrame(blobsRef.current, now, telemetryBeatRef.current))
+        (telemetryOpacity > 0.001 && telemetryNeedsFrame(blobsRef.current, now))
       ) {
         wakeRenderer();
       }
@@ -3804,11 +3931,12 @@ export function AuraToy() {
     }
   }, []);
 
-  const createExportCanvas = useCallback((replayProgress?: number) => {
+  const createExportCanvas = useCallback((replayProgress?: number, maximumDimension?: number) => {
     const sourceBounds = canvasRef.current?.getBoundingClientRect();
     const sourceWidth = Math.max(1, sourceBounds?.width ?? 1440);
     const sourceHeight = Math.max(1, sourceBounds?.height ?? 900);
-    const maxDimension = replayProgress === undefined ? 1920 : blobsRef.current.length > 160 ? 960 : 1280;
+    const maxDimension =
+      maximumDimension ?? (replayProgress === undefined ? 1920 : blobsRef.current.length > 160 ? 960 : 1280);
     const scale = Math.min(2, maxDimension / Math.max(sourceWidth, sourceHeight));
     const output = document.createElement("canvas");
     output.width = Math.max(1, Math.round(sourceWidth * scale));
@@ -3829,7 +3957,7 @@ export function AuraToy() {
     preview.height = Math.max(1, Math.round(sourceBounds.height * scale));
     previewDownloadRef.current?.focus({ preventScroll: true });
 
-    if (previewKind === "image" || reducedMotionRef.current || exportState === "video") {
+    if (previewKind === "image" || reducedMotionRef.current || exportState === "gif") {
       renderArtwork(preview);
       return;
     }
@@ -3877,7 +4005,7 @@ export function AuraToy() {
     await waitForPaint();
 
     try {
-      const output = createExportCanvas();
+      const output = previewCanvasRef.current ?? createExportCanvas();
       const blob = await canvasToBlob(output, "image/png");
       downloadBlob(blob, `${exportFileStem()}.png`);
       setExportState("idle");
@@ -3894,61 +4022,53 @@ export function AuraToy() {
     }
   }, [closePreview, createExportCanvas, exportState, holdDownloadFeedback]);
 
-  const downloadVideo = useCallback(async () => {
+  const downloadGif = useCallback(async () => {
     if (blobsRef.current.length === 0 || exportState !== "idle") return;
-    if (typeof MediaRecorder === "undefined" || typeof HTMLCanvasElement.prototype.captureStream !== "function") {
-      setDownloadFeedback("error");
-      hapticFeedback("error");
-      await holdDownloadFeedback(1000);
-      setDownloadFeedback("idle");
-      return;
-    }
 
-    setExportState("video");
+    setExportState("gif");
     setDownloadFeedback("preparing");
     hapticFeedback("confirm");
     await waitForPaint();
-    let stream: MediaStream | null = null;
 
     try {
-      const output = createExportCanvas(0);
+      const preview = previewCanvasRef.current;
+      const output = preview?.width && preview.height
+        ? document.createElement("canvas")
+        : createExportCanvas(0, GIF_MAX_DIMENSION);
+      if (preview?.width && preview.height) {
+        output.width = preview.width;
+        output.height = preview.height;
+      }
       const outputContext = output.getContext("2d", { alpha: false });
-      if (!outputContext) throw new Error("Unable to prepare video canvas");
-      const mimeType = supportedVideoType();
-      stream = output.captureStream(24);
-      const recorder = new MediaRecorder(stream, {
-        ...(mimeType ? { mimeType } : {}),
-        videoBitsPerSecond: 7_500_000,
-      });
-      const chunks: BlobPart[] = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
-      };
+      if (!outputContext) throw new Error("Unable to prepare GIF canvas");
+      const gif = GIFEncoder();
       const revealDuration = clamp(1800 + blobsRef.current.length * 75, 2800, 4800);
-      const holdDuration = 900;
-      await new Promise<void>((resolve, reject) => {
-        recorder.onerror = () => reject(new Error("Unable to record Aura video"));
-        recorder.onstop = () => resolve();
-        recorder.start(250);
-        const startedAt = performance.now();
-
-        const renderFrame = (now: number) => {
-          const elapsed = now - startedAt;
-          const replayProgress = clamp(elapsed / revealDuration, 0, 1);
-          renderArtwork(output, replayProgress);
-
-          if (elapsed < revealDuration + holdDuration) {
-            window.requestAnimationFrame(renderFrame);
-          } else {
-            recorder.stop();
-          }
-        };
-
-        window.requestAnimationFrame(renderFrame);
+      const frameCount = Math.max(2, Math.ceil(revealDuration / GIF_FRAME_DELAY) + 1);
+      renderArtwork(output, 1);
+      const finalFrameRgba = outputContext.getImageData(0, 0, output.width, output.height).data;
+      const globalPalette = quantize(finalFrameRgba, GIF_PALETTE_SIZE, {
+        format: "rgb565",
+        useSqrt: true,
       });
-
-      const video = new Blob(chunks, { type: mimeType || "video/webm" });
-      downloadBlob(video, `${exportFileStem()}.webm`);
+      const indexGifFrame = createGifPaletteIndexer(globalPalette);
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        const replayProgress = frame / (frameCount - 1);
+        renderArtwork(output, replayProgress);
+        const rgba = outputContext.getImageData(0, 0, output.width, output.height).data;
+        const indexedFrame = indexGifFrame(rgba);
+        gif.writeFrame(indexedFrame, output.width, output.height, {
+          palette: frame === 0 ? globalPalette : undefined,
+          delay: frame === frameCount - 1 ? GIF_HOLD_DURATION : GIF_FRAME_DELAY,
+          repeat: 0,
+        });
+        if (frame % 4 === 3) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        }
+      }
+      gif.finish();
+      const encodedBytes = Uint8Array.from(gif.bytes());
+      const animatedGif = new Blob([encodedBytes], { type: "image/gif" });
+      downloadBlob(animatedGif, `${exportFileStem()}.gif`);
       setExportState("idle");
       setDownloadFeedback("complete");
       hapticFeedback("success");
@@ -3961,7 +4081,6 @@ export function AuraToy() {
       await holdDownloadFeedback(1000);
       setDownloadFeedback("idle");
     } finally {
-      stream?.getTracks().forEach((track) => track.stop());
       setExportState("idle");
     }
   }, [closePreview, createExportCanvas, exportState, holdDownloadFeedback, renderArtwork]);
@@ -4119,18 +4238,8 @@ export function AuraToy() {
         run(() => selectArtStyleByIndex(Number(key) - 1));
       } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
         run(() => cycleSoundMode(event.key === "ArrowUp" ? -1 : 1));
-      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        const direction = event.key === "ArrowLeft" ? -1 : 1;
-        if (
-          (direction === -1 && octave > MIN_OCTAVE) ||
-          (direction === 1 && octave < MAX_OCTAVE)
-        ) {
-          run(() => shiftOctave(direction));
-        }
-      } else if (key === "," || key === "<" || key === "." || key === ">") {
-        if (microphoneState !== "unsupported") {
-          run(() => cycleMicrophoneMode(key === "," || key === "<" ? -1 : 1));
-        }
+      } else if (event.shiftKey && key === "d") {
+        if (systemAudioState !== "unsupported") run(toggleSystemAudio);
       } else if (key === "m") {
         if (microphoneState !== "unsupported") run(toggleMicrophone);
       } else if (event.shiftKey && key === "f") {
@@ -4148,14 +4257,13 @@ export function AuraToy() {
       } else if (event.key === "P") {
         if (layerCount > 0 && exportState === "idle") run(() => openPreview("image"));
       } else if (key === "v") {
-        if (layerCount > 0 && exportState === "idle") run(() => openPreview("video"));
+        if (layerCount > 0 && exportState === "idle") run(() => openPreview("gif"));
       }
     };
 
     window.addEventListener("keydown", handleFeatureShortcut, true);
     return () => window.removeEventListener("keydown", handleFeatureShortcut, true);
   }, [
-    cycleMicrophoneMode,
     cycleSoundMode,
     enterFullscreenView,
     exportState,
@@ -4163,13 +4271,13 @@ export function AuraToy() {
     layerCount,
     microphonePromptOpen,
     microphoneState,
-    octave,
     openPreview,
     previewKind,
     resetAura,
     selectArtStyleByIndex,
-    shiftOctave,
+    systemAudioState,
     toggleMicrophone,
+    toggleSystemAudio,
   ]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
@@ -4189,6 +4297,17 @@ export function AuraToy() {
           : microphoneState === "unsupported"
             ? "Microphone listening is unsupported"
             : "Start microphone listening";
+  const systemAudioActive = systemAudioState === "listening" || systemAudioState === "requesting";
+  const systemAudioLabel =
+    systemAudioState === "listening"
+      ? `Stop device audio listening, detecting ${microphoneReading}`
+      : systemAudioState === "requesting"
+        ? "Cancel device audio request"
+        : systemAudioState === "error"
+          ? "Retry device audio capture"
+          : systemAudioState === "unsupported"
+            ? "Device audio capture is unsupported"
+            : "Start device audio capture; choose a tab or screen with audio";
   const keyPresentation = (key: KeySpec) => {
     const note = shiftedNote(key);
     const isHarmony =
@@ -4425,30 +4544,46 @@ export function AuraToy() {
       </section>
 
       <div
-        className={`microphone-dock ${microphoneState === "listening" ? "is-listening" : ""}`}
-        aria-label="Microphone input"
+        className={`microphone-dock ${
+          microphoneState === "listening" || systemAudioState === "listening" ? "is-listening" : ""
+        }`}
+        aria-label="Audio input"
         aria-hidden={interfaceHidden}
       >
-        <button
-          ref={microphoneButtonRef}
-          type="button"
-          className={`export-button microphone-button is-${microphoneState}`}
-          aria-label={microphoneLabel}
-          aria-pressed={microphoneState === "listening"}
-          disabled={microphoneState === "unsupported"}
-          onClick={toggleMicrophone}
-        >
-          {microphoneState === "error" || microphoneState === "unsupported" ? (
-            <SolidControlIcon name="mic-off" size={15} />
-          ) : (
-            <SolidControlIcon name="mic" size={15} />
-          )}
-        </button>
+        <div className="audio-input-buttons" role="group" aria-label="Audio source">
+          <button
+            ref={systemAudioButtonRef}
+            type="button"
+            className={`export-button microphone-button system-audio-button is-${systemAudioState}`}
+            aria-label={systemAudioLabel}
+            aria-pressed={systemAudioState === "listening"}
+            title="Device audio (Shift+D) — choose a tab or screen with Share audio enabled"
+            disabled={systemAudioState === "unsupported"}
+            onClick={toggleSystemAudio}
+          >
+            <SolidControlIcon name="system-audio" size={15} />
+          </button>
+          <button
+            ref={microphoneButtonRef}
+            type="button"
+            className={`export-button microphone-button is-${microphoneState}`}
+            aria-label={microphoneLabel}
+            aria-pressed={microphoneState === "listening"}
+            disabled={microphoneState === "unsupported"}
+            onClick={toggleMicrophone}
+          >
+            {microphoneState === "error" || microphoneState === "unsupported" ? (
+              <SolidControlIcon name="mic-off" size={15} />
+            ) : (
+              <SolidControlIcon name="mic" size={15} />
+            )}
+          </button>
+        </div>
         <div
           className="mode-dial microphone-mode-dial"
           onWheel={(event) => {
             event.preventDefault();
-            if (microphoneState === "unsupported") return;
+            if (microphoneState === "unsupported" || systemAudioActive) return;
             if (microphoneModeWheelTimerRef.current !== null || event.deltaY === 0) return;
             const direction = event.deltaY > 0 ? 1 : -1;
             cycleMicrophoneMode(direction);
@@ -4461,14 +4596,18 @@ export function AuraToy() {
             className="mode-screen"
             role="status"
             aria-live="polite"
-            aria-label={`Microphone mode: ${activeMicrophoneMode.title}`}
+            aria-label={
+              systemAudioActive
+                ? "Audio source: Device Audio"
+                : `Microphone mode: ${activeMicrophoneMode.title}`
+            }
           >
             <span className="mode-screen-glass" aria-hidden="true">
               <span
-                key={`${microphoneMode}-${microphoneModeDirection}`}
+                key={`${systemAudioActive ? "system" : microphoneMode}-${microphoneModeDirection}`}
                 className={`mode-readout ${microphoneModeDirection > 0 ? "is-forward" : "is-backward"}`}
               >
-                {activeMicrophoneMode.label}
+                {systemAudioActive ? "DEVICE AUDIO" : activeMicrophoneMode.label}
               </span>
             </span>
             <div className="mode-stepper" aria-label="Microphone mode controls">
@@ -4477,7 +4616,7 @@ export function AuraToy() {
                 className="mode-step-button"
                 aria-label="Previous microphone mode"
                 title="Previous microphone mode"
-                disabled={microphoneState === "unsupported"}
+                disabled={microphoneState === "unsupported" || systemAudioActive}
                 onClick={() => cycleMicrophoneMode(-1)}
               >
                 <span className="filled-triangle is-up" aria-hidden="true" />
@@ -4487,7 +4626,7 @@ export function AuraToy() {
                 className="mode-step-button"
                 aria-label="Next microphone mode"
                 title="Next microphone mode"
-                disabled={microphoneState === "unsupported"}
+                disabled={microphoneState === "unsupported" || systemAudioActive}
                 onClick={() => cycleMicrophoneMode(1)}
               >
                 <span className="filled-triangle is-down" aria-hidden="true" />
@@ -4496,7 +4635,13 @@ export function AuraToy() {
           </div>
         </div>
         <span className="sr-only" role="status" aria-live="polite">
-          {microphoneState === "listening" ? microphoneReading : microphoneLabel}
+          {systemAudioActive
+            ? systemAudioState === "listening"
+              ? microphoneReading
+              : systemAudioLabel
+            : microphoneState === "listening"
+              ? microphoneReading
+              : microphoneLabel}
         </span>
       </div>
 
@@ -4510,18 +4655,26 @@ export function AuraToy() {
           }}
         >
           <section
-            className={`microphone-permission ${microphonePromptGranting ? "is-granting" : ""}`}
+            className={`microphone-permission ${
+              permissionPromptSource === "system" ? "is-system-audio" : ""
+            } ${microphonePromptGranting ? "is-granting" : ""}`}
             role="dialog"
             aria-modal="true"
-            aria-labelledby="microphone-permission-title"
+            aria-labelledby="audio-permission-title"
           >
             <header className="microphone-permission-header">
-              <h2 id="microphone-permission-title">Microphone</h2>
+              <h2 id="audio-permission-title">
+                {permissionPromptSource === "system" ? "Device audio" : "Microphone"}
+              </h2>
               <button
                 type="button"
                 className="preview-control dialog-close"
-                aria-label="Close microphone setup"
-                title="Close microphone setup"
+                aria-label={`Close ${
+                  permissionPromptSource === "system" ? "device audio" : "microphone"
+                } setup`}
+                title={`Close ${
+                  permissionPromptSource === "system" ? "device audio" : "microphone"
+                } setup`}
                 onClick={() => closeMicrophonePrompt()}
               >
                 <SolidControlIcon name="close" />
@@ -4529,10 +4682,22 @@ export function AuraToy() {
             </header>
             <div className="microphone-permission-screen">
               <div className="microphone-permission-content">
-                <span className="microphone-permission-icon" aria-hidden="true">
-                  <SolidControlIcon name="mic" size={19} />
+                <span
+                  className={`microphone-permission-icon ${
+                    permissionPromptSource === "system" ? "is-system-audio" : ""
+                  }`}
+                  aria-hidden="true"
+                >
+                  <SolidControlIcon
+                    name={permissionPromptSource === "system" ? "system-audio" : "mic"}
+                    size={19}
+                  />
                 </span>
-                <p>Aura listens locally to pitch, rhythm, and volume. Audio is never saved.</p>
+                <p>
+                  {permissionPromptSource === "system"
+                    ? "Aura listens locally to audio from the tab or screen you choose. Audio is never saved."
+                    : "Aura listens locally to pitch, rhythm, and volume. Audio is never saved."}
+                </p>
               </div>
             </div>
             <button
@@ -4540,13 +4705,15 @@ export function AuraToy() {
               type="button"
               className={`microphone-permission-action ${microphonePromptGranting ? "is-confirming" : ""}`}
               onClick={() => {
-                microphoneIntroductionShownRef.current = true;
+                const inputSource = permissionPromptSource;
+                if (inputSource === "system") systemAudioIntroductionShownRef.current = true;
+                else microphoneIntroductionShownRef.current = true;
                 setMicrophonePromptGranting(true);
                 hapticFeedback("confirm");
-                closeMicrophonePrompt(() => void startMicrophone(), null);
+                closeMicrophonePrompt(() => void startAudioInput(inputSource), null);
               }}
             >
-              Allow microphone
+              {permissionPromptSource === "system" ? "Continue to device audio" : "Allow microphone"}
             </button>
           </section>
         </div>
@@ -4580,18 +4747,18 @@ export function AuraToy() {
           <SolidControlIcon name="image" size={15} />
         </button>
         <button
-          ref={videoPreviewButtonRef}
+          ref={gifPreviewButtonRef}
           type="button"
-          className={`export-button ${exportState === "video" ? "is-exporting" : ""}`}
-          aria-label={exportState === "video" ? "Rendering video" : "Preview visual as video"}
-          title={exportState === "video" ? "Rendering video" : "Preview WebM video"}
+          className={`export-button ${exportState === "gif" ? "is-exporting" : ""}`}
+          aria-label={exportState === "gif" ? "Rendering GIF" : "Preview visual as GIF"}
+          title={exportState === "gif" ? "Rendering GIF" : "Preview animated GIF"}
           disabled={layerCount === 0 || exportState !== "idle"}
-          onClick={() => openPreview("video")}
+          onClick={() => openPreview("gif")}
         >
           <SolidControlIcon name="video" size={15} />
         </button>
         <span className="sr-only" aria-live="polite">
-          {exportState === "video" ? "Rendering Aura video" : ""}
+          {exportState === "gif" ? "Rendering Aura GIF" : ""}
         </span>
       </div>
 
@@ -4610,16 +4777,17 @@ export function AuraToy() {
           role="status"
           aria-live="polite"
         >
-          <span><kbd>R</kbd> Reset</span>
-          <span><kbd>↑ ↓</kbd> Sound</span>
-          <span><kbd>← →</kbd> Octave</span>
-          <span><kbd>1–4</kbd> Style</span>
-          <span><kbd>⇧ T</kbd> TouchDesigner</span>
-          <span><kbd>M</kbd> Microphone</span>
-          <span><kbd>&lt; &gt;</kbd> Mic mode</span>
-          <span><kbd>⇧ P</kbd> Photo</span>
-          <span><kbd>V</kbd> Video</span>
-          <span><kbd>⇧ F</kbd> Fullscreen</span>
+          <span className="presentation-shortcut-guide-glass">
+            <span><kbd>R</kbd> Reset</span>
+            <span><kbd>↑ ↓</kbd> Sound</span>
+            <span><kbd>1–4</kbd> Style</span>
+            <span><kbd>⇧ T</kbd> TouchDesigner</span>
+            <span><kbd>⇧ D</kbd> Device audio</span>
+            <span><kbd>M</kbd> Microphone</span>
+            <span><kbd>⇧ P</kbd> Photo</span>
+            <span><kbd>V</kbd> GIF</span>
+            <span><kbd>⇧ F</kbd> Fullscreen</span>
+          </span>
         </div>
       ) : null}
 
@@ -4639,7 +4807,7 @@ export function AuraToy() {
             className={`export-preview ${downloadFeedback !== "idle" ? "is-processing" : ""}`}
             role="dialog"
             aria-modal="true"
-            aria-label={previewKind === "image" ? "Image export preview" : "Video export preview"}
+            aria-label={previewKind === "image" ? "Image export preview" : "GIF export preview"}
           >
             <header className="export-preview-header">
               <span className="export-preview-label">{previewKind === "image" ? "Still" : "Motion"}</span>
@@ -4648,12 +4816,12 @@ export function AuraToy() {
                   ref={previewDownloadRef}
                   type="button"
                   className={`preview-control ${downloadFeedback === "preparing" ? "is-exporting" : ""}`}
-                  aria-label={previewKind === "image" ? "Download PNG" : "Download WebM video"}
-                  title={previewKind === "image" ? "Download PNG" : "Download WebM video"}
+                  aria-label={previewKind === "image" ? "Download PNG" : "Download animated GIF"}
+                  title={previewKind === "image" ? "Download PNG" : "Download animated GIF"}
                   disabled={exportState !== "idle" || downloadFeedback !== "idle"}
                   onClick={() => {
                     if (previewKind === "image") void downloadStill();
-                    else void downloadVideo();
+                    else void downloadGif();
                   }}
                 >
                   <SolidControlIcon name="download" size={15} />
@@ -4698,7 +4866,7 @@ export function AuraToy() {
                         ? "Try again"
                         : previewKind === "image"
                           ? "Preparing image"
-                          : "Rendering motion"}
+                          : "Encoding GIF"}
                   </span>
                 </div>
               ) : null}

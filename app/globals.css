@@ -827,6 +827,13 @@ button {
   transition: opacity 340ms ease;
 }
 
+.audio-input-buttons {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--outer-dock-control-gap);
+}
+
 .aura-page.is-interface-hidden .instrument-zone,
 .aura-page.is-interface-hidden .microphone-dock,
 .aura-page.is-interface-hidden .export-dock {
@@ -872,29 +879,64 @@ button {
   bottom: max(24px, env(safe-area-inset-bottom));
   left: 0;
   z-index: 5;
-  display: flex;
+  display: grid;
   width: fit-content;
+  height: var(--header-control-height);
   max-width: calc(100vw - 40px);
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px 12px;
   margin: 0 auto;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: 18px;
-  background: var(--instrument-surface);
+  padding: 3px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  border: 1px solid rgba(118, 117, 126, 0.11);
+  border-radius: 7px;
+  background: #d9d8dc;
   box-shadow:
-    inset 0 0 0 1px rgba(137, 136, 146, 0.07),
-    0 5px 12px rgba(70, 70, 90, 0.12),
-    0 11px 22px rgba(70, 70, 90, 0.045);
-  color: rgba(55, 54, 61, 0.72);
+    inset 0 2px 5px rgba(70, 70, 90, 0.11),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.52),
+    0 1px rgba(255, 255, 255, 0.28);
+  color: #78777f;
   font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1;
   text-transform: uppercase;
-  pointer-events: none;
+  overscroll-behavior-inline: contain;
+  pointer-events: auto;
   animation: shortcutGuideDismiss 8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.presentation-shortcut-guide::-webkit-scrollbar {
+  display: none;
+}
+
+.presentation-shortcut-guide::after {
+  position: absolute;
+  inset: 3px;
+  border-radius: 4px;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 48%, rgba(92, 91, 101, 0.035));
+}
+
+.presentation-shortcut-guide-glass {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: max-content;
+  height: 100%;
+  min-width: 100%;
+  min-height: 0;
+  padding: 2px 8px;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 7px 12px;
+  border-radius: 4px;
+  background: rgba(231, 230, 233, 0.54);
+  box-shadow:
+    inset 0 1px 2px rgba(70, 70, 90, 0.06),
+    inset 0 -1px rgba(255, 255, 255, 0.32);
 }
 
 .aura-page:not(.is-interface-hidden) .presentation-shortcut-guide {
@@ -907,19 +949,20 @@ button {
   bottom: calc(var(--instrument-rendered-height) + var(--instrument-edge-gap) * 2);
   left: calc(
     var(--outer-dock-inset) +
-    var(--header-control-height) +
+    var(--header-control-height) * 2 +
+    var(--outer-dock-control-gap) +
     var(--mode-title-alignment-gap) +
     var(--microphone-title-width) +
     12px
   );
-  min-height: var(--header-control-height);
+  height: var(--header-control-height);
+  min-height: 0;
   max-width: none;
-  padding-top: 4px;
-  padding-bottom: 4px;
 }
 
-.presentation-shortcut-guide span {
+.presentation-shortcut-guide-glass > span {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
@@ -928,14 +971,15 @@ button {
 .presentation-shortcut-guide kbd {
   min-width: 18px;
   padding: 2px 5px;
-  border: 0;
-  border-radius: 5px;
-  background: var(--control-surface);
+  border: 1px solid rgba(91, 90, 100, 0.24);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #fff 0%, #f4f4f7 100%);
   box-shadow:
-    inset 0 -1px 2px rgba(70, 70, 90, 0.05),
-    0 1px 2px rgba(70, 70, 90, 0.2);
-  color: rgba(36, 35, 41, 0.78);
-  font: 600 9px/1.25 Inter, sans-serif;
+    inset 0 1px rgba(255, 255, 255, 0.95),
+    inset 0 -1px 1px rgba(70, 70, 90, 0.1),
+    0 1px 2px rgba(70, 70, 90, 0.28);
+  color: #4a4952;
+  font: 700 9px/1.25 Inter, sans-serif;
   letter-spacing: 0;
   text-align: center;
   text-transform: none;
@@ -1056,6 +1100,15 @@ button {
   animation: controlNudge 360ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
+.system-audio-button::after {
+  border-color: rgba(126, 112, 222, 0.36);
+  background: rgba(215, 211, 255, 0.18);
+}
+
+.system-audio-button.is-listening {
+  color: rgba(94, 78, 184, 0.82);
+}
+
 .microphone-permission-backdrop {
   position: absolute;
   inset: 0;
@@ -1149,6 +1202,10 @@ button {
   color: rgba(177, 58, 122, 0.72);
 }
 
+.microphone-permission-icon.is-system-audio {
+  color: rgba(94, 78, 184, 0.82);
+}
+
 .microphone-permission.is-granting .microphone-permission-icon {
   animation: permissionConfirmed 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -1201,6 +1258,10 @@ button {
   box-shadow:
     inset 0 1px 4px rgba(70, 70, 90, 0.065),
     0 1px 3px rgba(70, 70, 90, 0.055);
+}
+
+.microphone-permission.is-system-audio .microphone-permission-action.is-confirming {
+  color: rgba(94, 78, 184, 0.86);
 }
 
 .microphone-permission-action:focus-visible {
@@ -1456,18 +1517,18 @@ button {
 @keyframes shortcutGuideDismiss {
   0% {
     opacity: 0;
-    transform: translateY(8px) scale(0.985);
+    transform: translateY(8px);
   }
 
   8%,
   56% {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 
   100% {
     opacity: 0;
-    transform: translateY(-3px) scale(0.995);
+    transform: translateY(-3px);
   }
 }
 
