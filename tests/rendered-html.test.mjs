@@ -61,12 +61,17 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="Preview visual as GIF"/);
   assert.match(html, /aria-label="Audio input"/);
   assert.match(html, /data-solid-icon="mic"/);
+  assert.match(html, /data-solid-icon="external-input"/);
   assert.match(html, /aria-label="Start device audio capture; choose a tab or screen with audio"/);
   assert.match(html, /data-solid-icon="system-audio"/);
   assert.match(html, /title="Device audio \(Shift\+D\)/);
   assert.ok(
     html.indexOf('data-solid-icon="system-audio"') < html.indexOf('data-solid-icon="mic"'),
     "device audio control should appear before the microphone control",
+  );
+  assert.ok(
+    html.indexOf('data-solid-icon="mic"') < html.indexOf('data-solid-icon="external-input"'),
+    "external input control should appear directly after the microphone control",
   );
   assert.match(html, /aria-label="Microphone mode: Wide Spectrum"/);
   assert.match(html, /aria-label="Previous microphone mode"/);
@@ -124,15 +129,50 @@ test("exports the still image directly from its preview-quality canvas", async (
   assert.match(source, /downloadBlob\(blob, `\$\{exportFileStem\(\)\}\.png`\)/);
 });
 
-test("binds Shift+D to device audio and documents the shortcut", async () => {
+test("binds Shift+D to device audio without legacy shortcut entries", async () => {
   const source = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
   assert.match(source, /event\.shiftKey && key === "d"/);
   assert.match(source, /run\(toggleSystemAudio\)/);
-  assert.match(source, /<kbd>⇧ D<\/kbd> Device audio/);
   assert.doesNotMatch(source, /<kbd>&lt; &gt;<\/kbd> Mic mode/);
   assert.doesNotMatch(source, /key === "," \|\| key === "<"/);
   assert.doesNotMatch(source, /<kbd>← →<\/kbd> Octave/);
   assert.doesNotMatch(source, /event\.key === "ArrowLeft" \|\| event\.key === "ArrowRight"/);
+});
+
+test("keeps the shortcut guide on desktop and only the restore control on mobile", async () => {
+  const source = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(source, /aria-label="Show interface controls"/);
+  assert.match(source, /<SolidControlIcon name="exit-fullscreen" size=\{15\} \/>/);
+  assert.match(source, /M3 8h5V3h2v7H3V8Zm11-5h2v5h5v2h-7V3Z/);
+  assert.match(source, /M3 3h7v2H5v5H3V3Zm11 0h7v7h-2V5h-5V3Z/);
+  assert.match(source, /event\.key === "\?" && window\.matchMedia\("\(min-width: 1101px\)"\)\.matches/);
+  assert.match(source, /\? shows shortcuts/);
+  assert.match(source, /className="presentation-shortcut-guide"/);
+  assert.doesNotMatch(source, /aria-label="Show shortcut guide"/);
+  assert.match(source, /setInterfaceHidden\(false\)/);
+  assert.match(styles, /\.interface-hidden-mobile-actions\s*\{[\s\S]*?display: none/);
+  assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*?\.interface-hidden-mobile-actions\s*\{\s*display: flex/);
+  assert.match(styles, /\.interface-hidden-mobile-action\s*\{[\s\S]*?width: clamp\(24px, var\(--header-control-height\), 34px\)/);
+  assert.match(styles, /\.presentation-shortcut-guide\s*\{[\s\S]*?animation: shortcutGuideDismiss/);
+  assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*?\.presentation-shortcut-guide\s*\{\s*display: none !important/);
+});
+
+test("connects external MIDI and USB audio inputs from the hardware control", async () => {
+  const source = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(source, /aria-label=\{externalInputLabel\}/);
+  assert.match(source, /onClick=\{toggleExternalInput\}/);
+  assert.match(source, /requestMIDIAccess\?\.\(\{ sysex: false \}\)/);
+  assert.match(source, /midiInput\.onmidimessage/);
+  assert.match(source, /mediaDevices\.enumerateDevices\(\)/);
+  assert.match(source, /deviceId: externalDeviceId \? \{ exact: externalDeviceId \} : undefined/);
+  assert.match(source, /Teenage Engineering gear|Teenage Engineering|teenage engineering/i);
+  assert.match(source, /Connect external input/);
+  assert.match(styles, /\.external-input-button\.is-listening/);
+  assert.match(styles, /\.microphone-permission-icon\.is-external-input/);
 });
 
 test("remembers device audio for the page session and provides a cohesive permission dialog", async () => {
@@ -143,7 +183,8 @@ test("remembers device audio for the page session and provides a cohesive permis
   assert.match(source, /rememberedStream\?\.getAudioTracks\(\)\.some/);
   assert.match(source, /reusedSystemAudio = true/);
   assert.match(source, /disposeMicrophoneRuntime\(runtime, !retainSystemAudio\)/);
-  assert.match(source, /permissionPromptSource === "system" \? "Device audio" : "Microphone"/);
+  assert.match(source, /permissionPromptSource === "system"/);
+  assert.match(source, /\? "Device audio"/);
   assert.match(source, /Continue to device audio/);
   assert.match(source, /Audio is never saved\./);
   assert.match(styles, /\.microphone-permission-icon\.is-system-audio/);

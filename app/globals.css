@@ -873,6 +873,48 @@ button {
   color: rgba(64, 63, 70, 0.32);
 }
 
+.interface-hidden-mobile-actions {
+  position: absolute;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  z-index: 7;
+  display: none;
+  align-items: center;
+  gap: clamp(6px, var(--outer-dock-control-gap), 8px);
+}
+
+.interface-hidden-mobile-action {
+  display: inline-flex;
+  width: clamp(24px, var(--header-control-height), 34px);
+  height: clamp(24px, var(--header-control-height), 34px);
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(126, 125, 134, 0.08);
+  border-radius: 50%;
+  background: var(--control-surface);
+  box-shadow: var(--control-depth-shadow);
+  color: rgba(78, 77, 85, 0.8);
+  touch-action: manipulation;
+}
+
+.interface-hidden-mobile-action .control-icon {
+  width: clamp(11px, calc(16px * var(--compact-instrument-scale, 1)), 15px);
+  height: clamp(11px, calc(16px * var(--compact-instrument-scale, 1)), 15px);
+}
+
+.interface-hidden-mobile-action:active {
+  transform: translateY(1px);
+  box-shadow:
+    inset 0 1px 4px rgba(70, 70, 90, 0.065),
+    0 1px 3px rgba(70, 70, 90, 0.055);
+}
+
+.interface-hidden-mobile-action:focus-visible {
+  outline: 1px solid rgba(126, 125, 134, 0.36);
+  outline-offset: 3px;
+}
+
 .presentation-shortcut-guide {
   position: absolute;
   right: 0;
@@ -901,7 +943,6 @@ button {
   letter-spacing: 0;
   line-height: 1;
   text-transform: uppercase;
-  overscroll-behavior-inline: contain;
   pointer-events: auto;
   animation: shortcutGuideDismiss 8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
@@ -949,8 +990,8 @@ button {
   bottom: calc(var(--instrument-rendered-height) + var(--instrument-edge-gap) * 2);
   left: calc(
     var(--outer-dock-inset) +
-    var(--header-control-height) * 2 +
-    var(--outer-dock-control-gap) +
+    var(--header-control-height) * 3 +
+    var(--outer-dock-control-gap) * 2 +
     var(--mode-title-alignment-gap) +
     var(--microphone-title-width) +
     12px
@@ -1109,6 +1150,10 @@ button {
   color: rgba(94, 78, 184, 0.82);
 }
 
+.external-input-button.is-listening {
+  color: rgba(48, 137, 128, 0.84);
+}
+
 .microphone-permission-backdrop {
   position: absolute;
   inset: 0;
@@ -1206,6 +1251,10 @@ button {
   color: rgba(94, 78, 184, 0.82);
 }
 
+.microphone-permission-icon.is-external-input {
+  color: rgba(48, 137, 128, 0.84);
+}
+
 .microphone-permission.is-granting .microphone-permission-icon {
   animation: permissionConfirmed 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -1262,6 +1311,10 @@ button {
 
 .microphone-permission.is-system-audio .microphone-permission-action.is-confirming {
   color: rgba(94, 78, 184, 0.86);
+}
+
+.microphone-permission.is-external-input .microphone-permission-action.is-confirming {
+  color: rgba(48, 137, 128, 0.88);
 }
 
 .microphone-permission-action:focus-visible {
@@ -1960,8 +2013,16 @@ button {
     height: var(--header-control-height);
   }
 
-  .presentation-shortcut-guide {
+  .interface-hidden-hint {
     display: none;
+  }
+
+  .interface-hidden-mobile-actions {
+    display: flex;
+  }
+
+  .presentation-shortcut-guide {
+    display: none !important;
   }
 }
 
@@ -1976,6 +2037,10 @@ button {
   }
 
   .power-led {
+    animation: none;
+  }
+
+  .presentation-shortcut-guide {
     animation: none;
   }
 

@@ -17,12 +17,14 @@ type SolidControlIconName =
   | "check"
   | "close"
   | "download"
+  | "external-input"
   | "fullscreen"
   | "image"
   | "mic"
   | "mic-off"
   | "system-audio"
-  | "video";
+  | "video"
+  | "exit-fullscreen";
 
 function SolidControlIcon({
   name,
@@ -63,6 +65,12 @@ function SolidControlIcon({
           <path d="M3.25 3.75h10.5A2.25 2.25 0 0 1 16 6v8.75H1V6a2.25 2.25 0 0 1 2.25-2.25ZM4.5 16.5h8v2h-8Z" />
           <path d="M18.1 8.1a3.2 3.2 0 0 1 0 4.8l1.35 1.35a5.1 5.1 0 0 0 0-7.5Zm2.55-2.55a6.8 6.8 0 0 1 0 9.9L22 16.8a8.7 8.7 0 0 0 0-12.6Z" />
         </>
+      ) : null}
+      {name === "external-input" ? (
+        <path d="M7 2h3v5h4V2h3v5h2v4a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V7h2V2Z" />
+      ) : null}
+      {name === "exit-fullscreen" ? (
+        <path d="M3 8h5V3h2v7H3V8Zm11-5h2v5h5v2h-7V3ZM3 14h7v7H8v-5H3v-2Zm11 0h7v2h-5v5h-2v-7Z" />
       ) : null}
       {name === "video" ? (
         <>
@@ -184,7 +192,19 @@ type ExportKind = "image" | "gif";
 type DownloadFeedback = "idle" | "preparing" | "complete" | "error";
 type HapticFeedback = "open" | "close" | "confirm" | "success" | "error";
 type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsupported";
-type AudioInputSource = "microphone" | "system";
+type AudioInputSource = "microphone" | "system" | "external";
+type MidiMessageEventLike = { data: Uint8Array | null };
+type MidiInputLike = {
+  id: string;
+  name?: string | null;
+  state: "connected" | "disconnected";
+  type: "input";
+  onmidimessage: ((event: MidiMessageEventLike) => void) | null;
+};
+type MidiAccessLike = {
+  inputs: Map<string, MidiInputLike>;
+  onstatechange: (() => void) | null;
+};
 type MicrophoneModeId = "wide-spectrum" | "voice-isolation" | "standard" | "automatic";
 type MicrophoneMode = {
   id: MicrophoneModeId;
@@ -1869,10 +1889,15 @@ export function AuraToy() {
   const lastPreviewTriggerRef = useRef<HTMLButtonElement | null>(null);
   const microphoneButtonRef = useRef<HTMLButtonElement | null>(null);
   const systemAudioButtonRef = useRef<HTMLButtonElement | null>(null);
+  const externalInputButtonRef = useRef<HTMLButtonElement | null>(null);
   const microphoneAllowRef = useRef<HTMLButtonElement | null>(null);
   const microphoneIntroductionShownRef = useRef(false);
   const systemAudioIntroductionShownRef = useRef(false);
+  const externalInputIntroductionShownRef = useRef(false);
   const systemAudioStreamRef = useRef<MediaStream | null>(null);
+  const externalMidiAccessRef = useRef<MidiAccessLike | null>(null);
+  const externalMidiInputRef = useRef<MidiInputLike | null>(null);
+  const externalMidiNotesRef = useRef<Set<number>>(new Set());
   const microphoneModeRef = useRef<MicrophoneModeId>(DEFAULT_MICROPHONE_MODE);
   const microphoneModeSyncRef = useRef(0);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
@@ -1936,6 +1961,7 @@ export function AuraToy() {
   const [dialDirection, setDialDirection] = useState<-1 | 1>(1);
   const [microphoneState, setMicrophoneState] = useState<MicrophoneState>("idle");
   const [systemAudioState, setSystemAudioState] = useState<MicrophoneState>("idle");
+  const [externalInputState, setExternalInputState] = useState<MicrophoneState>("idle");
   const [microphoneHarmonyPitchClasses, setMicrophoneHarmonyPitchClasses] = useState<number[]>([]);
   const [microphoneMelodyPitchClass, setMicrophoneMelodyPitchClass] = useState<number | null>(null);
   const [microphoneBeatPitchClasses, setMicrophoneBeatPitchClasses] = useState<number[]>([]);
@@ -2067,6 +2093,11 @@ export function AuraToy() {
         systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
       }
       systemAudioStreamRef.current = null;
+      if (externalMidiInputRef.current) externalMidiInputRef.current.onmidimessage = null;
+      if (externalMidiAccessRef.current) externalMidiAccessRef.current.onstatechange = null;
+      externalMidiInputRef.current = null;
+      externalMidiAccessRef.current = null;
+      externalMidiNotesRef.current.clear();
       disposeToneEngine();
     },
     [disposeToneEngine],
@@ -2109,7 +2140,9 @@ export function AuraToy() {
           const promptButton =
             permissionPromptSource === "system"
               ? systemAudioButtonRef.current
-              : microphoneButtonRef.current;
+              : permissionPromptSource === "external"
+                ? externalInputButtonRef.current
+                : microphoneButtonRef.current;
           promptButton?.focus({ preventScroll: true });
         }
       }, reducedMotionRef.current ? 0 : OVERLAY_EXIT_DURATION);
@@ -2374,6 +2407,15 @@ export function AuraToy() {
 
   const stopMicrophone = useCallback(() => {
     microphoneGenerationRef.current += 1;
+    const midiInput = externalMidiInputRef.current;
+    if (midiInput) midiInput.onmidimessage = null;
+    if (externalMidiAccessRef.current) externalMidiAccessRef.current.onstatechange = null;
+    externalMidiNotesRef.current.forEach((noteNumber) => {
+      triggerRelease(`external-midi-${noteNumber}`);
+    });
+    externalMidiNotesRef.current.clear();
+    externalMidiInputRef.current = null;
+    externalMidiAccessRef.current = null;
     const runtime = microphoneRef.current;
     const retainSystemAudio =
       audioInputSourceRef.current === "system" &&
@@ -2387,6 +2429,7 @@ export function AuraToy() {
     audioInputSourceRef.current = null;
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
     systemAudioButtonRef.current?.style.setProperty("--mic-level", "0");
+    externalInputButtonRef.current?.style.setProperty("--mic-level", "0");
     if (microphoneBeatTimerRef.current !== null) {
       window.clearTimeout(microphoneBeatTimerRef.current);
       microphoneBeatTimerRef.current = null;
@@ -2401,20 +2444,27 @@ export function AuraToy() {
     setMicrophonePromptGranting(false);
     setMicrophoneState("idle");
     setSystemAudioState("idle");
+    setExternalInputState("idle");
     setMicrophoneHarmonyPitchClasses([]);
     setMicrophoneMelodyPitchClass(null);
     setMicrophoneBeatPitchClasses([]);
     setMicrophoneReading("Listening");
-  }, []);
+  }, [triggerRelease]);
 
-  const startAudioInput = useCallback(async (inputSource: AudioInputSource) => {
+  const startAudioInput = useCallback(async (
+    inputSource: AudioInputSource,
+    externalDeviceId?: string,
+    externalDeviceName?: string,
+  ) => {
     const mediaDevices = navigator.mediaDevices;
     const isSystemAudio = inputSource === "system";
+    const isExternalInput = inputSource === "external";
     const inputSupported = isSystemAudio
       ? typeof mediaDevices?.getDisplayMedia === "function"
       : typeof mediaDevices?.getUserMedia === "function";
     if (!inputSupported) {
       if (isSystemAudio) setSystemAudioState("unsupported");
+      else if (isExternalInput) setExternalInputState("unsupported");
       else setMicrophoneState("unsupported");
       return;
     }
@@ -2424,6 +2474,7 @@ export function AuraToy() {
       (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextConstructor) {
       if (isSystemAudio) setSystemAudioState("unsupported");
+      else if (isExternalInput) setExternalInputState("unsupported");
       else setMicrophoneState("unsupported");
       return;
     }
@@ -2438,9 +2489,16 @@ export function AuraToy() {
     const generation = microphoneGenerationRef.current + 1;
     microphoneGenerationRef.current = generation;
     audioInputSourceRef.current = inputSource;
-    setMicrophoneState(isSystemAudio ? "idle" : "requesting");
+    setMicrophoneState(inputSource === "microphone" ? "requesting" : "idle");
     setSystemAudioState(isSystemAudio ? "requesting" : "idle");
-    setMicrophoneReading(isSystemAudio ? "Choose a tab or screen with audio" : "Listening");
+    setExternalInputState(isExternalInput ? "requesting" : "idle");
+    setMicrophoneReading(
+      isSystemAudio
+        ? "Choose a tab or screen with audio"
+        : isExternalInput
+          ? `Connecting ${externalDeviceName || "external input"}`
+          : "Listening",
+    );
 
     let stream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
@@ -2470,9 +2528,24 @@ export function AuraToy() {
         });
       } else {
         stream = await mediaDevices.getUserMedia({
-          audio: audioConstraintsForMicrophoneMode(microphoneModeRef.current),
+          audio: isExternalInput
+            ? {
+                deviceId: externalDeviceId ? { exact: externalDeviceId } : undefined,
+                autoGainControl: false,
+                echoCancellation: false,
+                noiseSuppression: false,
+                channelCount: { ideal: 2 },
+                sampleRate: { ideal: 48_000 },
+              }
+            : audioConstraintsForMicrophoneMode(microphoneModeRef.current),
         });
-        setMicrophoneTrackHints(stream, microphoneModeRef.current);
+        if (isExternalInput) {
+          stream.getAudioTracks().forEach((track) => {
+            if ("contentHint" in track) track.contentHint = "music";
+          });
+        } else {
+          setMicrophoneTrackHints(stream, microphoneModeRef.current);
+        }
       }
       if (generation !== microphoneGenerationRef.current) {
         stream.getTracks().forEach((track) => {
@@ -2562,11 +2635,15 @@ export function AuraToy() {
         lastReading: "Listening",
         visualCursor: 0,
       };
-      configureMicrophonePipeline(runtime, isSystemAudio ? "wide-spectrum" : microphoneModeRef.current);
+      configureMicrophonePipeline(
+        runtime,
+        isSystemAudio || isExternalInput ? "wide-spectrum" : microphoneModeRef.current,
+      );
       microphoneRef.current = runtime;
-      setMicrophoneState(isSystemAudio ? "idle" : "listening");
+      setMicrophoneState(inputSource === "microphone" ? "listening" : "idle");
       setSystemAudioState(isSystemAudio ? "listening" : "idle");
-      setMicrophoneReading("Listening");
+      setExternalInputState(isExternalInput ? "listening" : "idle");
+      setMicrophoneReading(isExternalInput ? externalDeviceName || "External input" : "Listening");
       hapticFeedback("success");
 
       const analyze = (now: number) => {
@@ -2582,7 +2659,8 @@ export function AuraToy() {
 
         runtime.analyser.getFloatTimeDomainData(runtime.timeDomain as Float32Array<ArrayBuffer>);
         runtime.analyser.getFloatFrequencyData(runtime.frequencyData as Float32Array<ArrayBuffer>);
-        const microphoneMode = isSystemAudio ? "wide-spectrum" : microphoneModeRef.current;
+        const microphoneMode =
+          isSystemAudio || isExternalInput ? "wide-spectrum" : microphoneModeRef.current;
         const isolatesVoice = microphoneMode === "voice-isolation";
         const capturesWideSpectrum = microphoneMode === "wide-spectrum";
         const rms = calculateRms(runtime.timeDomain);
@@ -2632,7 +2710,11 @@ export function AuraToy() {
             (level === 0 && runtime.lastMeterLevel !== 0) ||
             (level === 1 && runtime.lastMeterLevel !== 1))
         ) {
-          const inputButton = isSystemAudio ? systemAudioButtonRef.current : microphoneButtonRef.current;
+          const inputButton = isSystemAudio
+            ? systemAudioButtonRef.current
+            : isExternalInput
+              ? externalInputButtonRef.current
+              : microphoneButtonRef.current;
           inputButton?.style.setProperty("--mic-level", level.toFixed(3));
           runtime.lastMeterLevel = level;
           runtime.lastMeterAt = now;
@@ -3074,17 +3156,123 @@ export function AuraToy() {
       if (generation !== microphoneGenerationRef.current) return;
       microphoneRef.current = null;
       audioInputSourceRef.current = null;
-      const inputButton = isSystemAudio ? systemAudioButtonRef.current : microphoneButtonRef.current;
+      const inputButton = isSystemAudio
+        ? systemAudioButtonRef.current
+        : isExternalInput
+          ? externalInputButtonRef.current
+          : microphoneButtonRef.current;
       inputButton?.style.setProperty("--mic-level", "0");
-      setMicrophoneState(isSystemAudio ? "idle" : "error");
+      setMicrophoneState(inputSource === "microphone" ? "error" : "idle");
       setSystemAudioState(isSystemAudio ? "error" : "idle");
+      setExternalInputState(isExternalInput ? "error" : "idle");
       setMicrophoneHarmonyPitchClasses([]);
       setMicrophoneMelodyPitchClass(null);
       setMicrophoneBeatPitchClasses([]);
-      setMicrophoneReading(isSystemAudio ? "Device audio unavailable" : "Microphone unavailable");
+      setMicrophoneReading(
+        isSystemAudio
+          ? "Device audio unavailable"
+          : isExternalInput
+            ? "External input unavailable"
+            : "Microphone unavailable",
+      );
       hapticFeedback("error");
     }
   }, [spawnBlob, stopMicrophone]);
+
+  const startExternalInput = useCallback(async () => {
+    stopMicrophone();
+    setExternalInputState("requesting");
+    setMicrophoneReading("Finding connected instruments");
+
+    const navigatorWithMidi = navigator as Navigator & {
+      requestMIDIAccess?: (options?: { sysex?: boolean }) => Promise<MidiAccessLike>;
+    };
+
+    try {
+      const midiAccess = await navigatorWithMidi.requestMIDIAccess?.({ sysex: false });
+      const midiInput = midiAccess
+        ? [...midiAccess.inputs.values()].find(
+            (input) => input.type === "input" && input.state === "connected",
+          )
+        : undefined;
+      if (midiAccess && midiInput) {
+        const inputName = midiInput.name?.trim() || "MIDI instrument";
+        externalMidiAccessRef.current = midiAccess;
+        externalMidiInputRef.current = midiInput;
+        audioInputSourceRef.current = "external";
+        midiInput.onmidimessage = (event) => {
+          const data = event.data;
+          if (!data || data.length < 3) return;
+          const command = data[0] & 0xf0;
+          const noteNumber = data[1];
+          const noteVelocity = data[2];
+          const keyId = `external-midi-${noteNumber}`;
+          if (command === 0x90 && noteVelocity > 0) {
+            const note = midiToNote(clamp(noteNumber, MIN_MIDI, MAX_MIDI));
+            const velocity = clamp(noteVelocity / 127, 0.18, 1);
+            externalMidiNotesRef.current.add(noteNumber);
+            triggerAttack(keyId, note.name, velocity);
+            spawnBlob(note, AURA_MAPPING.pitches[note.pc], velocity);
+            setMicrophoneReading(`${inputName}: ${note.name}`);
+            if (microphoneBeatTimerRef.current !== null) {
+              window.clearTimeout(microphoneBeatTimerRef.current);
+            }
+            setMicrophoneBeatPitchClasses([note.pc]);
+            microphoneBeatTimerRef.current = window.setTimeout(() => {
+              microphoneBeatTimerRef.current = null;
+              setMicrophoneBeatPitchClasses([]);
+            }, 105);
+          } else if (command === 0x80 || (command === 0x90 && noteVelocity === 0)) {
+            externalMidiNotesRef.current.delete(noteNumber);
+            triggerRelease(keyId);
+          }
+        };
+        midiAccess.onstatechange = () => {
+          if (midiInput.state === "disconnected") stopMicrophone();
+        };
+        setMicrophoneState("idle");
+        setSystemAudioState("idle");
+        setExternalInputState("listening");
+        setMicrophoneReading(inputName);
+        hapticFeedback("success");
+        return;
+      }
+    } catch {
+      // MIDI permission or support is optional; USB audio remains available below.
+    }
+
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.getUserMedia || !mediaDevices.enumerateDevices) {
+      setExternalInputState("unsupported");
+      setMicrophoneReading("External input is unsupported");
+      return;
+    }
+
+    let permissionStream: MediaStream | null = null;
+    try {
+      permissionStream = await mediaDevices.getUserMedia({ audio: true });
+      const activeTrack = permissionStream.getAudioTracks()[0];
+      const activeDeviceId = activeTrack?.getSettings().deviceId;
+      const devices = await mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((device) => device.kind === "audioinput");
+      const externalLabel = /usb|midi|teenage engineering|audio interface|instrument|line|op-1|op-z|tx-6|field/i;
+      const builtInLabel = /built-in|macbook|iphone|facetime|microphone array|default|communications/i;
+      const selectedDevice =
+        audioInputs.find((device) => externalLabel.test(device.label)) ??
+        audioInputs.find((device) => device.label && !builtInLabel.test(device.label)) ??
+        audioInputs.find((device) => device.deviceId === activeDeviceId) ??
+        audioInputs[0];
+      const selectedName = selectedDevice?.label || activeTrack?.label || "External audio input";
+      permissionStream.getTracks().forEach((track) => track.stop());
+      permissionStream = null;
+      await startAudioInput("external", selectedDevice?.deviceId, selectedName);
+    } catch {
+      permissionStream?.getTracks().forEach((track) => track.stop());
+      setExternalInputState("error");
+      setMicrophoneReading("External input unavailable");
+      hapticFeedback("error");
+    }
+  }, [spawnBlob, startAudioInput, stopMicrophone, triggerAttack, triggerRelease]);
 
   const prepareMicrophone = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -3123,9 +3311,13 @@ export function AuraToy() {
     if (systemAudioState === "listening" || systemAudioState === "requesting") {
       stopMicrophone();
     }
+    if (externalInputState === "listening" || externalInputState === "requesting") {
+      stopMicrophone();
+    }
     void prepareMicrophone();
   }, [
     closeMicrophonePrompt,
+    externalInputState,
     microphonePromptOpen,
     microphoneState,
     prepareMicrophone,
@@ -3139,8 +3331,14 @@ export function AuraToy() {
       stopMicrophone();
       return;
     }
-    if (microphonePromptOpen) closeMicrophonePrompt();
+    if (microphonePromptOpen) {
+      closeMicrophonePrompt();
+      return;
+    }
     if (microphoneState === "listening" || microphoneState === "requesting") {
+      stopMicrophone();
+    }
+    if (externalInputState === "listening" || externalInputState === "requesting") {
       stopMicrophone();
     }
     const hasRememberedSystemAudio =
@@ -3153,10 +3351,45 @@ export function AuraToy() {
     void startAudioInput("system");
   }, [
     closeMicrophonePrompt,
+    externalInputState,
     microphonePromptOpen,
     microphoneState,
     openMicrophonePrompt,
     startAudioInput,
+    stopMicrophone,
+    systemAudioState,
+  ]);
+
+  const toggleExternalInput = useCallback(() => {
+    if (externalInputState === "listening" || externalInputState === "requesting") {
+      hapticFeedback("close");
+      stopMicrophone();
+      return;
+    }
+    if (microphonePromptOpen) {
+      closeMicrophonePrompt();
+      return;
+    }
+    if (
+      microphoneState === "listening" ||
+      microphoneState === "requesting" ||
+      systemAudioState === "listening" ||
+      systemAudioState === "requesting"
+    ) {
+      stopMicrophone();
+    }
+    if (!externalInputIntroductionShownRef.current) {
+      openMicrophonePrompt("external");
+      return;
+    }
+    void startExternalInput();
+  }, [
+    closeMicrophonePrompt,
+    externalInputState,
+    microphonePromptOpen,
+    microphoneState,
+    openMicrophonePrompt,
+    startExternalInput,
     stopMicrophone,
     systemAudioState,
   ]);
@@ -4225,7 +4458,7 @@ export function AuraToy() {
 
       if (microphonePromptOpen) return;
 
-      if (event.key === "?") {
+      if (event.key === "?" && window.matchMedia("(min-width: 1101px)").matches) {
         run(() => setShortcutGuideVersion((current) => current + 1));
       } else if (key === "r") {
         run(resetAura);
@@ -4290,7 +4523,7 @@ export function AuraToy() {
       ? `Stop microphone listening, detecting ${microphoneReading}`
       : microphoneState === "requesting"
         ? "Cancel microphone request"
-        : microphonePromptOpen
+        : microphonePromptOpen && permissionPromptSource === "microphone"
           ? "Close microphone setup"
         : microphoneState === "error"
           ? "Retry microphone listening"
@@ -4298,16 +4531,33 @@ export function AuraToy() {
             ? "Microphone listening is unsupported"
             : "Start microphone listening";
   const systemAudioActive = systemAudioState === "listening" || systemAudioState === "requesting";
+  const externalInputActive =
+    externalInputState === "listening" || externalInputState === "requesting";
+  const fixedAudioInputActive = systemAudioActive || externalInputActive;
   const systemAudioLabel =
     systemAudioState === "listening"
       ? `Stop device audio listening, detecting ${microphoneReading}`
       : systemAudioState === "requesting"
         ? "Cancel device audio request"
+        : microphonePromptOpen && permissionPromptSource === "system"
+          ? "Close device audio setup"
         : systemAudioState === "error"
           ? "Retry device audio capture"
           : systemAudioState === "unsupported"
             ? "Device audio capture is unsupported"
             : "Start device audio capture; choose a tab or screen with audio";
+  const externalInputLabel =
+    externalInputState === "listening"
+      ? `Stop external input, detecting ${microphoneReading}`
+      : externalInputState === "requesting"
+        ? "Cancel external input request"
+        : microphonePromptOpen && permissionPromptSource === "external"
+          ? "Close external input setup"
+        : externalInputState === "error"
+          ? "Retry external instrument input"
+          : externalInputState === "unsupported"
+            ? "External instrument input is unsupported"
+            : "Connect an external instrument, audio interface, or MIDI device";
   const keyPresentation = (key: KeySpec) => {
     const note = shiftedNote(key);
     const isHarmony =
@@ -4545,7 +4795,11 @@ export function AuraToy() {
 
       <div
         className={`microphone-dock ${
-          microphoneState === "listening" || systemAudioState === "listening" ? "is-listening" : ""
+          microphoneState === "listening" ||
+          systemAudioState === "listening" ||
+          externalInputState === "listening"
+            ? "is-listening"
+            : ""
         }`}
         aria-label="Audio input"
         aria-hidden={interfaceHidden}
@@ -4578,12 +4832,24 @@ export function AuraToy() {
               <SolidControlIcon name="mic" size={15} />
             )}
           </button>
+          <button
+            ref={externalInputButtonRef}
+            type="button"
+            className={`export-button microphone-button external-input-button is-${externalInputState}`}
+            aria-label={externalInputLabel}
+            aria-pressed={externalInputState === "listening"}
+            title="External instrument, audio interface, or MIDI input"
+            disabled={externalInputState === "unsupported"}
+            onClick={toggleExternalInput}
+          >
+            <SolidControlIcon name="external-input" size={15} />
+          </button>
         </div>
         <div
           className="mode-dial microphone-mode-dial"
           onWheel={(event) => {
             event.preventDefault();
-            if (microphoneState === "unsupported" || systemAudioActive) return;
+            if (microphoneState === "unsupported" || fixedAudioInputActive) return;
             if (microphoneModeWheelTimerRef.current !== null || event.deltaY === 0) return;
             const direction = event.deltaY > 0 ? 1 : -1;
             cycleMicrophoneMode(direction);
@@ -4599,15 +4865,21 @@ export function AuraToy() {
             aria-label={
               systemAudioActive
                 ? "Audio source: Device Audio"
+                : externalInputActive
+                  ? "Audio source: External Input"
                 : `Microphone mode: ${activeMicrophoneMode.title}`
             }
           >
             <span className="mode-screen-glass" aria-hidden="true">
               <span
-                key={`${systemAudioActive ? "system" : microphoneMode}-${microphoneModeDirection}`}
+                key={`${systemAudioActive ? "system" : externalInputActive ? "external" : microphoneMode}-${microphoneModeDirection}`}
                 className={`mode-readout ${microphoneModeDirection > 0 ? "is-forward" : "is-backward"}`}
               >
-                {systemAudioActive ? "DEVICE AUDIO" : activeMicrophoneMode.label}
+                {systemAudioActive
+                  ? "DEVICE AUDIO"
+                  : externalInputActive
+                    ? "EXTERNAL INPUT"
+                    : activeMicrophoneMode.label}
               </span>
             </span>
             <div className="mode-stepper" aria-label="Microphone mode controls">
@@ -4616,7 +4888,7 @@ export function AuraToy() {
                 className="mode-step-button"
                 aria-label="Previous microphone mode"
                 title="Previous microphone mode"
-                disabled={microphoneState === "unsupported" || systemAudioActive}
+                disabled={microphoneState === "unsupported" || fixedAudioInputActive}
                 onClick={() => cycleMicrophoneMode(-1)}
               >
                 <span className="filled-triangle is-up" aria-hidden="true" />
@@ -4626,7 +4898,7 @@ export function AuraToy() {
                 className="mode-step-button"
                 aria-label="Next microphone mode"
                 title="Next microphone mode"
-                disabled={microphoneState === "unsupported" || systemAudioActive}
+                disabled={microphoneState === "unsupported" || fixedAudioInputActive}
                 onClick={() => cycleMicrophoneMode(1)}
               >
                 <span className="filled-triangle is-down" aria-hidden="true" />
@@ -4639,6 +4911,10 @@ export function AuraToy() {
             ? systemAudioState === "listening"
               ? microphoneReading
               : systemAudioLabel
+            : externalInputActive
+              ? externalInputState === "listening"
+                ? microphoneReading
+                : externalInputLabel
             : microphoneState === "listening"
               ? microphoneReading
               : microphoneLabel}
@@ -4657,6 +4933,8 @@ export function AuraToy() {
           <section
             className={`microphone-permission ${
               permissionPromptSource === "system" ? "is-system-audio" : ""
+            } ${
+              permissionPromptSource === "external" ? "is-external-input" : ""
             } ${microphonePromptGranting ? "is-granting" : ""}`}
             role="dialog"
             aria-modal="true"
@@ -4664,16 +4942,28 @@ export function AuraToy() {
           >
             <header className="microphone-permission-header">
               <h2 id="audio-permission-title">
-                {permissionPromptSource === "system" ? "Device audio" : "Microphone"}
+                {permissionPromptSource === "system"
+                  ? "Device audio"
+                  : permissionPromptSource === "external"
+                    ? "External input"
+                    : "Microphone"}
               </h2>
               <button
                 type="button"
                 className="preview-control dialog-close"
                 aria-label={`Close ${
-                  permissionPromptSource === "system" ? "device audio" : "microphone"
+                  permissionPromptSource === "system"
+                    ? "device audio"
+                    : permissionPromptSource === "external"
+                      ? "external input"
+                      : "microphone"
                 } setup`}
                 title={`Close ${
-                  permissionPromptSource === "system" ? "device audio" : "microphone"
+                  permissionPromptSource === "system"
+                    ? "device audio"
+                    : permissionPromptSource === "external"
+                      ? "external input"
+                      : "microphone"
                 } setup`}
                 onClick={() => closeMicrophonePrompt()}
               >
@@ -4685,18 +4975,28 @@ export function AuraToy() {
                 <span
                   className={`microphone-permission-icon ${
                     permissionPromptSource === "system" ? "is-system-audio" : ""
+                  } ${
+                    permissionPromptSource === "external" ? "is-external-input" : ""
                   }`}
                   aria-hidden="true"
                 >
                   <SolidControlIcon
-                    name={permissionPromptSource === "system" ? "system-audio" : "mic"}
+                    name={
+                      permissionPromptSource === "system"
+                        ? "system-audio"
+                        : permissionPromptSource === "external"
+                          ? "external-input"
+                          : "mic"
+                    }
                     size={19}
                   />
                 </span>
                 <p>
                   {permissionPromptSource === "system"
                     ? "Aura listens locally to audio from the tab or screen you choose. Audio is never saved."
-                    : "Aura listens locally to pitch, rhythm, and volume. Audio is never saved."}
+                    : permissionPromptSource === "external"
+                      ? "Connect a MIDI instrument or USB audio device. Aura reads notes and audio locally; nothing is saved."
+                      : "Aura listens locally to pitch, rhythm, and volume. Audio is never saved."}
                 </p>
               </div>
             </div>
@@ -4707,13 +5007,24 @@ export function AuraToy() {
               onClick={() => {
                 const inputSource = permissionPromptSource;
                 if (inputSource === "system") systemAudioIntroductionShownRef.current = true;
+                else if (inputSource === "external") externalInputIntroductionShownRef.current = true;
                 else microphoneIntroductionShownRef.current = true;
                 setMicrophonePromptGranting(true);
                 hapticFeedback("confirm");
-                closeMicrophonePrompt(() => void startAudioInput(inputSource), null);
+                closeMicrophonePrompt(
+                  () =>
+                    inputSource === "external"
+                      ? void startExternalInput()
+                      : void startAudioInput(inputSource),
+                  null,
+                );
               }}
             >
-              {permissionPromptSource === "system" ? "Continue to device audio" : "Allow microphone"}
+              {permissionPromptSource === "system"
+                ? "Continue to device audio"
+                : permissionPromptSource === "external"
+                  ? "Connect external input"
+                  : "Allow microphone"}
             </button>
           </section>
         </div>
@@ -4770,12 +5081,31 @@ export function AuraToy() {
         </div>
       ) : null}
 
+      {interfaceHidden ? (
+        <div className="interface-hidden-mobile-actions" aria-label="Fullscreen controls">
+          <button
+            type="button"
+            className="interface-hidden-mobile-action"
+            aria-label="Show interface controls"
+            title="Restore interface"
+            onClick={() => {
+              setInterfaceHidden(false);
+              setShortcutGuideVersion(0);
+              hapticFeedback("open");
+            }}
+          >
+            <SolidControlIcon name="exit-fullscreen" size={15} />
+          </button>
+        </div>
+      ) : null}
+
       {shortcutGuideVersion > 0 ? (
         <div
           key={shortcutGuideVersion}
           className="presentation-shortcut-guide"
           role="status"
           aria-live="polite"
+          onAnimationEnd={() => setShortcutGuideVersion(0)}
         >
           <span className="presentation-shortcut-guide-glass">
             <span><kbd>R</kbd> Reset</span>
