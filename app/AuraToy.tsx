@@ -193,18 +193,6 @@ type DownloadFeedback = "idle" | "preparing" | "complete" | "error";
 type HapticFeedback = "open" | "close" | "confirm" | "success" | "error";
 type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsupported";
 type AudioInputSource = "microphone" | "system" | "external";
-type MidiMessageEventLike = { data: Uint8Array | null };
-type MidiInputLike = {
-  id: string;
-  name?: string | null;
-  state: "connected" | "disconnected";
-  type: "input";
-  onmidimessage: ((event: MidiMessageEventLike) => void) | null;
-};
-type MidiAccessLike = {
-  inputs: Map<string, MidiInputLike>;
-  onstatechange: (() => void) | null;
-};
 type MicrophoneModeId = "wide-spectrum" | "voice-isolation" | "standard" | "automatic";
 type MicrophoneMode = {
   id: MicrophoneModeId;
@@ -1895,8 +1883,8 @@ export function AuraToy() {
   const systemAudioIntroductionShownRef = useRef(false);
   const externalInputIntroductionShownRef = useRef(false);
   const systemAudioStreamRef = useRef<MediaStream | null>(null);
-  const externalMidiAccessRef = useRef<MidiAccessLike | null>(null);
-  const externalMidiInputRef = useRef<MidiInputLike | null>(null);
+  const externalMidiAccessRef = useRef<MIDIAccess | null>(null);
+  const externalMidiInputRef = useRef<MIDIInput | null>(null);
   const externalMidiNotesRef = useRef<Set<number>>(new Set());
   const microphoneModeRef = useRef<MicrophoneModeId>(DEFAULT_MICROPHONE_MODE);
   const microphoneModeSyncRef = useRef(0);
@@ -3185,7 +3173,7 @@ export function AuraToy() {
     setMicrophoneReading("Finding connected instruments");
 
     const navigatorWithMidi = navigator as Navigator & {
-      requestMIDIAccess?: (options?: { sysex?: boolean }) => Promise<MidiAccessLike>;
+      requestMIDIAccess?: (options?: { sysex?: boolean }) => Promise<MIDIAccess>;
     };
 
     try {
