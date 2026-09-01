@@ -46,7 +46,7 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="TouchDesigner overlay, off"/);
   assert.match(html, /role="switch" aria-checked="false"/);
   assert.match(html, /aria-label="Aura art style, selected"/);
-  assert.match(html, /aria-label="Style 2 art style"/);
+  assert.match(html, /aria-label="Pixel art style"/);
   assert.match(html, /aria-label="Style 4 art style"/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /filled-triangle is-up/);
@@ -182,7 +182,12 @@ test("remembers device audio for the page session and provides a cohesive permis
   assert.match(source, /const systemAudioStreamRef = useRef<MediaStream \| null>\(null\)/);
   assert.match(source, /rememberedStream\?\.getAudioTracks\(\)\.some/);
   assert.match(source, /reusedSystemAudio = true/);
-  assert.match(source, /disposeMicrophoneRuntime\(runtime, !retainSystemAudio\)/);
+  assert.match(source, /disposeMicrophoneRuntime\(runtime, !retainSystemAudio, false\)/);
+  assert.match(source, /disposeMicrophoneRuntime\(previousRuntime, !retainPreviousSystemAudio, false\)/);
+  assert.match(source, /const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown"/);
+  assert.match(source, /sessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
+  assert.match(source, /rememberSessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
+  assert.match(source, /systemAudioStreamRef\.current = stream;\s*systemAudioIntroductionShownRef\.current = true;\s*rememberSessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /permissionPromptSource === "system"/);
   assert.match(source, /\? "Device audio"/);
   assert.match(source, /Continue to device audio/);
@@ -203,16 +208,89 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
 
 test("keeps visual effects bounded and free of production diagnostics", async () => {
   const auraSource = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
+  const styleTwoSource = await readFile(
+    new URL("../app/art-styles/style-2.ts", import.meta.url),
+    "utf8",
+  );
   const telemetrySource = await readFile(
     new URL("../app/art-styles/telemetry.ts", import.meta.url),
     "utf8",
   );
 
   assert.doesNotMatch(auraSource, /127\.0\.0\.1:7309|X-Debug-Session-Id|console\.warn\s*=/);
-  assert.match(auraSource, /const DOTTED_MOTION_IDLE_DURATION = 12000/);
-  assert.match(auraSource, /now - newestDottedCreatedAt < DOTTED_MOTION_IDLE_DURATION/);
-  assert.match(auraSource, /drawDottedSigilFlowLayer\(\s*offscreenContext/);
-  assert.match(auraSource, /context\.drawImage\(offscreen, 0, 0, width, height\)/);
+  assert.match(auraSource, /const DOTTED_VISIBLE_FORMATIONS = 4/);
+  assert.match(auraSource, /const overlapsNewerFormation = dottedIndices\.some/);
+  assert.match(auraSource, /Math\.hypot\(candidate\.x - selected\.x, candidate\.y - selected\.y\) < 0\.16/);
+  assert.match(auraSource, /const DOTTED_FORMATION_SETTLE_DURATION = 2200/);
+  assert.match(auraSource, /const DOTTED_GLOW_MATURATION_DURATION = 7200/);
+  assert.match(auraSource, /now - newestDottedCreatedAt < DOTTED_FORMATION_SETTLE_DURATION/);
+  assert.match(auraSource, /drawDottedSigilFlowLayer\(\s*pixelContext/);
+  assert.match(auraSource, /context\.drawImage\(pixelLayer, 0, 0, width, height\)/);
+  assert.match(auraSource, /const displayedPixelSize = displayWidth < 500 \? 2 : 3/);
+  assert.match(auraSource, /const displayedGridStep = displayedPixelSize \* 2/);
+  assert.match(auraSource, /centerX: blob\.x \* width/);
+  assert.match(auraSource, /context\.imageSmoothingEnabled = false/);
+  assert.match(auraSource, /Math\.min\(age, DOTTED_FORMATION_SETTLE_DURATION\)/);
+  assert.doesNotMatch(styleTwoSource, /context\.rotate|context\.scale/);
+  assert.match(styleTwoSource, /"murmuration",\s*"topography",\s*"signal-weave"/);
+  assert.doesNotMatch(styleTwoSource, /const PALETTES/);
+  assert.match(styleTwoSource, /const PIXEL_PALETTES/);
+  assert.match(styleTwoSource, /primary: \{ h: 8, s: 94, l: 64 \}, accent: \{ h: 42, s: 96, l: 68 \}/);
+  assert.match(styleTwoSource, /primary: \{ h: 278, s: 82, l: 72 \}, accent: \{ h: 320, s: 89, l: 67 \}/);
+  assert.doesNotMatch(styleTwoSource, /h: 220|h: 238|h: 248|h: 260/);
+  assert.match(styleTwoSource, /tone: toneRoll < 0\.2 \? 0 : toneRoll < 0\.4 \? 1 : toneRoll < 0\.6 \? 2/);
+  assert.match(styleTwoSource, /const gridX = column \* gridStep/);
+  assert.match(styleTwoSource, /const gridY = row \* gridStep/);
+  assert.match(styleTwoSource, /const pixelSize = Math\.max\(1, Math\.round\(gridStep \* 0\.5\)\)/);
+  assert.doesNotMatch(styleTwoSource, /sizeRoll|sizeRatio|maximumPixelSize/);
+  assert.match(styleTwoSource, /const density = clamp\(0\.56 \+ velocity \* 0\.08/);
+  assert.match(styleTwoSource, /const footprintGrowth = Math\.pow\(clamp\(expansion, 0, 1\), 0\.82\)/);
+  assert.match(styleTwoSource, /const compactWidth = lerp\(0\.09, 0\.145, hash\(seed, 211\)\)/);
+  assert.match(styleTwoSource, /const expandedWidth = lerp\(0\.32, 0\.5, hash\(seed, 211\)\)/);
+  assert.match(styleTwoSource, /const compactHeight = lerp\(0\.09, 0\.15, hash\(seed, 227\)\)/);
+  assert.match(styleTwoSource, /const expandedHeight = lerp\(0\.24, 0\.38, hash\(seed, 227\)\)/);
+  assert.match(auraSource, /const PIXEL_COMPOSITION_ANCHORS =/);
+  assert.match(auraSource, /expansion: clamp\(blob\.compositionIndex \/ 12, 0, 1\)/);
+  assert.match(auraSource, /const occupiedGridCells = new Set<string>\(\)/);
+  assert.match(styleTwoSource, /const reservedCells = occupiedCells \?\? new Set<string>\(\)/);
+  assert.match(styleTwoSource, /candidateCells\.sort\(\(a, b\) => b\.priority - a\.priority\)/);
+  assert.match(styleTwoSource, /const cellKey = `\$\{cell\.column\}:\$\{cell\.row\}`/);
+  assert.match(styleTwoSource, /if \(reservedCells\.has\(cellKey\)\) continue/);
+  assert.doesNotMatch(styleTwoSource, /rowOffset|columnOffset|touchesOccupiedCell/);
+  assert.match(styleTwoSource, /size: pixelSize/);
+  assert.doesNotMatch(styleTwoSource, /cellWidth|cellHeight/);
+  assert.doesNotMatch(styleTwoSource, /fixedOffsetX|fixedOffsetY/);
+  assert.match(styleTwoSource, /x: gridX,\s*y: gridY/);
+  assert.match(styleTwoSource, /const reveal = clamp\(\(arrival - revealOrder\) \/ 0\.26, 0, 1\)/);
+  assert.match(styleTwoSource, /const side = Math\.max\(1, Math\.round\(size\)\)/);
+  assert.match(styleTwoSource, /context\.rect\(left, top, side, side\)/);
+  assert.doesNotMatch(styleTwoSource, /right - left|bottom - top/);
+  assert.match(styleTwoSource, /const saturatedBodyColors = \[\s*saturatedPrimary,\s*mixColor\(saturatedPrimary, saturatedAccent, 0\.24\)/);
+  assert.doesNotMatch(styleTwoSource, /haloCells/);
+  assert.match(styleTwoSource, /const glowCells = activeCells\.filter/);
+  assert.match(styleTwoSource, /const glowDensity = layered\s*\? 0\.14 \+ emphasis \* 0\.08/);
+  assert.match(styleTwoSource, /const whiteTransition = maturation \* maturation \* \(3 - maturation \* 2\)/);
+  assert.match(styleTwoSource, /const luminosityStops = \[0, 0\.02, 0\.05, 0\.1, 0\.2\]/);
+  assert.match(styleTwoSource, /whiteTransition \* \(0\.02 \+ index \* 0\.025\)/);
+  assert.match(styleTwoSource, /layered \? index \* 0\.015 : 0/);
+  assert.doesNotMatch(styleTwoSource, /createRadialGradient|shadowBlur|shadowColor/);
+  assert.match(styleTwoSource, /context\.imageSmoothingEnabled = false;\s*for \(let tone/);
+  assert.match(styleTwoSource, /pixel\(context, cell\.x, cell\.y, cell\.size\)/);
+  assert.match(styleTwoSource, /for \(let tone = 0; tone < bodyColors\.length; tone \+= 1\)/);
+  assert.match(auraSource, /alpha: clamp\(\(0\.94 \+ blob\.velocity \* 0\.06\) \* arrival \* layerEmphasis, 0, 1\)/);
+  assert.match(auraSource, /lerp\(0\.74, 0\.92, recency \* recency\)/);
+  assert.match(auraSource, /const blendsWithEarlierArtwork = runStart > 0/);
+  assert.match(auraSource, /context\.globalCompositeOperation = "screen"/);
+  assert.match(auraSource, /context\.filter = `blur\(\$\{clamp\(Math\.min\(width, height\) \* 0\.009, 4, 9\)\}px\)`/);
+  assert.match(auraSource, /context\.globalCompositeOperation = "color"/);
+  assert.match(auraSource, /context\.globalCompositeOperation = "luminosity"/);
+  assert.match(auraSource, /context\.globalAlpha = blendsWithEarlierArtwork \? 0\.94 : 1/);
+  assert.match(auraSource, /context\.globalCompositeOperation = "difference"/);
+  assert.match(auraSource, /context\.drawImage\(pixelAccentLayer/);
+  assert.match(auraSource, /const pixelWidth = Math\.max\(1, Math\.round\(width\)\)/);
+  assert.match(auraSource, /pixelLayer\.width = output\.width/);
+  assert.match(auraSource, /dpr = Math\.max\(1, Math\.min\(window\.devicePixelRatio \|\| 1, 1\.5, pixelBudgetRatio\)\)/);
+  assert.match(styleTwoSource, /accentContext\.globalAlpha = clamp\(alpha \* \(0\.55 \+ emphasis \* 0\.3\)/);
   assert.match(auraSource, /const rgb565Cache = new Int16Array\(65536\)/);
   assert.doesNotMatch(auraSource, /const dottedBlobs = blobs\.slice/);
   assert.match(auraSource, /blurredSettledCount !== settledCount/);

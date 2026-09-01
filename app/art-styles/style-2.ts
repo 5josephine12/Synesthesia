@@ -1,24 +1,53 @@
 export type DottedSigilOptions = {
   seed: number;
   midi?: number;
+  centerX: number;
+  centerY: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  gridStep: number;
   radius: number;
   alpha: number;
   time: number;
+  arrival: number;
+  emphasis: number;
+  layered: boolean;
+  maturation: number;
   velocity: number;
   repeat: number;
+  expansion: number;
   stretch: number;
   curvature: number;
+  accentContext?: CanvasRenderingContext2D;
+  occupiedCells?: Set<string>;
+};
+
+export type DottedSigilColor = {
+  h: number;
+  s: number;
+  l: number;
 };
 
 const TAU = Math.PI * 2;
-const ARCHETYPES = ["eye", "crest", "wing", "ring", "thorn", "veil"] as const;
+const ARCHETYPES = [
+  "murmuration",
+  "topography",
+  "signal-weave",
+  "archipelago",
+  "canopy",
+  "fold",
+] as const;
 type Archetype = (typeof ARCHETYPES)[number];
 
-const PALETTES = [
-  { field: [176, 186, 194], core: [244, 247, 250], glow: [168, 188, 202] },
-  { field: [64, 168, 186], core: [214, 244, 250], glow: [48, 210, 230] },
-  { field: [112, 164, 204], core: [226, 238, 250], glow: [96, 176, 228] },
-  { field: [150, 198, 206], core: [236, 248, 250], glow: [120, 214, 226] },
+const PIXEL_PALETTES: ReadonlyArray<{
+  primary: DottedSigilColor;
+  accent: DottedSigilColor;
+}> = [
+  { primary: { h: 8, s: 94, l: 64 }, accent: { h: 42, s: 96, l: 68 } },
+  { primary: { h: 340, s: 90, l: 66 }, accent: { h: 20, s: 94, l: 72 } },
+  { primary: { h: 278, s: 82, l: 72 }, accent: { h: 320, s: 89, l: 67 } },
+  { primary: { h: 28, s: 96, l: 70 }, accent: { h: 300, s: 83, l: 73 } },
+  { primary: { h: 352, s: 92, l: 68 }, accent: { h: 52, s: 95, l: 72 } },
 ] as const;
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -36,16 +65,17 @@ function hash(seed: number, index: number) {
   return ((value ^ (value >>> 15)) >>> 0) / 4294967296;
 }
 
-function mixColor(a: readonly number[], b: readonly number[], amount: number) {
-  return [
-    lerp(a[0], b[0], amount),
-    lerp(a[1], b[1], amount),
-    lerp(a[2], b[2], amount),
-  ] as const;
+function mixColor(a: DottedSigilColor, b: DottedSigilColor, amount: number) {
+  const hueDelta = ((b.h - a.h + 540) % 360) - 180;
+  return {
+    h: (a.h + hueDelta * amount + 360) % 360,
+    s: lerp(a.s, b.s, amount),
+    l: lerp(a.l, b.l, amount),
+  };
 }
 
-function fillColor(rgb: readonly number[], alpha: number) {
-  return `rgba(${rgb[0].toFixed(0)}, ${rgb[1].toFixed(0)}, ${rgb[2].toFixed(0)}, ${alpha})`;
+function fillColor(color: DottedSigilColor, alpha: number) {
+  return `hsla(${Math.round(color.h)}, ${Math.round(color.s)}%, ${Math.round(color.l)}%, ${alpha})`;
 }
 
 function pixel(
@@ -54,8 +84,10 @@ function pixel(
   y: number,
   size: number,
 ) {
-  const half = size * 0.5;
-  context.rect(x - half, y - half, size, size);
+  const side = Math.max(1, Math.round(size));
+  const left = Math.round(x - side * 0.5);
+  const top = Math.round(y - side * 0.5);
+  context.rect(left, top, side, side);
 }
 
 function distance(x: number, y: number) {
@@ -74,12 +106,12 @@ function annulus(x: number, y: number, inner: number, outer: number) {
   return 1 - Math.abs((radius - (inner + outer) * 0.5) / ((outer - inner) * 0.5));
 }
 
-function chevron(x: number, y: number, width: number) {
-  return 1 - Math.abs(Math.abs(x) + y * 0.62) / width;
-}
-
 function kite(x: number, y: number, width: number, height: number) {
   return 1 - (Math.abs(x) / width + Math.abs(y) / height);
+}
+
+function ribbon(x: number, y: number, center: number, thickness: number, extent = 1.1) {
+  return Math.min(1 - Math.abs(x) / extent, 1 - Math.abs(y - center) / thickness);
 }
 
 function fieldMask(
@@ -90,254 +122,308 @@ function fieldMask(
   seed: number,
   curvature: number,
 ) {
-  const wave = Math.sin(phase * 0.7 + x * 4.2 + y * 3.1) * 0.045;
-  const driftX = x + Math.sin(phase * 0.55 + y * 2.4) * 0.04 + curvature * 0.03;
-  const driftY = y + Math.cos(phase * 0.48 + x * 2.1) * 0.035;
-  const noise = (hash(seed, Math.round(driftX * 48) * 73 + Math.round(driftY * 48) * 19) - 0.5) * 0.16;
+  const seedPhase = hash(seed, 5) * TAU;
+  const driftX = x + Math.sin(phase * 0.38 + y * 2.15 + seedPhase) * 0.045 + curvature * 0.018;
+  const driftY = y + Math.cos(phase * 0.34 + x * 1.9 - seedPhase) * 0.04;
+  const noise = (
+    hash(seed, Math.round(driftX * 56) * 73 + Math.round(driftY * 56) * 19) - 0.5
+  ) * 0.032;
 
   switch (archetype) {
-    case "eye": {
-      const shell = almond(driftX, driftY, 1.08, 0.58 + wave);
-      const pupil = almond(driftX * 1.08, driftY * 1.25, 0.22, 0.12);
-      const band = 1 - Math.abs(driftY) / 0.22;
-      return Math.max(shell, band * 0.55) - Math.max(0, pupil) * 0.9 + noise;
+    case "murmuration": {
+      const upperCurrent = Math.sin(driftX * 2.7 + phase * 0.42 + seedPhase) * 0.16 - 0.1;
+      const lowerCurrent = Math.sin(driftX * 3.4 - phase * 0.31) * 0.13 + 0.2;
+      const sweep = ribbon(driftX, driftY, upperCurrent, 0.16, 1.12);
+      const returnSweep = ribbon(driftX * 0.94, driftY, lowerCurrent, 0.11, 0.92);
+      const gathering = almond(driftX + 0.42, driftY + 0.02, 0.54, 0.42);
+      const wake = almond(driftX - 0.58, driftY - 0.08, 0.42, 0.25);
+      const opening = almond(driftX - 0.05, driftY + 0.02, 0.19, 0.14);
+      return Math.max(sweep * 0.92, returnSweep * 0.8, gathering * 0.72, wake * 0.66)
+        - Math.max(0, opening) * 0.58 + noise;
     }
-    case "crest": {
-      const body = chevron(driftX, driftY + 0.08, 0.9 + wave);
-      const stem = 1 - (Math.abs(driftX) / 0.28 + Math.abs(driftY - 0.1) / 0.82);
-      const bite = almond(driftX, driftY - 0.18, 0.16, 0.18);
-      return Math.max(body, stem * 0.85) - Math.max(0, bite) * 0.75 + noise;
+    case "topography": {
+      const contourA = Math.sin(driftX * 2.25 + phase * 0.3 + seedPhase) * 0.16 - 0.34;
+      const contourB = Math.sin(driftX * 2.8 - phase * 0.24) * 0.14 - 0.02;
+      const contourC = Math.sin(driftX * 3.15 + phase * 0.2 - seedPhase) * 0.12 + 0.31;
+      const ridgeA = ribbon(driftX, driftY, contourA, 0.095, 1.08);
+      const ridgeB = ribbon(driftX * 0.92, driftY, contourB, 0.12, 1.02);
+      const ridgeC = ribbon(driftX * 1.04, driftY, contourC, 0.085, 0.94);
+      const basin = annulus(driftX + 0.34, driftY - 0.02, 0.12, 0.34);
+      const interruption = almond(driftX - 0.48, driftY + 0.06, 0.18, 0.24);
+      return Math.max(ridgeA * 0.86, ridgeB * 0.92, ridgeC * 0.78, basin * 0.64)
+        - Math.max(0, interruption) * 0.46 + noise;
     }
-    case "wing": {
-      const sweep = 1 - (Math.abs(driftY + driftX * 0.28) / 0.46 + Math.max(0, -driftX) / 0.28);
-      const fan = almond(driftX - 0.12, driftY, 0.96, 0.62 + wave);
-      const cut = almond(driftX + 0.5, driftY - 0.12, 0.24, 0.16);
-      return Math.max(sweep, fan) - Math.max(0, cut) * 0.8 + noise;
+    case "signal-weave": {
+      const horizontalCenter = Math.sin(driftX * 3.1 + phase * 0.48) * 0.18;
+      const horizontal = ribbon(driftX, driftY, horizontalCenter, 0.12, 1.1);
+      const verticalCenter = Math.sin(driftY * 3.5 - phase * 0.37 + seedPhase) * 0.2;
+      const vertical = ribbon(driftY, driftX, verticalCenter, 0.1, 0.84);
+      const relayA = almond(driftX + 0.62, driftY - 0.28, 0.28, 0.22);
+      const relayB = almond(driftX - 0.54, driftY + 0.3, 0.34, 0.25);
+      const relayC = kite(driftX - 0.08, driftY + 0.03, 0.32, 0.42);
+      const quietZone = almond(driftX + 0.12, driftY - 0.16, 0.13, 0.18);
+      return Math.max(horizontal * 0.86, vertical * 0.8, relayA * 0.68, relayB * 0.62, relayC * 0.7)
+        - Math.max(0, quietZone) * 0.52 + noise;
     }
-    case "ring": {
-      const ring = annulus(driftX, driftY, 0.28, 0.98 + wave);
-      const gap = Math.cos(Math.atan2(driftY, driftX) * 2 + seed * 0.01);
-      const shard = kite(driftX - 0.12, driftY + 0.18, 0.34, 0.62);
-      return Math.max(ring - Math.max(0, gap) * 0.12, shard * 0.7) + noise;
+    case "archipelago": {
+      const islandA = almond(driftX + 0.58, driftY + 0.16, 0.48, 0.31);
+      const islandB = almond(driftX + 0.04, driftY - 0.24, 0.6, 0.36);
+      const islandC = almond(driftX - 0.6, driftY + 0.14, 0.42, 0.3);
+      const islandD = almond(driftX - 0.18, driftY + 0.42, 0.32, 0.19);
+      const tidalBridge = ribbon(
+        driftX,
+        driftY,
+        Math.sin(driftX * 2.4 + phase * 0.3) * 0.18,
+        0.085,
+        0.94,
+      );
+      const lagoonA = almond(driftX + 0.1, driftY - 0.22, 0.18, 0.13);
+      const lagoonB = almond(driftX - 0.56, driftY + 0.12, 0.11, 0.09);
+      return Math.max(islandA * 0.72, islandB * 0.86, islandC * 0.68, islandD * 0.58, tidalBridge * 0.56)
+        - Math.max(0, lagoonA, lagoonB) * 0.62 + noise;
     }
-    case "thorn": {
-      const blade = kite(driftX, driftY, 0.52, 1.05);
-      const bar = 1 - (Math.abs(driftY - driftX * 0.55) / 0.2 + Math.abs(driftX) / 0.92);
-      const notch = kite(driftX + 0.16, driftY - 0.16, 0.12, 0.14);
-      return Math.max(blade, bar * 0.9) - Math.max(0, notch) * 0.7 + noise;
+    case "canopy": {
+      const crownA = almond(driftX + 0.48, driftY + 0.28, 0.55, 0.42);
+      const crownB = almond(driftX - 0.04, driftY + 0.4, 0.66, 0.35);
+      const crownC = almond(driftX - 0.58, driftY + 0.2, 0.46, 0.38);
+      const stemCenter = Math.sin(driftY * 2.5 + phase * 0.28) * 0.13;
+      const stem = ribbon(driftY, driftX, stemCenter, 0.11, 0.9);
+      const branch = ribbon(
+        driftX,
+        driftY,
+        Math.sin(driftX * 2.8 - phase * 0.3) * 0.16 + 0.05,
+        0.08,
+        0.82,
+      );
+      const apertureA = almond(driftX + 0.38, driftY + 0.3, 0.13, 0.16);
+      const apertureB = almond(driftX - 0.3, driftY + 0.34, 0.17, 0.11);
+      return Math.max(crownA * 0.72, crownB * 0.78, crownC * 0.68, stem * 0.78, branch * 0.62)
+        - Math.max(0, apertureA, apertureB) * 0.55 + noise;
     }
-    case "veil": {
-      const sheet = 1 - Math.max(Math.abs(driftX) / 1.02, Math.abs(driftY) / 0.78);
-      const fringe = Math.sin(driftX * 8 + phase) * 0.06 + Math.sin(driftY * 6 - phase * 0.6) * 0.05;
-      const window = almond(driftX + 0.2, driftY - 0.1, 0.18, 0.14);
-      return sheet + fringe - Math.max(0, window) * 0.78 + noise;
-    }
-  }
-}
-
-function ornamentPaths(
-  archetype: Archetype,
-  radius: number,
-  phase: number,
-  seed: number,
-  flip: number,
-): Array<{ x: number; y: number }[]> {
-  const spin = Math.sin(phase * 0.42) * 0.08;
-  const stretch = 1 + Math.sin(phase * 0.33) * 0.04;
-
-  const point = (angle: number, distance: number) => ({
-    x: Math.cos(angle + spin) * distance * radius * stretch * flip,
-    y: Math.sin(angle + spin) * distance * radius * stretch,
-  });
-
-  switch (archetype) {
-    case "eye":
-      return [
-        Array.from({ length: 18 }, (_, index) =>
-          point((-0.72 + index / 17) * Math.PI, 0.42 + Math.sin(index * 0.5) * 0.04),
-        ),
-        Array.from({ length: 14 }, (_, index) =>
-          point((0.18 + index / 13) * Math.PI, 0.58),
-        ),
-        [
-          point(-0.2, 0.12),
-          point(0.08, 0.34),
-          point(0.42, 0.18),
-          point(0.62, -0.08),
-        ],
-      ];
-    case "crest":
-      return [
-        [
-          point(-0.5 * Math.PI, 0.82),
-          point(-0.18, 0.08),
-          point(0.5 * Math.PI, 0.78),
-        ],
-        Array.from({ length: 9 }, (_, index) =>
-          point(-0.72 + index * 0.18, 0.7 + (index % 2) * 0.16),
-        ),
-        [
-          point(Math.PI * 0.92, 0.22),
-          point(Math.PI * 1.08, 0.48),
-          point(Math.PI * 1.22, 0.18),
-        ],
-      ];
-    case "wing":
-      return [
-        Array.from({ length: 16 }, (_, index) =>
-          point(-0.15 + index * 0.09, 0.28 + index * 0.034),
-        ),
-        [
-          point(0.2, 0.16),
-          point(0.55, 0.38),
-          point(0.82, 0.12),
-          point(1.02, -0.22),
-        ],
-        Array.from({ length: 8 }, (_, index) =>
-          point(Math.PI * 0.7 + index * 0.08, 0.46),
-        ),
-      ];
-    case "ring":
-      return [
-        Array.from({ length: 24 }, (_, index) => point((index / 24) * TAU, 0.72)),
-        Array.from({ length: 10 }, (_, index) => point(index * 0.22 + seed, 0.38)),
-        [
-          point(0.4, 0.18),
-          point(1.1, 0.42),
-          point(1.4, 0.08),
-        ],
-      ];
-    case "thorn":
-      return [
-        [
-          point(-0.7, 0.08),
-          point(0.12, -0.78),
-          point(0.36, 0.08),
-          point(0.08, 0.86),
-          point(-0.7, 0.08),
-        ],
-        [
-          point(0.2, -0.12),
-          point(0.86, -0.48),
-          point(0.62, 0.06),
-        ],
-        [
-          point(-0.12, 0.18),
-          point(-0.72, 0.54),
-          point(-0.28, 0.42),
-        ],
-      ];
-    case "veil":
-      return [
-        Array.from({ length: 12 }, (_, index) => ({
-          x: lerp(-0.78, 0.78, index / 11) * radius * flip,
-          y: (Math.sin(index * 0.9 + phase) * 0.12 - 0.08) * radius,
-        })),
-        Array.from({ length: 10 }, (_, index) => ({
-          x: (0.18 + Math.sin(index * 0.7) * 0.08) * radius * flip,
-          y: lerp(-0.58, 0.58, index / 9) * radius,
-        })),
-        [
-          point(-0.35, 0.42),
-          point(0.05, 0.58),
-          point(0.48, 0.32),
-        ],
-      ];
-  }
-}
-
-function drawPixelStroke(
-  context: CanvasRenderingContext2D,
-  path: Array<{ x: number; y: number }>,
-  size: number,
-  rgb: readonly number[],
-  alpha: number,
-) {
-  if (path.length < 2) return;
-  context.beginPath();
-  for (let index = 0; index < path.length - 1; index += 1) {
-    const start = path[index];
-    const end = path[index + 1];
-    const steps = Math.max(2, Math.round(distance(end.x - start.x, end.y - start.y) / (size * 1.12)));
-    for (let step = 0; step <= steps; step += 1) {
-      const t = step / steps;
-      pixel(context, lerp(start.x, end.x, t), lerp(start.y, end.y, t), size);
+    case "fold": {
+      const upperFold = Math.sin(driftX * 2.2 + phase * 0.28 + seedPhase) * 0.13 - 0.22;
+      const lowerFold = Math.sin(driftX * 2.65 - phase * 0.24) * 0.16 + 0.23;
+      const upperSheet = ribbon(driftX, driftY, upperFold, 0.24, 1.08);
+      const lowerSheet = ribbon(driftX * 0.94, driftY, lowerFold, 0.22, 1.02);
+      const clasp = annulus(driftX - 0.34, driftY + 0.02, 0.11, 0.32);
+      const pocket = almond(driftX + 0.42, driftY - 0.03, 0.22, 0.28);
+      const slit = ribbon(
+        driftX * 0.72,
+        driftY,
+        Math.sin(driftX * 3.4 + phase * 0.32) * 0.08,
+        0.045,
+        0.66,
+      );
+      return Math.max(upperSheet * 0.76, lowerSheet * 0.72, clasp * 0.64, pocket * 0.58)
+        - Math.max(0, slit) * 0.46 + noise;
     }
   }
-  context.fillStyle = fillColor(rgb, alpha);
-  context.fill();
 }
 
 export function drawDottedSigil(
   context: CanvasRenderingContext2D,
   options: DottedSigilOptions,
 ) {
-  const { radius, alpha, seed, time, velocity, repeat, stretch, curvature, midi = 60 } = options;
+  const {
+    centerX,
+    centerY,
+    viewportWidth,
+    viewportHeight,
+    gridStep,
+    radius,
+    alpha,
+    seed,
+    time,
+    arrival,
+    emphasis,
+    layered,
+    maturation,
+    velocity,
+    repeat,
+    expansion,
+    stretch,
+    curvature,
+    accentContext,
+    occupiedCells,
+    midi = 60,
+  } = options;
   if (radius <= 0 || alpha <= 0) return;
 
   const archetype = ARCHETYPES[Math.abs(seed + midi * 3) % ARCHETYPES.length];
-  const palette = PALETTES[Math.abs(midi + repeat) % PALETTES.length];
-  const phase = time * 0.00105 + hash(seed, 17) * TAU;
+  const palette = PIXEL_PALETTES[Math.abs(midi * 3 + repeat * 5) % PIXEL_PALETTES.length];
+  const saturatedPrimary = {
+    h: palette.primary.h,
+    s: palette.primary.s,
+    l: palette.primary.l,
+  };
+  const saturatedAccent = {
+    h: palette.accent.h,
+    s: palette.accent.s,
+    l: palette.accent.l,
+  };
+  const saturatedBodyColors = [
+    saturatedPrimary,
+    mixColor(saturatedPrimary, saturatedAccent, 0.24),
+    mixColor(saturatedPrimary, saturatedAccent, 0.5),
+    mixColor(saturatedPrimary, saturatedAccent, 0.76),
+    saturatedAccent,
+  ] as const;
+  const whiteLight = { h: saturatedAccent.h, s: 6, l: 96 };
+  const whiteTransition = maturation * maturation * (3 - maturation * 2);
+  const luminosityStops = [0, 0.02, 0.05, 0.1, 0.2] as const;
+  const bodyColors = saturatedBodyColors.map((color, index) =>
+    mixColor(
+      color,
+      whiteLight,
+      clamp(
+        luminosityStops[index] +
+          whiteTransition * (0.02 + index * 0.025) +
+          (layered ? index * 0.015 : 0),
+        0,
+        0.9,
+      ),
+    ),
+  );
+  const coloredHighlight = {
+    h: saturatedAccent.h,
+    s: clamp(saturatedAccent.s + 2, 0, 100),
+    l: clamp(saturatedAccent.l + 20, 0, 84),
+  };
+  const highlightColor = mixColor(
+    coloredHighlight,
+    whiteLight,
+    clamp(0.38 + whiteTransition * 0.62 + (layered ? 0.08 : 0), 0, 1),
+  );
+  const phase = time * 0.00072 + hash(seed, 17) * TAU;
   const flip = hash(seed, 91) > 0.5 ? 1 : -1;
-  const columns = Math.round(clamp(radius / 1.55, 24, 46));
-  const rows = Math.round(clamp(radius / 1.7, 22, 42));
-  const cell = (radius * 2.08) / Math.max(columns, rows);
-  const pixelSize = clamp(cell * 0.78, 1.2, 2.4);
-  const density = clamp(0.72 + velocity * 0.16 + Math.min(repeat, 7) * 0.02, 0.72, 0.94);
-  const width = radius * (1.08 + (stretch - 1) * 0.28);
-  const height = radius * (archetype === "crest" || archetype === "thorn" ? 1.22 : 0.92);
+  const density = clamp(0.56 + velocity * 0.08 + Math.min(repeat, 7) * 0.008, 0.56, 0.72);
+  const footprintGrowth = Math.pow(clamp(expansion, 0, 1), 0.82);
+  const compactWidth = lerp(0.09, 0.145, hash(seed, 211));
+  const expandedWidth = lerp(0.32, 0.5, hash(seed, 211));
+  const compactHeight = lerp(0.09, 0.15, hash(seed, 227));
+  const expandedHeight = lerp(0.24, 0.38, hash(seed, 227));
+  const fieldWidth = Math.max(
+    radius * (0.72 + (stretch - 1) * 0.18),
+    viewportWidth * lerp(compactWidth, expandedWidth, footprintGrowth),
+  );
+  const fieldHeight = Math.max(
+    radius * (archetype === "canopy" ? 0.86 : 0.7),
+    viewportHeight * lerp(compactHeight, expandedHeight, footprintGrowth),
+  );
+  const startColumn = Math.floor((centerX - fieldWidth) / gridStep);
+  const endColumn = Math.ceil((centerX + fieldWidth) / gridStep);
+  const startRow = Math.floor((centerY - fieldHeight) / gridStep);
+  const endRow = Math.ceil((centerY + fieldHeight) / gridStep);
+  const pixelSize = Math.max(1, Math.round(gridStep * 0.5));
+  const candidateCells: Array<{
+    x: number;
+    y: number;
+    column: number;
+    row: number;
+    size: number;
+    intensity: number;
+    tone: 0 | 1 | 2 | 3 | 4;
+    priority: number;
+  }> = [];
+
+  for (let row = startRow; row <= endRow; row += 1) {
+    const gridY = row * gridStep;
+    const v = (gridY - centerY) / fieldHeight;
+    for (let column = startColumn; column <= endColumn; column += 1) {
+      const gridX = column * gridStep;
+      const u = ((gridX - centerX) / fieldWidth) * flip;
+      const occupancy = fieldMask(archetype, u, v, phase, seed, curvature);
+      if (occupancy <= -0.035) continue;
+
+      const cellIndex = row * 4099 + column;
+      const flow = 0.5 + Math.sin(
+        column * 0.145 + row * 0.085 - phase * 1.65 + hash(seed, 23) * TAU,
+      ) * 0.5;
+      const envelope = clamp((occupancy + 0.08) * 0.92, 0, 1);
+      const revealOrder = clamp(
+        Math.hypot(u * 0.7, v * 0.7) * 0.24 + hash(seed + 809, cellIndex) * 0.16,
+        0,
+        0.42,
+      );
+      const reveal = clamp((arrival - revealOrder) / 0.26, 0, 1);
+      const activation = density * envelope * (0.62 + flow * 0.38) * reveal;
+      const cellChance = hash(seed + row * 47, column * 131);
+      if (cellChance > activation) continue;
+
+      const toneRoll = clamp(
+        hash(seed + 487, cellIndex) * 0.5 + flow * 0.34 + envelope * 0.16,
+        0,
+        1,
+      );
+      candidateCells.push({
+        x: gridX,
+        y: gridY,
+        column,
+        row,
+        size: pixelSize,
+        intensity: clamp(0.42 + occupancy * 0.48 + flow * 0.16, 0.35, 1),
+        tone: toneRoll < 0.2 ? 0 : toneRoll < 0.4 ? 1 : toneRoll < 0.6 ? 2 : toneRoll < 0.8 ? 3 : 4,
+        priority: hash(seed + 1201, cellIndex),
+      });
+    }
+  }
+
+  const reservedCells = occupiedCells ?? new Set<string>();
+  const activeCells: typeof candidateCells = [];
+  candidateCells.sort((a, b) => b.priority - a.priority);
+  for (const cell of candidateCells) {
+    const cellKey = `${cell.column}:${cell.row}`;
+    if (reservedCells.has(cellKey)) continue;
+    reservedCells.add(cellKey);
+    activeCells.push(cell);
+  }
+
+  if (activeCells.length === 0) return;
+
+  const glowCells = activeCells.filter((cell) => {
+    const glowChance = hash(
+      seed + 367,
+      Math.round(cell.x / gridStep) * 313 + Math.round(cell.y / gridStep),
+    );
+    const glowDensity = layered
+      ? 0.14 + emphasis * 0.08
+      : 0.02 + emphasis * 0.035;
+    return glowChance <= cell.intensity * glowDensity;
+  });
 
   context.save();
-  context.scale(flip, 1);
-  context.rotate((hash(seed, 44) - 0.5) * 0.46);
-  context.globalAlpha *= clamp(alpha, 0, 1);
-
-  context.beginPath();
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const u = (column / (columns - 1)) * 2 - 1;
-      const v = (row / (rows - 1)) * 2 - 1;
-      const occupancy = fieldMask(archetype, u, v, phase, seed, curvature);
-      if (occupancy <= 0.02) continue;
-      const chance = hash(seed + row * 47, column * 13 + Math.round(phase * 8));
-      if (chance > density * clamp(0.35 + occupancy * 0.65, 0, 1)) continue;
-      const x = u * width + (hash(seed, row + column * 9) - 0.5) * cell * 0.18;
-      const y = v * height + Math.sin(phase + column * 0.4) * cell * 0.08;
-      pixel(context, x, y, pixelSize * (0.78 + occupancy * 0.34));
+  context.globalAlpha = clamp(alpha, 0, 1);
+  context.imageSmoothingEnabled = false;
+  for (let tone = 0; tone < bodyColors.length; tone += 1) {
+    context.beginPath();
+    for (const cell of activeCells) {
+      if (cell.tone !== tone) continue;
+      pixel(context, cell.x, cell.y, cell.size);
     }
+    context.fillStyle = fillColor(bodyColors[tone], 1);
+    context.fill();
   }
-  context.fillStyle = fillColor(mixColor(palette.field, palette.core, 0.12), 0.88);
-  context.fill();
 
-  context.shadowColor = fillColor(palette.glow, 0.7);
-  context.shadowBlur = clamp(pixelSize * 2.2, 2.2, 6);
+  context.fillStyle = fillColor(highlightColor, 1);
   context.beginPath();
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const glowChance = hash(seed + 311 + row * 23, column * 41);
-      if (glowChance < 0.82) continue;
-      const u = (column / (columns - 1)) * 2 - 1;
-      const v = (row / (rows - 1)) * 2 - 1;
-      const occupancy = fieldMask(archetype, u, v, phase, seed, curvature);
-      if (occupancy <= 0.22) continue;
-      pixel(context, u * width, v * height, pixelSize * (1.15 + glowChance * 0.55));
-    }
+  for (const cell of glowCells) {
+    pixel(context, cell.x, cell.y, cell.size);
   }
-  context.fillStyle = fillColor(palette.core, 0.92);
   context.fill();
-  context.shadowBlur = 0;
-
-  const ornaments = ornamentPaths(archetype, radius, phase, seed, 1);
-  for (const [index, path] of ornaments.entries()) {
-    const weight = pixelSize * (index === 0 ? 1.22 : 0.94);
-    context.shadowColor = fillColor(palette.glow, 0.58);
-    context.shadowBlur = clamp(weight * 1.8, 1.8, 5.2);
-    drawPixelStroke(context, path, weight, palette.core, 0.96);
-    context.shadowBlur = 0;
-    drawPixelStroke(context, path, weight * 0.62, palette.field, 0.88);
-  }
-
   context.restore();
+
+  if (accentContext && glowCells.length > 0) {
+    accentContext.save();
+    accentContext.globalAlpha = clamp(alpha * (0.55 + emphasis * 0.3), 0, 1);
+    accentContext.imageSmoothingEnabled = false;
+    accentContext.fillStyle = fillColor(highlightColor, 1);
+    accentContext.beginPath();
+    for (const cell of glowCells) {
+      pixel(accentContext, cell.x, cell.y, cell.size);
+    }
+    accentContext.fill();
+    accentContext.restore();
+  }
 }
 
 export function dottedSigilBounds(radius: number, stretch = 1) {

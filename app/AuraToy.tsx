@@ -8,10 +8,7 @@ import { GIFEncoder, quantize } from "gifenc";
 import { PitchDetector } from "pitchy";
 import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
 import { drawDottedSigil } from "./art-styles/style-2";
-import {
-  drawTelemetryOverlay,
-  telemetryNeedsFrame,
-} from "./art-styles/telemetry";
+import { drawTelemetryOverlay, telemetryNeedsFrame } from "./art-styles/telemetry";
 
 type SolidControlIconName =
   | "check"
@@ -123,6 +120,7 @@ type BlobParticle = {
   note: string;
   midi: number;
   repeat: number;
+  compositionIndex: number;
   x: number;
   y: number;
   radius: number;
@@ -301,7 +299,10 @@ const MAX_OCTAVE = HIGHEST_PIANO_OCTAVE - 1;
 const MIN_MIDI = (MIN_OCTAVE + 1) * 12;
 const MAX_MIDI = (HIGHEST_PIANO_OCTAVE + 2) * 12 - 1;
 const BLOB_ARRIVAL_DURATION = 550;
-const DOTTED_MOTION_IDLE_DURATION = 12000;
+const DOTTED_VISIBLE_FORMATIONS = 4;
+const DOTTED_FORMATION_SETTLE_DURATION = 2200;
+const DOTTED_GLOW_MATURATION_DURATION = 7200;
+const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown";
 const TELEMETRY_TOGGLE_FADE_DURATION = 560;
 const SATURATION_CHECK_INTERVAL = 6;
 const SATURATION_MINIMUM_LAYERS = 24;
@@ -350,6 +351,19 @@ const COMPOSITION_ANCHORS = [
   [0.6, 0.36],
   [0.27, 0.15],
   [0.5, 0.76],
+] as const;
+
+const PIXEL_COMPOSITION_ANCHORS = [
+  [0.11, 0.16],
+  [0.89, 0.18],
+  [0.13, 0.68],
+  [0.87, 0.66],
+  [0.3, 0.12],
+  [0.7, 0.13],
+  [0.09, 0.42],
+  [0.91, 0.44],
+  [0.27, 0.74],
+  [0.73, 0.73],
 ] as const;
 
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
@@ -1022,7 +1036,7 @@ const MICROPHONE_MODES: readonly MicrophoneMode[] = [
 
 const ART_STYLE_SLOTS = [
   { id: "aura", label: "Aura" },
-  { id: "style-2", label: "Style 2" },
+  { id: "style-2", label: "Pixel" },
   { id: "style-3", label: "Style 3" },
   { id: "style-4", label: "Style 4" },
 ] as const;
@@ -1133,7 +1147,28 @@ function configureMicrophonePipeline(runtime: MicrophoneRuntime, mode: Microphon
   runtime.noiseFloor = mode === "voice-isolation" ? 0.004 : mode === "wide-spectrum" ? 0.0018 : 0.0028;
 }
 
-function disposeMicrophoneRuntime(runtime: MicrophoneRuntime | null, stopStream = true) {
+function sessionFlag(key: string) {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.sessionStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function rememberSessionFlag(key: string) {
+  try {
+    window.sessionStorage.setItem(key, "true");
+  } catch {
+    // Session storage can be unavailable in restrictive privacy modes.
+  }
+}
+
+function disposeMicrophoneRuntime(
+  runtime: MicrophoneRuntime | null,
+  stopStream = true,
+  pauseStream = !stopStream,
+) {
   if (!runtime) return;
   window.cancelAnimationFrame(runtime.animationFrame);
   runtime.source.disconnect();
@@ -1141,7 +1176,7 @@ function disposeMicrophoneRuntime(runtime: MicrophoneRuntime | null, stopStream 
   runtime.analyser.disconnect();
   runtime.stream.getTracks().forEach((track) => {
     if (stopStream) track.stop();
-    else track.enabled = false;
+    else if (pauseStream) track.enabled = false;
   });
   void runtime.context.close().catch(() => undefined);
 }
@@ -1641,47 +1676,81 @@ function drawDottedSigilFlowLayer(
   startIndex = 0,
   endIndex = blobs.length,
   replayProgress?: number,
+  displayWidth = width,
+  accentContext?: CanvasRenderingContext2D,
 ) {
   const shortSide = Math.min(width, height);
+  const displayedPixelSize = displayWidth < 500 ? 2 : 3;
+  const displayedGridStep = displayedPixelSize * 2;
+  const gridStep = displayedGridStep * (width / Math.max(1, displayWidth));
   const replayPosition = replayProgress === undefined
     ? Number.POSITIVE_INFINITY
     : replayProgress * (blobs.length + 0.9);
   const limit = Math.min(endIndex, blobs.length, Math.ceil(replayPosition));
-  let visibleStart = limit;
-  let visibleCount = 0;
+  const dottedIndices: number[] = [];
+  let layeredWithOtherStyles = false;
+  for (let index = 0; index < limit; index += 1) {
+    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") {
+      layeredWithOtherStyles = true;
+      break;
+    }
+  }
   for (let index = limit - 1; index >= startIndex; index -= 1) {
     if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") continue;
-    visibleStart = index;
-    visibleCount += 1;
-    if (visibleCount === 32) break;
+    const candidate = blobs[index];
+    const overlapsNewerFormation = dottedIndices.some((selectedIndex) => {
+      const selected = blobs[selectedIndex];
+      return Math.hypot(candidate.x - selected.x, candidate.y - selected.y) < 0.16;
+    });
+    if (overlapsNewerFormation) continue;
+    dottedIndices.unshift(index);
+    if (dottedIndices.length === DOTTED_VISIBLE_FORMATIONS) break;
   }
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  for (let index = visibleStart; index < limit; index += 1) {
+  const occupiedGridCells = new Set<string>();
+  for (let position = dottedIndices.length - 1; position >= 0; position -= 1) {
+    const index = dottedIndices[position];
     const blob = blobs[index];
-    if ((blob.artStyle ?? fallbackArtStyle) !== "style-2") continue;
     const replayAge = replayPosition - index;
     const age = replayProgress === undefined
       ? Math.max(0, now - blob.createdAt)
       : Math.max(0, replayAge) * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
-    context.save();
-    context.translate(blob.x * width, blob.y * height);
-    context.rotate(blob.angle);
+    const recency = (position + 1) / Math.max(1, dottedIndices.length);
+    const isNewestFormation = position === dottedIndices.length - 1;
+    const layerEmphasis = isNewestFormation
+      ? 1
+      : lerp(0.74, 0.92, recency * recency);
     drawDottedSigil(context, {
       seed: blob.id * 4099 + blob.midi * 131 + blob.repeat * 17,
       midi: blob.midi,
+      centerX: blob.x * width,
+      centerY: blob.y * height,
+      viewportWidth: width,
+      viewportHeight: height,
+      gridStep,
       radius,
-      alpha: clamp((0.62 + blob.velocity * 0.28) * arrival, 0, 0.94),
-      time: reducedMotion ? BLOB_ARRIVAL_DURATION : age,
+      alpha: clamp((0.94 + blob.velocity * 0.06) * arrival * layerEmphasis, 0, 1),
+      time: reducedMotion
+        ? DOTTED_FORMATION_SETTLE_DURATION
+        : Math.min(age, DOTTED_FORMATION_SETTLE_DURATION),
+      arrival,
+      emphasis: layerEmphasis,
+      layered: layeredWithOtherStyles,
+      maturation: reducedMotion
+        ? 1
+        : clamp(age / DOTTED_GLOW_MATURATION_DURATION, 0, 1),
       velocity: blob.velocity,
       repeat: blob.repeat,
+      expansion: clamp(blob.compositionIndex / 12, 0, 1),
       stretch: blob.stretch,
       curvature: blob.curvature,
+      accentContext,
+      occupiedCells: occupiedGridCells,
     });
-    context.restore();
   }
   context.restore();
 }
@@ -1690,6 +1759,10 @@ function drawChronologicalAuraLayers(
   context: CanvasRenderingContext2D,
   organicLayer: HTMLCanvasElement,
   organicContext: CanvasRenderingContext2D,
+  pixelLayer: HTMLCanvasElement,
+  pixelContext: CanvasRenderingContext2D,
+  pixelAccentLayer: HTMLCanvasElement,
+  pixelAccentContext: CanvasRenderingContext2D,
   blurredLayer: HTMLCanvasElement,
   blurredContext: CanvasRenderingContext2D,
   blobs: readonly BlobParticle[],
@@ -1713,7 +1786,7 @@ function drawChronologicalAuraLayers(
   for (let index = visibleLimit - 1; index >= 0; index -= 1) {
     if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") continue;
     dottedCount += 1;
-    if (dottedCount === 32) {
+    if (dottedCount === DOTTED_VISIBLE_FORMATIONS) {
       dottedWindowStart = index;
       break;
     }
@@ -1731,23 +1804,59 @@ function drawChronologicalAuraLayers(
     }
 
     if (isDottedRun) {
-      organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
+      pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
+      pixelAccentContext.clearRect(0, 0, pixelAccentLayer.width, pixelAccentLayer.height);
       drawDottedSigilFlowLayer(
-        organicContext,
+        pixelContext,
         blobs,
-        organicLayer.width,
-        organicLayer.height,
+        pixelLayer.width,
+        pixelLayer.height,
         renderNow,
         reducedMotion,
         fallbackArtStyle,
         Math.max(runStart, dottedWindowStart),
         runEnd,
         replayProgress,
+        width,
+        pixelAccentContext,
       );
+      const blendsWithEarlierArtwork = runStart > 0;
+      if (blendsWithEarlierArtwork) {
+        context.save();
+        context.globalCompositeOperation = "screen";
+        context.globalAlpha = 0.7;
+        context.filter = `blur(${clamp(Math.min(width, height) * 0.009, 4, 9)}px)`;
+        context.drawImage(pixelAccentLayer, 0, 0, width, height);
+        context.restore();
+
+        context.save();
+        context.globalCompositeOperation = "color";
+        context.globalAlpha = 0.46;
+        context.imageSmoothingEnabled = false;
+        context.drawImage(pixelLayer, 0, 0, width, height);
+        context.restore();
+
+        context.save();
+        context.globalCompositeOperation = "luminosity";
+        context.globalAlpha = 0.38;
+        context.imageSmoothingEnabled = false;
+        context.drawImage(pixelLayer, 0, 0, width, height);
+        context.restore();
+      }
       context.save();
       context.globalCompositeOperation = "source-over";
-      context.drawImage(organicLayer, 0, 0, width, height);
+      context.globalAlpha = blendsWithEarlierArtwork ? 0.94 : 1;
+      context.imageSmoothingEnabled = false;
+      context.drawImage(pixelLayer, 0, 0, width, height);
       context.restore();
+      if (blendsWithEarlierArtwork) {
+        context.save();
+        context.globalCompositeOperation = "difference";
+        context.globalAlpha = 0.5;
+        context.imageSmoothingEnabled = false;
+        context.drawImage(pixelAccentLayer, 0, 0, width, height);
+        context.restore();
+      }
     } else {
       organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
       drawAuraComposition(
@@ -1880,7 +1989,9 @@ export function AuraToy() {
   const externalInputButtonRef = useRef<HTMLButtonElement | null>(null);
   const microphoneAllowRef = useRef<HTMLButtonElement | null>(null);
   const microphoneIntroductionShownRef = useRef(false);
-  const systemAudioIntroductionShownRef = useRef(false);
+  const systemAudioIntroductionShownRef = useRef(
+    sessionFlag(SYSTEM_AUDIO_INTRO_SESSION_KEY),
+  );
   const externalInputIntroductionShownRef = useRef(false);
   const systemAudioStreamRef = useRef<MediaStream | null>(null);
   const externalMidiAccessRef = useRef<MIDIAccess | null>(null);
@@ -1890,6 +2001,8 @@ export function AuraToy() {
   const microphoneModeSyncRef = useRef(0);
   const exportLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const exportBlurLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
+  const exportPixelLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
+  const exportPixelAccentLayersRef = useRef<WeakMap<HTMLCanvasElement, HTMLCanvasElement>>(new WeakMap());
   const exportGrainPatternsRef = useRef<WeakMap<HTMLCanvasElement, CanvasPattern>>(new WeakMap());
   const replayRenderStatesRef = useRef<WeakMap<HTMLCanvasElement, ReplayRenderState>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
@@ -2288,6 +2401,10 @@ export function AuraToy() {
     const identity = `AURA|${mode}|${note.name}`;
     const repeat = noteRepeatRef.current.get(identity) ?? 0;
     noteRepeatRef.current.set(identity, repeat + 1);
+    const compositionIndex = blobsRef.current.reduce(
+      (count, blob) => count + (blob.artStyle === currentArtStyle ? 1 : 0),
+      0,
+    );
 
     const identitySeed = fnv1a(identity);
     const identityRng = mulberry32(identitySeed);
@@ -2299,23 +2416,41 @@ export function AuraToy() {
     const pitchY = 0.1 + (1 - pitchNorm) * 0.76;
     const baseX = clamp(lerp(pitchX, anchor[0], 0.38) + (identityRng() - 0.5) * 0.04, 0.05, 0.95);
     const baseY = clamp(lerp(pitchY, anchor[1], 0.24) + (identityRng() - 0.5) * 0.035, 0.05, 0.88);
+    const pixelAnchor = PIXEL_COMPOSITION_ANCHORS[
+      modulo(
+        compositionIndex * 3 + note.pc * 5 + Math.floor(note.midi / 12),
+        PIXEL_COMPOSITION_ANCHORS.length,
+      )
+    ];
     const baseAngle =
       profile.angleBias + (identityRng() - 0.5) * Math.PI * 0.82 + (note.pc - 5.5) * 0.045;
     const trailDirection = baseAngle + (modeIndex - 2) * 0.12;
     const trailDistance = repeat === 0 ? 0 : Math.min(0.012 + repeat * 0.012, 0.115);
     const trailBend = repeat === 0 ? 0 : Math.sin(repeat * 0.62) * Math.min(0.006 + repeat * 0.0015, 0.018);
-    const x = clamp(
-      baseX + Math.cos(trailDirection) * trailDistance + Math.cos(trailDirection + Math.PI / 2) * trailBend,
-      0.035,
-      0.965,
-    );
-    const y = clamp(
-      baseY +
-        Math.sin(trailDirection) * trailDistance * 0.74 +
-        Math.sin(trailDirection + Math.PI / 2) * trailBend * 0.74,
-      0.04,
-      0.9,
-    );
+    const x = currentArtStyle === "style-2"
+      ? clamp(
+          lerp(pixelAnchor[0], pitchX, 0.1) + (identityRng() - 0.5) * 0.024,
+          0.06,
+          0.94,
+        )
+      : clamp(
+          baseX + Math.cos(trailDirection) * trailDistance + Math.cos(trailDirection + Math.PI / 2) * trailBend,
+          0.035,
+          0.965,
+        );
+    const y = currentArtStyle === "style-2"
+      ? clamp(
+          lerp(pixelAnchor[1], pitchY, 0.08) + (identityRng() - 0.5) * 0.022,
+          0.07,
+          0.78,
+        )
+      : clamp(
+          baseY +
+            Math.sin(trailDirection) * trailDistance * 0.74 +
+            Math.sin(trailDirection + Math.PI / 2) * trailBend * 0.74,
+          0.04,
+          0.9,
+        );
     const registerBand = pitchNorm < 0.34 ? 0 : pitchNorm < 0.68 ? 1 : 2;
     const shapeBand = profile.shapeBands[registerBand];
     const shape = shapeBand[
@@ -2328,7 +2463,10 @@ export function AuraToy() {
       (0.88 + identityRng() * 0.46) *
       (0.82 + velocity * 0.38) *
       repeatScale *
-      registerScale;
+      registerScale *
+      (currentArtStyle === "style-2"
+        ? lerp(0.78, 1.16, clamp(compositionIndex / 12, 0, 1))
+        : 1);
     const [minimumStretch, maximumStretch] = AURA_STRETCH_BY_SHAPE[shape];
     const stretch =
       currentArtStyle === "style-2"
@@ -2373,6 +2511,7 @@ export function AuraToy() {
       note: note.name,
       midi: note.midi,
       repeat,
+      compositionIndex,
       x,
       y,
       radius,
@@ -2409,7 +2548,7 @@ export function AuraToy() {
       audioInputSourceRef.current === "system" &&
       runtime?.stream === systemAudioStreamRef.current &&
       runtime.stream.getAudioTracks().some((track) => track.readyState === "live");
-    disposeMicrophoneRuntime(runtime, !retainSystemAudio);
+    disposeMicrophoneRuntime(runtime, !retainSystemAudio, false);
     if (!retainSystemAudio && runtime?.stream === systemAudioStreamRef.current) {
       systemAudioStreamRef.current = null;
     }
@@ -2472,7 +2611,7 @@ export function AuraToy() {
       audioInputSourceRef.current === "system" &&
       previousRuntime?.stream === systemAudioStreamRef.current &&
       previousRuntime.stream.getAudioTracks().some((track) => track.readyState === "live");
-    disposeMicrophoneRuntime(previousRuntime, !retainPreviousSystemAudio);
+    disposeMicrophoneRuntime(previousRuntime, !retainPreviousSystemAudio, false);
     microphoneRef.current = null;
     const generation = microphoneGenerationRef.current + 1;
     microphoneGenerationRef.current = generation;
@@ -2511,6 +2650,8 @@ export function AuraToy() {
           throw new Error("No device audio was shared");
         }
         systemAudioStreamRef.current = stream;
+        systemAudioIntroductionShownRef.current = true;
+        rememberSessionFlag(SYSTEM_AUDIO_INTRO_SESSION_KEY);
         stream.getAudioTracks().forEach((track) => {
           if ("contentHint" in track) track.contentHint = "music";
         });
@@ -2537,8 +2678,7 @@ export function AuraToy() {
       }
       if (generation !== microphoneGenerationRef.current) {
         stream.getTracks().forEach((track) => {
-          if (reusedSystemAudio) track.enabled = false;
-          else track.stop();
+          if (!reusedSystemAudio) track.stop();
         });
         if (!reusedSystemAudio && stream === systemAudioStreamRef.current) {
           systemAudioStreamRef.current = null;
@@ -3134,8 +3274,7 @@ export function AuraToy() {
       });
     } catch {
       stream?.getTracks().forEach((track) => {
-        if (reusedSystemAudio) track.enabled = false;
-        else track.stop();
+        if (!reusedSystemAudio) track.stop();
       });
       if (!reusedSystemAudio && stream === systemAudioStreamRef.current) {
         systemAudioStreamRef.current = null;
@@ -3590,6 +3729,10 @@ export function AuraToy() {
 
     const offscreen = document.createElement("canvas");
     const offscreenContext = offscreen.getContext("2d", { alpha: true });
+    const pixelLayer = document.createElement("canvas");
+    const pixelContext = pixelLayer.getContext("2d", { alpha: true });
+    const pixelAccents = document.createElement("canvas");
+    const pixelAccentContext = pixelAccents.getContext("2d", { alpha: true });
     const blurred = document.createElement("canvas");
     const blurredContext = blurred.getContext("2d", { alpha: true });
     const settled = document.createElement("canvas");
@@ -3602,6 +3745,8 @@ export function AuraToy() {
     const saturationProbeContext = saturationProbe.getContext("2d", { willReadFrequently: true });
     if (
       !offscreenContext ||
+      !pixelContext ||
+      !pixelAccentContext ||
       !blurredContext ||
       !settledContext ||
       !settledSnapshotContext ||
@@ -3667,6 +3812,14 @@ export function AuraToy() {
           settledCount = 0;
         }
       }
+      const pixelWidth = Math.max(1, Math.round(width));
+      const pixelHeight = Math.max(1, Math.round(height));
+      if (pixelLayer.width !== pixelWidth || pixelLayer.height !== pixelHeight) {
+        pixelLayer.width = pixelWidth;
+        pixelLayer.height = pixelHeight;
+        pixelAccents.width = pixelWidth;
+        pixelAccents.height = pixelHeight;
+      }
     };
 
     const resize = () => {
@@ -3674,7 +3827,7 @@ export function AuraToy() {
       width = Math.max(1, rect.width);
       height = Math.max(1, rect.height);
       const pixelBudgetRatio = Math.sqrt(AURA_BACKING_PIXEL_BUDGET / Math.max(1, width * height));
-      dpr = Math.max(0.5, Math.min(window.devicePixelRatio || 1, 1.5, pixelBudgetRatio));
+      dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 1.5, pixelBudgetRatio));
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3694,6 +3847,8 @@ export function AuraToy() {
     const resetRenderer = () => {
       settledContext.clearRect(0, 0, settled.width, settled.height);
       offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
+      pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
+      pixelAccentContext.clearRect(0, 0, pixelAccents.width, pixelAccents.height);
       blurredContext.clearRect(0, 0, blurred.width, blurred.height);
       settledCount = 0;
       blurredSettledCount = -1;
@@ -3788,7 +3943,7 @@ export function AuraToy() {
       const dottedMotionIsActive =
         hasDottedStyle &&
         !reducedMotionRef.current &&
-        now - newestDottedCreatedAt < DOTTED_MOTION_IDLE_DURATION;
+        now - newestDottedCreatedAt < DOTTED_FORMATION_SETTLE_DURATION;
       const blurRadius =
         (containsOrganicStyle
           ? reducedMotionRef.current
@@ -3840,6 +3995,10 @@ export function AuraToy() {
           context,
           offscreen,
           offscreenContext,
+          pixelLayer,
+          pixelContext,
+          pixelAccents,
+          pixelAccentContext,
           blurred,
           blurredContext,
           blobsRef.current,
@@ -3851,19 +4010,24 @@ export function AuraToy() {
           blurRadius,
         );
       } else if (hasDottedStyle) {
-        offscreenContext.clearRect(0, 0, offscreen.width, offscreen.height);
+        pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
         drawDottedSigilFlowLayer(
-          offscreenContext,
+          pixelContext,
           blobsRef.current,
-          offscreen.width,
-          offscreen.height,
+          pixelLayer.width,
+          pixelLayer.height,
           now,
           reducedMotionRef.current,
           currentArtStyle,
+          0,
+          blobsRef.current.length,
+          undefined,
+          width,
         );
         context.save();
         context.globalCompositeOperation = "source-over";
-        context.drawImage(offscreen, 0, 0, width, height);
+        context.imageSmoothingEnabled = false;
+        context.drawImage(pixelLayer, 0, 0, width, height);
         context.restore();
       } else {
         context.save();
@@ -3981,7 +4145,33 @@ export function AuraToy() {
     const layerContext = auraLayer.getContext("2d", { alpha: true });
     if (!layerContext) return;
 
+    let pixelLayer = exportPixelLayersRef.current.get(output);
+    if (!pixelLayer) {
+      pixelLayer = document.createElement("canvas");
+      exportPixelLayersRef.current.set(output, pixelLayer);
+    }
+    if (pixelLayer.width !== output.width || pixelLayer.height !== output.height) {
+      pixelLayer.width = output.width;
+      pixelLayer.height = output.height;
+    }
+    const pixelContext = pixelLayer.getContext("2d", { alpha: true });
+    if (!pixelContext) return;
+
+    let pixelAccentLayer = exportPixelAccentLayersRef.current.get(output);
+    if (!pixelAccentLayer) {
+      pixelAccentLayer = document.createElement("canvas");
+      exportPixelAccentLayersRef.current.set(output, pixelAccentLayer);
+    }
+    if (pixelAccentLayer.width !== output.width || pixelAccentLayer.height !== output.height) {
+      pixelAccentLayer.width = output.width;
+      pixelAccentLayer.height = output.height;
+    }
+    const pixelAccentLayerContext = pixelAccentLayer.getContext("2d", { alpha: true });
+    if (!pixelAccentLayerContext) return;
+
     layerContext.clearRect(0, 0, layerWidth, layerHeight);
+    pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
+    pixelAccentLayerContext.clearRect(0, 0, pixelAccentLayer.width, pixelAccentLayer.height);
     if (replayProgress === undefined) {
       replayRenderStatesRef.current.delete(output);
       const settledAt = (blobsRef.current.at(-1)?.createdAt ?? performance.now()) + BLOB_ARRIVAL_DURATION;
@@ -4112,6 +4302,10 @@ export function AuraToy() {
         outputContext,
         auraLayer,
         layerContext,
+        pixelLayer,
+        pixelContext,
+        pixelAccentLayer,
+        pixelAccentLayerContext,
         blurredAuraLayer,
         blurredLayerContext,
         blobsRef.current,
@@ -4994,7 +5188,10 @@ export function AuraToy() {
               className={`microphone-permission-action ${microphonePromptGranting ? "is-confirming" : ""}`}
               onClick={() => {
                 const inputSource = permissionPromptSource;
-                if (inputSource === "system") systemAudioIntroductionShownRef.current = true;
+                if (inputSource === "system") {
+                  systemAudioIntroductionShownRef.current = true;
+                  rememberSessionFlag(SYSTEM_AUDIO_INTRO_SESSION_KEY);
+                }
                 else if (inputSource === "external") externalInputIntroductionShownRef.current = true;
                 else microphoneIntroductionShownRef.current = true;
                 setMicrophonePromptGranting(true);
