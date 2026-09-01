@@ -73,7 +73,7 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="Audio input"/);
   assert.match(html, /data-solid-icon="mic"/);
   assert.match(html, /data-solid-icon="external-input"/);
-  assert.match(html, /aria-label="Start device audio capture; choose a tab or screen with audio"/);
+  assert.match(html, /aria-label="Start device audio capture; choose the browser tab playing audio"/);
   assert.match(html, /data-solid-icon="system-audio"/);
   assert.match(html, /title="Device audio \(Shift\+D\)/);
   assert.ok(
@@ -199,7 +199,18 @@ test("remembers device audio for the page session and provides a cohesive permis
   assert.match(source, /sessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /rememberSessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /systemAudio: "include"/);
+  assert.match(source, /windowAudio: "system"/);
+  assert.match(source, /video: \{ displaySurface: "browser" \}/);
+  assert.match(source, /selfBrowserSurface: "exclude"/);
   assert.match(source, /audio: \{ suppressLocalAudioPlayback: false \}/);
+  assert.match(
+    source,
+    /if \(isSystemAudio\) \{[\s\S]*?audioContext = new AudioContextConstructor[\s\S]*?initialResumeAttempt = audioContext\.resume\(\)[\s\S]*?mediaDevices\.getDisplayMedia/,
+  );
+  assert.match(
+    source,
+    /const analysisStream = isSystemAudio[\s\S]*?new MediaStream\(\[stream\.getAudioTracks\(\)\[0\]\]\)[\s\S]*?createMediaStreamSource\(analysisStream\)/,
+  );
   assert.match(
     source,
     /if \(inputSource === "system"\) \{[\s\S]*?void startAudioInput\(inputSource\);[\s\S]*?closeMicrophonePrompt\(undefined, null\);[\s\S]*?return;/,
@@ -208,7 +219,7 @@ test("remembers device audio for the page session and provides a cohesive permis
   assert.match(source, /permissionPromptSource === "system"/);
   assert.match(source, /\? "Device audio"/);
   assert.match(source, /Continue to device audio/);
-  assert.match(source, /Keep Share audio turned on in the picker\./);
+  assert.match(source, /keep Share tab audio turned on\./);
   assert.match(source, /Audio is never saved\./);
   assert.match(styles, /\.microphone-permission-icon\.is-system-audio/);
   assert.match(styles, /\.microphone-permission\.is-system-audio/);

@@ -194,8 +194,11 @@ type DeviceAudioTrackConstraints = MediaTrackConstraints & {
 
 type DeviceAudioCaptureOptions = Omit<DisplayMediaStreamOptions, "audio"> & {
   audio?: boolean | DeviceAudioTrackConstraints;
+  preferCurrentTab?: boolean;
+  selfBrowserSurface?: "include" | "exclude";
   surfaceSwitching?: "include" | "exclude";
   systemAudio?: "include" | "exclude";
+  windowAudio?: "exclude" | "window" | "system";
 };
 type MicrophoneModeId = "wide-spectrum" | "voice-isolation" | "standard" | "automatic";
 type MicrophoneMode = {
@@ -310,10 +313,13 @@ const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
 const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown";
 const DEVICE_AUDIO_CAPTURE_OPTIONS: DeviceAudioCaptureOptions = {
-  video: true,
+  video: { displaySurface: "browser" },
   audio: { suppressLocalAudioPlayback: false },
+  preferCurrentTab: false,
+  selfBrowserSurface: "exclude",
   surfaceSwitching: "include",
   systemAudio: "include",
+  windowAudio: "system",
 };
 const TELEMETRY_TOGGLE_FADE_DURATION = 560;
 const SATURATION_CHECK_INTERVAL = 6;
@@ -2628,7 +2634,7 @@ export function AuraToy() {
     setExternalInputState(isExternalInput ? "requesting" : "idle");
     setMicrophoneReading(
       isSystemAudio
-        ? "Choose a tab or screen with audio"
+        ? "Choose the browser tab playing audio"
         : isExternalInput
           ? `Connecting ${externalDeviceName || "external input"}`
           : "Listening",
@@ -2636,10 +2642,18 @@ export function AuraToy() {
 
     let stream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
+    let initialResumeAttempt: Promise<void> | null = null;
     let reusedSystemAudio = false;
     const pitchDetectorModule = import("pitchy");
     try {
       if (isSystemAudio) {
+        // Prime Web Audio while this function is still inside the user's click.
+        // Waiting until the display picker resolves can leave the context suspended
+        // under browser autoplay policy even though capture itself succeeded.
+        audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
+        if (audioContext.state === "suspended") {
+          initialResumeAttempt = audioContext.resume().catch(() => undefined);
+        }
         const rememberedStream = systemAudioStreamRef.current;
         if (rememberedStream?.getAudioTracks().some((track) => track.readyState === "live")) {
           stream = rememberedStream;
@@ -2688,15 +2702,20 @@ export function AuraToy() {
         stream.getTracks().forEach((track) => {
           if (!reusedSystemAudio) track.stop();
         });
+        if (audioContext) void audioContext.close().catch(() => undefined);
         if (!reusedSystemAudio && stream === systemAudioStreamRef.current) {
           systemAudioStreamRef.current = null;
         }
         return;
       }
 
-      audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
-      if (audioContext.state === "suspended") await audioContext.resume();
-      const source = audioContext.createMediaStreamSource(stream);
+      if (!audioContext) audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
+      if (initialResumeAttempt) await initialResumeAttempt;
+      if (audioContext.state !== "running") await audioContext.resume();
+      const analysisStream = isSystemAudio
+        ? new MediaStream([stream.getAudioTracks()[0]])
+        : stream;
+      const source = audioContext.createMediaStreamSource(analysisStream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = MICROPHONE_FFT_SIZE;
       analyser.smoothingTimeConstant = 0.22;
@@ -4790,7 +4809,7 @@ export function AuraToy() {
           ? "Retry device audio capture"
           : systemAudioState === "unsupported"
             ? "Device audio capture is unsupported"
-            : "Start device audio capture; choose a tab or screen with audio";
+            : "Start device audio capture; choose the browser tab playing audio";
   const externalInputLabel =
     externalInputState === "listening"
       ? `Stop external input, detecting ${microphoneReading}`
@@ -5056,7 +5075,7 @@ export function AuraToy() {
             className={`export-button microphone-button system-audio-button is-${systemAudioState}`}
             aria-label={systemAudioLabel}
             aria-pressed={systemAudioState === "listening"}
-            title="Device audio (Shift+D) — choose a tab or screen with Share audio enabled"
+            title="Device audio (Shift+D) — choose the browser tab playing audio"
             disabled={systemAudioState === "unsupported"}
             onClick={toggleSystemAudio}
           >
@@ -5238,7 +5257,7 @@ export function AuraToy() {
                 </span>
                 <p>
                   {permissionPromptSource === "system"
-                    ? "Aura listens locally to audio from the tab or screen you choose. Keep Share audio turned on in the picker. Audio is never saved."
+                    ? "Aura listens locally to the browser tab you choose. Select the tab playing audio and keep Share tab audio turned on. Audio is never saved."
                     : permissionPromptSource === "external"
                       ? "Connect a MIDI instrument or USB audio device. Aura reads notes and audio locally; nothing is saved."
                       : "Aura listens locally to pitch, rhythm, and volume. Audio is never saved."}
