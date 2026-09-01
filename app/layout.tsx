@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
-import "@fontsource/inter/400.css";
 import "./globals.css";
-import VercelAnalytics from "./VercelAnalytics";
 
 export const metadata: Metadata = {
   title: "Aura",
@@ -21,7 +19,6 @@ export default function RootLayout({
     <html lang="en">
       <body>
         {children}
-        <VercelAnalytics />
       </body>
     </html>
   );

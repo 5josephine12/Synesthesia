@@ -80,7 +80,6 @@ type OverlayMorphState = {
   to: FocusPresentation;
   startedAt: number;
   sessionStartedAt: number;
-  lastRenderedAt: number;
   width: number;
   height: number;
 };
@@ -99,7 +98,6 @@ const HOLD_MS = 4300;
 const EXIT_MS = 1000;
 const LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
 const MORPH_MS = 820;
-const SESSION_BREAK_MS = 1400;
 
 const MAX_PANELS = 4;
 const MORPH_PROXIMITY_MIN = 68;
@@ -110,11 +108,14 @@ const PANEL_COLLISION_GAP = 18;
 const FRAME_PADDING = 7;
 const SNAPSHOT_WIDTH = 192;
 const SNAPSHOT_HEIGHT = 192;
+const SNAPSHOT_FRAME_INTERVAL = 1000 / 15;
 
 const HUD_ACCENT = "232, 234, 236";
 const HUD_GLOW = "255, 255, 255";
 
 let snapshotStrip: HTMLCanvasElement | null = null;
+let lastSnapshotAt = Number.NEGATIVE_INFINITY;
+let lastSnapshotKey = "";
 let morphStates: OverlayMorphState[] = [];
 let processedNodeKeys = new Set<string>();
 let cachedChordLabels = new Map<number, string | null>();
@@ -763,13 +764,27 @@ function prepareSnapshotStrip(
   frames: readonly VisualizationFrame[],
   width: number,
   height: number,
+  now: number,
+  snapshotKey: string,
 ) {
   if (frames.length === 0 || typeof document === "undefined") return null;
   snapshotStrip ??= document.createElement("canvas");
-  snapshotStrip.width = SNAPSHOT_WIDTH * frames.length;
-  snapshotStrip.height = SNAPSHOT_HEIGHT;
+  const stripWidth = SNAPSHOT_WIDTH * frames.length;
+  const stripWasResized =
+    snapshotStrip.width !== stripWidth || snapshotStrip.height !== SNAPSHOT_HEIGHT;
+  if (stripWasResized) {
+    snapshotStrip.width = stripWidth;
+    snapshotStrip.height = SNAPSHOT_HEIGHT;
+  }
   const snapshotContext = snapshotStrip.getContext("2d", { alpha: true });
   if (!snapshotContext) return null;
+  if (
+    !stripWasResized &&
+    snapshotKey === lastSnapshotKey &&
+    now - lastSnapshotAt < SNAPSHOT_FRAME_INTERVAL
+  ) {
+    return snapshotStrip;
+  }
 
   snapshotContext.clearRect(0, 0, snapshotStrip.width, snapshotStrip.height);
   const dpr = context.canvas.width / Math.max(1, width);
@@ -799,6 +814,9 @@ function prepareSnapshotStrip(
       SNAPSHOT_HEIGHT,
     );
   });
+
+  lastSnapshotAt = now;
+  lastSnapshotKey = snapshotKey;
 
   return snapshotStrip;
 }
@@ -940,14 +958,28 @@ function drawPanel(
   context.restore();
 }
 
-/** True while any mark is still animating, so the renderer keeps waking. */
-export function telemetryNeedsFrame(nodes: readonly TelemetryNode[], now: number) {
-  const newest = nodes.at(-1);
-  return newest !== undefined && now - newest.createdAt < LIFETIME_MS;
+/**
+ * Returns the next time the overlay can visibly change. Static hold frames can
+ * sleep until their exit begins instead of redrawing the same panel at 30fps.
+ */
+export function telemetryNextFrameAt(now: number) {
+  let nextFrameAt = Number.POSITIVE_INFINITY;
+  for (const state of morphStates) {
+    if (now - state.startedAt < MORPH_MS || now - state.sessionStartedAt < ENTER_MS) {
+      return now;
+    }
+    const exitStartsAt = state.to.node.createdAt + ENTER_MS + HOLD_MS;
+    const exitEndsAt = exitStartsAt + EXIT_MS;
+    if (now < exitStartsAt) nextFrameAt = Math.min(nextFrameAt, exitStartsAt);
+    else if (now < exitEndsAt) return now;
+  }
+  return nextFrameAt;
 }
 
 function clearMorphStates() {
   morphStates = [];
+  lastSnapshotAt = Number.NEGATIVE_INFINITY;
+  lastSnapshotKey = "";
   processedNodeKeys = new Set<string>();
   cachedChordLabels = new Map<number, string | null>();
   cachedChordFirstId = -1;
@@ -987,9 +1019,7 @@ export function drawTelemetryOverlay(
   const shortSide = Math.min(width, height);
   const stateIsStale = morphStates.some(
     (state) =>
-      now - state.lastRenderedAt > SESSION_BREAK_MS ||
-      state.width !== width ||
-      state.height !== height,
+      state.width !== width || state.height !== height,
   );
   if (stateIsStale) clearMorphStates();
 
@@ -1060,7 +1090,6 @@ export function drawTelemetryOverlay(
         },
         to: anchoredTarget,
         startedAt: now,
-        lastRenderedAt: now,
       };
     } else {
       const nextState: OverlayMorphState = {
@@ -1069,7 +1098,6 @@ export function drawTelemetryOverlay(
         to: presentation,
         startedAt: now,
         sessionStartedAt: now,
-        lastRenderedAt: now,
         width,
         height,
       };
@@ -1088,7 +1116,6 @@ export function drawTelemetryOverlay(
   }
 
   const rendered = morphStates.map((state) => {
-    state.lastRenderedAt = now;
     const rawProgress = clamp((now - state.startedAt) / MORPH_MS, 0, 1);
     const progress = easeInOutCubic(rawProgress);
     const current = interpolatePresentation(state.from, state.to, progress);
@@ -1113,6 +1140,8 @@ export function drawTelemetryOverlay(
     rendered.flatMap(({ state }) => [state.from.frame, state.to.frame]),
     width,
     height,
+    now,
+    rendered.map(({ state }) => state.targetKey).join("|"),
   );
 
   for (const item of rendered) {

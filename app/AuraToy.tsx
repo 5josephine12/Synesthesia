@@ -2,13 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
-// gifenc does not publish TypeScript declarations, but its browser ESM API is stable and exercised by tests.
-// @ts-expect-error -- upstream package has no declaration file
-import { GIFEncoder, quantize } from "gifenc";
-import { PitchDetector } from "pitchy";
-import { Filter, Freeverb, PolySynth, Synth, start as startTone } from "tone";
+import type { PitchDetector } from "pitchy";
 import { drawDottedSigil } from "./art-styles/style-2";
-import { drawTelemetryOverlay, telemetryNeedsFrame } from "./art-styles/telemetry";
+import { drawTelemetryOverlay, telemetryNextFrameAt } from "./art-styles/telemetry";
 
 type SolidControlIconName =
   | "check"
@@ -313,8 +309,9 @@ const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 30;
 const MICROPHONE_FFT_SIZE = 4096;
 const AURA_FRAME_INTERVAL = 1000 / 30;
 const AURA_FRAME_TOLERANCE = 0.75;
-const AURA_BACKING_PIXEL_BUDGET = 2_100_000;
-const AURA_RENDER_PIXEL_BUDGET = 420_000;
+const DOTTED_RENDER_INTERVAL = 1000 / 20;
+const AURA_BACKING_PIXEL_BUDGET = 1_500_000;
+const AURA_RENDER_PIXEL_BUDGET = 360_000;
 const AURA_SETTLE_BUDGET_MS = 4;
 const AURA_RENDER_BUDGET_MS = 12;
 const AURA_MIN_ADAPTIVE_SCALE = 0.62;
@@ -2092,6 +2089,14 @@ export function AuraToy() {
   }, [soundMode]);
 
   useEffect(() => {
+    const preloadAudioEngine = () => {
+      void import("./audio-engine");
+    };
+    const timer = window.setTimeout(preloadAudioEngine, 600);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     artStyleRef.current = artStyle;
     wakeRendererRef.current?.();
   }, [artStyle]);
@@ -2307,22 +2312,8 @@ export function AuraToy() {
       const generation = audioGenerationRef.current;
       const mode = SOUND_MODES.find(({ id }) => id === soundModeRef.current) ?? SOUND_MODES[0];
       const ready = (async () => {
-        await startTone();
-        const filter = new Filter({
-          type: "lowpass",
-          frequency: mode.filterFrequency,
-          Q: mode.filterQ,
-          rolloff: -12,
-        });
-        const reverb = new Freeverb(mode.reverb);
-        const synth = new PolySynth(Synth, {
-          oscillator: { type: mode.oscillator },
-          envelope: mode.envelope,
-          volume: mode.volume,
-        }).connect(filter);
-        synth.maxPolyphony = 16;
-        filter.connect(reverb);
-        reverb.toDestination();
+        const { createAuraToneEngine } = await import("./audio-engine");
+        const { synth, filter, reverb } = await createAuraToneEngine(mode);
 
         if (generation !== audioGenerationRef.current) {
           synth.dispose();
@@ -2630,6 +2621,7 @@ export function AuraToy() {
     let stream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
     let reusedSystemAudio = false;
+    const pitchDetectorModule = import("pitchy");
     try {
       if (isSystemAudio) {
         const rememberedStream = systemAudioStreamRef.current;
@@ -2695,6 +2687,7 @@ export function AuraToy() {
       analyser.minDecibels = -100;
       analyser.maxDecibels = -10;
 
+      const { PitchDetector } = await pitchDetectorModule;
       const detector = PitchDetector.forFloat32Array(MICROPHONE_FFT_SIZE);
       detector.minVolumeDecibels = -62;
       const runtime: MicrophoneRuntime = {
@@ -3768,6 +3761,12 @@ export function AuraToy() {
     let blurredSettledCount = -1;
     let blurredBlobCount = -1;
     let blurredFallbackArtStyle: ArtStyleId | null = null;
+    let lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
+    let lastPixelBlobCount = -1;
+    let lastPixelFallbackArtStyle: ArtStyleId | null = null;
+    let lastPixelReducedMotion = false;
+    let scheduledWakeTimer: number | null = null;
+    let scheduledWakeAt = Number.POSITIVE_INFINITY;
 
     const syncOffscreenSize = (preserveSettled = false) => {
       const layerTotal = blobsRef.current.length;
@@ -3819,6 +3818,8 @@ export function AuraToy() {
         pixelLayer.height = pixelHeight;
         pixelAccents.width = pixelWidth;
         pixelAccents.height = pixelHeight;
+        lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
+        lastPixelBlobCount = -1;
       }
     };
 
@@ -3827,7 +3828,7 @@ export function AuraToy() {
       width = Math.max(1, rect.width);
       height = Math.max(1, rect.height);
       const pixelBudgetRatio = Math.sqrt(AURA_BACKING_PIXEL_BUDGET / Math.max(1, width * height));
-      dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 1.5, pixelBudgetRatio));
+      dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 1.25, pixelBudgetRatio));
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -3854,16 +3855,41 @@ export function AuraToy() {
       blurredSettledCount = -1;
       blurredBlobCount = -1;
       blurredFallbackArtStyle = null;
+      lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
+      lastPixelBlobCount = -1;
+      lastPixelFallbackArtStyle = null;
       colorRebuildLayersRef.current = 0;
       additiveLayerStartRef.current = 0;
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
     };
 
+    const cancelScheduledWake = () => {
+      if (scheduledWakeTimer !== null) window.clearTimeout(scheduledWakeTimer);
+      scheduledWakeTimer = null;
+      scheduledWakeAt = Number.POSITIVE_INFINITY;
+    };
+
     const wakeRenderer = () => {
+      cancelScheduledWake();
       if (running || document.hidden) return;
       running = true;
       frame = window.requestAnimationFrame(animate);
+    };
+
+    const scheduleRendererWake = (targetAt: number) => {
+      if (!Number.isFinite(targetAt)) {
+        cancelScheduledWake();
+        return;
+      }
+      if (scheduledWakeTimer !== null && scheduledWakeAt <= targetAt + 1) return;
+      cancelScheduledWake();
+      scheduledWakeAt = targetAt;
+      scheduledWakeTimer = window.setTimeout(() => {
+        scheduledWakeTimer = null;
+        scheduledWakeAt = Number.POSITIVE_INFINITY;
+        wakeRenderer();
+      }, Math.max(0, targetAt - performance.now()));
     };
 
     const animate = (now: number) => {
@@ -3930,16 +3956,17 @@ export function AuraToy() {
 
       const blurScale = offscreen.width / Math.max(1, width);
       let newestDottedCreatedAt = Number.NEGATIVE_INFINITY;
+      let containsOrganicStyle = false;
       for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
         const blob = blobsRef.current[index];
-        if ((blob.artStyle ?? currentArtStyle) !== "style-2") continue;
-        newestDottedCreatedAt = blob.createdAt;
-        break;
+        if ((blob.artStyle ?? currentArtStyle) === "style-2") {
+          if (!Number.isFinite(newestDottedCreatedAt)) newestDottedCreatedAt = blob.createdAt;
+        } else {
+          containsOrganicStyle = true;
+        }
+        if (containsOrganicStyle && Number.isFinite(newestDottedCreatedAt)) break;
       }
       const hasDottedStyle = Number.isFinite(newestDottedCreatedAt);
-      const containsOrganicStyle = blobsRef.current.some(
-        (blob) => (blob.artStyle ?? currentArtStyle) !== "style-2",
-      );
       const dottedMotionIsActive =
         hasDottedStyle &&
         !reducedMotionRef.current &&
@@ -4010,20 +4037,32 @@ export function AuraToy() {
           blurRadius,
         );
       } else if (hasDottedStyle) {
-        pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
-        drawDottedSigilFlowLayer(
-          pixelContext,
-          blobsRef.current,
-          pixelLayer.width,
-          pixelLayer.height,
-          now,
-          reducedMotionRef.current,
-          currentArtStyle,
-          0,
-          blobsRef.current.length,
-          undefined,
-          width,
-        );
+        const pixelLayerNeedsRefresh =
+          lastPixelBlobCount !== blobsRef.current.length ||
+          lastPixelFallbackArtStyle !== currentArtStyle ||
+          lastPixelReducedMotion !== reducedMotionRef.current ||
+          (dottedMotionIsActive &&
+            now - lastPixelRenderedAt >= DOTTED_RENDER_INTERVAL - AURA_FRAME_TOLERANCE);
+        if (pixelLayerNeedsRefresh) {
+          pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
+          drawDottedSigilFlowLayer(
+            pixelContext,
+            blobsRef.current,
+            pixelLayer.width,
+            pixelLayer.height,
+            now,
+            reducedMotionRef.current,
+            currentArtStyle,
+            0,
+            blobsRef.current.length,
+            undefined,
+            width,
+          );
+          lastPixelRenderedAt = now;
+          lastPixelBlobCount = blobsRef.current.length;
+          lastPixelFallbackArtStyle = currentArtStyle;
+          lastPixelReducedMotion = reducedMotionRef.current;
+        }
         context.save();
         context.globalCompositeOperation = "source-over";
         context.imageSmoothingEnabled = false;
@@ -4067,6 +4106,9 @@ export function AuraToy() {
           telemetryOpacity,
         );
       }
+      const nextTelemetryFrameAt = telemetryOpacity > 0.001
+        ? telemetryNextFrameAt(now)
+        : Number.POSITIVE_INFINITY;
 
       const newestBlob = blobsRef.current.at(-1);
       const hasArrivingBlob =
@@ -4093,9 +4135,11 @@ export function AuraToy() {
         dottedMotionIsActive ||
         settledCount < blobsRef.current.length ||
         telemetryIsTransitioning ||
-        (telemetryOpacity > 0.001 && telemetryNeedsFrame(blobsRef.current, now))
+        nextTelemetryFrameAt <= now
       ) {
         wakeRenderer();
+      } else {
+        scheduleRendererWake(nextTelemetryFrameAt);
       }
     };
 
@@ -4122,6 +4166,7 @@ export function AuraToy() {
       window.removeEventListener("resize", handleResize);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       resizeObserver.disconnect();
+      cancelScheduledWake();
       window.cancelAnimationFrame(frame);
     };
   }, []);
@@ -4446,6 +4491,8 @@ export function AuraToy() {
     await waitForPaint();
 
     try {
+      // @ts-expect-error -- gifenc does not publish TypeScript declarations.
+      const { GIFEncoder, quantize } = await import("gifenc");
       const preview = previewCanvasRef.current;
       const output = preview?.width && preview.height
         ? document.createElement("canvas")

@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import test from "node:test";
 import gifenc from "gifenc";
 
 const { GIFEncoder, applyPalette, quantize } = gifenc;
+
+async function filesBelow(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const url = new URL(entry.name, directory);
+      return entry.isDirectory() ? filesBelow(new URL(`${entry.name}/`, directory)) : [url];
+    }),
+  );
+  return nested.flat();
+}
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -206,6 +217,41 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /TelemetryBeatClock|telemetryBeatPulse|telemetryActivationAt/);
 });
 
+test("keeps every shipped client asset inside a kilobyte budget", async () => {
+  const clientDirectory = new URL("../dist/client/", import.meta.url);
+  const files = await filesBelow(clientDirectory);
+  const sizes = await Promise.all(
+    files.map(async (file) => ({ file, bytes: (await stat(file)).size })),
+  );
+  const largest = sizes.reduce((current, candidate) =>
+    candidate.bytes > current.bytes ? candidate : current,
+  );
+  const totalBytes = sizes.reduce((total, asset) => total + asset.bytes, 0);
+  assert.ok(
+    largest.bytes <= 256 * 1024,
+    `${largest.file.pathname} exceeds 256 KiB (${largest.bytes} bytes)`,
+  );
+  assert.ok(totalBytes <= 768 * 1024, `client payload exceeds 768 KiB (${totalBytes} bytes)`);
+
+  const manifest = JSON.parse(
+    await readFile(new URL("../dist/client/.vite/manifest.json", import.meta.url), "utf8"),
+  );
+  const auraEntry = manifest["app/AuraToy.tsx"];
+  assert.ok(auraEntry?.file, "Aura client entry is missing from the build manifest");
+  const auraEntrySize = (await stat(new URL(`../dist/client/${auraEntry.file}`, import.meta.url))).size;
+  assert.ok(auraEntrySize <= 100 * 1024, `Aura entry exceeds 100 KiB (${auraEntrySize} bytes)`);
+
+  const auraSource = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
+  const layoutSource = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(auraSource, /await import\("\.\/audio-engine"\)/);
+  assert.match(auraSource, /await import\("gifenc"\)/);
+  assert.match(auraSource, /const pitchDetectorModule = import\("pitchy"\)/);
+  assert.doesNotMatch(layoutSource, /VercelAnalytics|@fontsource\/inter\/400\.css/);
+  assert.match(styles, /inter-latin-400-normal\.woff2/);
+  assert.doesNotMatch(styles, /\.woff["')]/);
+});
+
 test("keeps visual effects bounded and free of production diagnostics", async () => {
   const auraSource = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
   const styleTwoSource = await readFile(
@@ -222,6 +268,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const overlapsNewerFormation = dottedIndices\.some/);
   assert.match(auraSource, /Math\.hypot\(candidate\.x - selected\.x, candidate\.y - selected\.y\) < 0\.16/);
   assert.match(auraSource, /const DOTTED_FORMATION_SETTLE_DURATION = 2200/);
+  assert.match(auraSource, /const DOTTED_RENDER_INTERVAL = 1000 \/ 20/);
   assert.match(auraSource, /const DOTTED_GLOW_MATURATION_DURATION = 7200/);
   assert.match(auraSource, /now - newestDottedCreatedAt < DOTTED_FORMATION_SETTLE_DURATION/);
   assert.match(auraSource, /drawDottedSigilFlowLayer\(\s*pixelContext/);
@@ -238,7 +285,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleTwoSource, /primary: \{ h: 8, s: 94, l: 64 \}, accent: \{ h: 42, s: 96, l: 68 \}/);
   assert.match(styleTwoSource, /primary: \{ h: 278, s: 82, l: 72 \}, accent: \{ h: 320, s: 89, l: 67 \}/);
   assert.doesNotMatch(styleTwoSource, /h: 220|h: 238|h: 248|h: 260/);
-  assert.match(styleTwoSource, /tone: toneRoll < 0\.2 \? 0 : toneRoll < 0\.4 \? 1 : toneRoll < 0\.6 \? 2/);
+  assert.match(styleTwoSource, /const tone = toneRoll < 0\.2 \? 0 : toneRoll < 0\.4 \? 1 : toneRoll < 0\.6 \? 2/);
   assert.match(styleTwoSource, /const gridX = column \* gridStep/);
   assert.match(styleTwoSource, /const gridY = row \* gridStep/);
   assert.match(styleTwoSource, /const pixelSize = Math\.max\(1, Math\.round\(gridStep \* 0\.5\)\)/);
@@ -253,21 +300,22 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /expansion: clamp\(blob\.compositionIndex \/ 12, 0, 1\)/);
   assert.match(auraSource, /const occupiedGridCells = new Set<string>\(\)/);
   assert.match(styleTwoSource, /const reservedCells = occupiedCells \?\? new Set<string>\(\)/);
-  assert.match(styleTwoSource, /candidateCells\.sort\(\(a, b\) => b\.priority - a\.priority\)/);
-  assert.match(styleTwoSource, /const cellKey = `\$\{cell\.column\}:\$\{cell\.row\}`/);
+  assert.doesNotMatch(styleTwoSource, /candidateCells|activeCells|\.sort\(/);
+  assert.match(styleTwoSource, /const bodyPaths = bodyColors\.map\(\(\) => new Path2D\(\)\)/);
+  assert.match(styleTwoSource, /const glowPath = new Path2D\(\)/);
+  assert.match(styleTwoSource, /const cellKey = `\$\{column\}:\$\{row\}`/);
   assert.match(styleTwoSource, /if \(reservedCells\.has\(cellKey\)\) continue/);
   assert.doesNotMatch(styleTwoSource, /rowOffset|columnOffset|touchesOccupiedCell/);
-  assert.match(styleTwoSource, /size: pixelSize/);
+  assert.match(styleTwoSource, /pixel\(bodyPaths\[tone\], gridX, gridY, pixelSize\)/);
   assert.doesNotMatch(styleTwoSource, /cellWidth|cellHeight/);
   assert.doesNotMatch(styleTwoSource, /fixedOffsetX|fixedOffsetY/);
-  assert.match(styleTwoSource, /x: gridX,\s*y: gridY/);
   assert.match(styleTwoSource, /const reveal = clamp\(\(arrival - revealOrder\) \/ 0\.26, 0, 1\)/);
   assert.match(styleTwoSource, /const side = Math\.max\(1, Math\.round\(size\)\)/);
-  assert.match(styleTwoSource, /context\.rect\(left, top, side, side\)/);
+  assert.match(styleTwoSource, /path\.rect\(left, top, side, side\)/);
   assert.doesNotMatch(styleTwoSource, /right - left|bottom - top/);
   assert.match(styleTwoSource, /const saturatedBodyColors = \[\s*saturatedPrimary,\s*mixColor\(saturatedPrimary, saturatedAccent, 0\.24\)/);
   assert.doesNotMatch(styleTwoSource, /haloCells/);
-  assert.match(styleTwoSource, /const glowCells = activeCells\.filter/);
+  assert.doesNotMatch(styleTwoSource, /glowCells/);
   assert.match(styleTwoSource, /const glowDensity = layered\s*\? 0\.14 \+ emphasis \* 0\.08/);
   assert.match(styleTwoSource, /const whiteTransition = maturation \* maturation \* \(3 - maturation \* 2\)/);
   assert.match(styleTwoSource, /const luminosityStops = \[0, 0\.02, 0\.05, 0\.1, 0\.2\]/);
@@ -275,7 +323,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleTwoSource, /layered \? index \* 0\.015 : 0/);
   assert.doesNotMatch(styleTwoSource, /createRadialGradient|shadowBlur|shadowColor/);
   assert.match(styleTwoSource, /context\.imageSmoothingEnabled = false;\s*for \(let tone/);
-  assert.match(styleTwoSource, /pixel\(context, cell\.x, cell\.y, cell\.size\)/);
+  assert.match(styleTwoSource, /context\.fill\(bodyPaths\[tone\]\)/);
   assert.match(styleTwoSource, /for \(let tone = 0; tone < bodyColors\.length; tone \+= 1\)/);
   assert.match(auraSource, /alpha: clamp\(\(0\.94 \+ blob\.velocity \* 0\.06\) \* arrival \* layerEmphasis, 0, 1\)/);
   assert.match(auraSource, /lerp\(0\.74, 0\.92, recency \* recency\)/);
@@ -289,11 +337,16 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /context\.drawImage\(pixelAccentLayer/);
   assert.match(auraSource, /const pixelWidth = Math\.max\(1, Math\.round\(width\)\)/);
   assert.match(auraSource, /pixelLayer\.width = output\.width/);
-  assert.match(auraSource, /dpr = Math\.max\(1, Math\.min\(window\.devicePixelRatio \|\| 1, 1\.5, pixelBudgetRatio\)\)/);
+  assert.match(auraSource, /const AURA_BACKING_PIXEL_BUDGET = 1_500_000/);
+  assert.match(auraSource, /const AURA_RENDER_PIXEL_BUDGET = 360_000/);
+  assert.match(auraSource, /dpr = Math\.max\(1, Math\.min\(window\.devicePixelRatio \|\| 1, 1\.25, pixelBudgetRatio\)\)/);
   assert.match(styleTwoSource, /accentContext\.globalAlpha = clamp\(alpha \* \(0\.55 \+ emphasis \* 0\.3\)/);
   assert.match(auraSource, /const rgb565Cache = new Int16Array\(65536\)/);
   assert.doesNotMatch(auraSource, /const dottedBlobs = blobs\.slice/);
   assert.match(auraSource, /blurredSettledCount !== settledCount/);
   assert.match(telemetrySource, /function chordLabelsForActiveNodes/);
   assert.match(telemetrySource, /nodes\.length !== cachedChordNodeCount/);
+  assert.match(telemetrySource, /const SNAPSHOT_FRAME_INTERVAL = 1000 \/ 15/);
+  assert.match(telemetrySource, /export function telemetryNextFrameAt/);
+  assert.match(auraSource, /scheduleRendererWake\(nextTelemetryFrameAt\)/);
 });

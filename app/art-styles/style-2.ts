@@ -79,7 +79,7 @@ function fillColor(color: DottedSigilColor, alpha: number) {
 }
 
 function pixel(
-  context: CanvasRenderingContext2D,
+  path: Pick<CanvasRenderingContext2D, "rect"> | Path2D,
   x: number,
   y: number,
   size: number,
@@ -87,7 +87,7 @@ function pixel(
   const side = Math.max(1, Math.round(size));
   const left = Math.round(x - side * 0.5);
   const top = Math.round(y - side * 0.5);
-  context.rect(left, top, side, side);
+  path.rect(left, top, side, side);
 }
 
 function distance(x: number, y: number) {
@@ -315,16 +315,11 @@ export function drawDottedSigil(
   const startRow = Math.floor((centerY - fieldHeight) / gridStep);
   const endRow = Math.ceil((centerY + fieldHeight) / gridStep);
   const pixelSize = Math.max(1, Math.round(gridStep * 0.5));
-  const candidateCells: Array<{
-    x: number;
-    y: number;
-    column: number;
-    row: number;
-    size: number;
-    intensity: number;
-    tone: 0 | 1 | 2 | 3 | 4;
-    priority: number;
-  }> = [];
+  const reservedCells = occupiedCells ?? new Set<string>();
+  const bodyPaths = bodyColors.map(() => new Path2D());
+  const glowPath = new Path2D();
+  let activeCellCount = 0;
+  let glowCellCount = 0;
 
   for (let row = startRow; row <= endRow; row += 1) {
     const gridY = row * gridStep;
@@ -355,73 +350,46 @@ export function drawDottedSigil(
         0,
         1,
       );
-      candidateCells.push({
-        x: gridX,
-        y: gridY,
-        column,
-        row,
-        size: pixelSize,
-        intensity: clamp(0.42 + occupancy * 0.48 + flow * 0.16, 0.35, 1),
-        tone: toneRoll < 0.2 ? 0 : toneRoll < 0.4 ? 1 : toneRoll < 0.6 ? 2 : toneRoll < 0.8 ? 3 : 4,
-        priority: hash(seed + 1201, cellIndex),
-      });
+      const cellKey = `${column}:${row}`;
+      if (reservedCells.has(cellKey)) continue;
+      reservedCells.add(cellKey);
+
+      const tone = toneRoll < 0.2 ? 0 : toneRoll < 0.4 ? 1 : toneRoll < 0.6 ? 2 : toneRoll < 0.8 ? 3 : 4;
+      pixel(bodyPaths[tone], gridX, gridY, pixelSize);
+      activeCellCount += 1;
+
+      const intensity = clamp(0.42 + occupancy * 0.48 + flow * 0.16, 0.35, 1);
+      const glowChance = hash(seed + 367, column * 313 + row);
+      const glowDensity = layered
+        ? 0.14 + emphasis * 0.08
+        : 0.02 + emphasis * 0.035;
+      if (glowChance <= intensity * glowDensity) {
+        pixel(glowPath, gridX, gridY, pixelSize);
+        glowCellCount += 1;
+      }
     }
   }
 
-  const reservedCells = occupiedCells ?? new Set<string>();
-  const activeCells: typeof candidateCells = [];
-  candidateCells.sort((a, b) => b.priority - a.priority);
-  for (const cell of candidateCells) {
-    const cellKey = `${cell.column}:${cell.row}`;
-    if (reservedCells.has(cellKey)) continue;
-    reservedCells.add(cellKey);
-    activeCells.push(cell);
-  }
-
-  if (activeCells.length === 0) return;
-
-  const glowCells = activeCells.filter((cell) => {
-    const glowChance = hash(
-      seed + 367,
-      Math.round(cell.x / gridStep) * 313 + Math.round(cell.y / gridStep),
-    );
-    const glowDensity = layered
-      ? 0.14 + emphasis * 0.08
-      : 0.02 + emphasis * 0.035;
-    return glowChance <= cell.intensity * glowDensity;
-  });
+  if (activeCellCount === 0) return;
 
   context.save();
   context.globalAlpha = clamp(alpha, 0, 1);
   context.imageSmoothingEnabled = false;
   for (let tone = 0; tone < bodyColors.length; tone += 1) {
-    context.beginPath();
-    for (const cell of activeCells) {
-      if (cell.tone !== tone) continue;
-      pixel(context, cell.x, cell.y, cell.size);
-    }
     context.fillStyle = fillColor(bodyColors[tone], 1);
-    context.fill();
+    context.fill(bodyPaths[tone]);
   }
 
   context.fillStyle = fillColor(highlightColor, 1);
-  context.beginPath();
-  for (const cell of glowCells) {
-    pixel(context, cell.x, cell.y, cell.size);
-  }
-  context.fill();
+  context.fill(glowPath);
   context.restore();
 
-  if (accentContext && glowCells.length > 0) {
+  if (accentContext && glowCellCount > 0) {
     accentContext.save();
     accentContext.globalAlpha = clamp(alpha * (0.55 + emphasis * 0.3), 0, 1);
     accentContext.imageSmoothingEnabled = false;
     accentContext.fillStyle = fillColor(highlightColor, 1);
-    accentContext.beginPath();
-    for (const cell of glowCells) {
-      pixel(accentContext, cell.x, cell.y, cell.size);
-    }
-    accentContext.fill();
+    accentContext.fill(glowPath);
     accentContext.restore();
   }
 }
