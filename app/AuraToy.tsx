@@ -187,6 +187,16 @@ type DownloadFeedback = "idle" | "preparing" | "complete" | "error";
 type HapticFeedback = "open" | "close" | "confirm" | "success" | "error";
 type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsupported";
 type AudioInputSource = "microphone" | "system" | "external";
+
+type DeviceAudioTrackConstraints = MediaTrackConstraints & {
+  suppressLocalAudioPlayback?: boolean;
+};
+
+type DeviceAudioCaptureOptions = Omit<DisplayMediaStreamOptions, "audio"> & {
+  audio?: boolean | DeviceAudioTrackConstraints;
+  surfaceSwitching?: "include" | "exclude";
+  systemAudio?: "include" | "exclude";
+};
 type MicrophoneModeId = "wide-spectrum" | "voice-isolation" | "standard" | "automatic";
 type MicrophoneMode = {
   id: MicrophoneModeId;
@@ -299,6 +309,12 @@ const DOTTED_VISIBLE_FORMATIONS = 4;
 const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
 const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown";
+const DEVICE_AUDIO_CAPTURE_OPTIONS: DeviceAudioCaptureOptions = {
+  video: true,
+  audio: { suppressLocalAudioPlayback: false },
+  surfaceSwitching: "include",
+  systemAudio: "include",
+};
 const TELEMETRY_TOGGLE_FADE_DURATION = 560;
 const SATURATION_CHECK_INTERVAL = 6;
 const SATURATION_MINIMUM_LAYERS = 24;
@@ -2633,7 +2649,7 @@ export function AuraToy() {
           });
         } else {
           systemAudioStreamRef.current = null;
-          stream = await mediaDevices.getDisplayMedia({ video: true, audio: true });
+          stream = await mediaDevices.getDisplayMedia(DEVICE_AUDIO_CAPTURE_OPTIONS);
         }
         if (stream.getAudioTracks().length === 0) {
           stream.getTracks().forEach((track) => track.stop());
@@ -5222,7 +5238,7 @@ export function AuraToy() {
                 </span>
                 <p>
                   {permissionPromptSource === "system"
-                    ? "Aura listens locally to audio from the tab or screen you choose. Audio is never saved."
+                    ? "Aura listens locally to audio from the tab or screen you choose. Keep Share audio turned on in the picker. Audio is never saved."
                     : permissionPromptSource === "external"
                       ? "Connect a MIDI instrument or USB audio device. Aura reads notes and audio locally; nothing is saved."
                       : "Aura listens locally to pitch, rhythm, and volume. Audio is never saved."}
@@ -5243,6 +5259,13 @@ export function AuraToy() {
                 else microphoneIntroductionShownRef.current = true;
                 setMicrophonePromptGranting(true);
                 hapticFeedback("confirm");
+                if (inputSource === "system") {
+                  // Display capture requires transient user activation. Start it in this click
+                  // rather than after the permission panel's closing animation.
+                  void startAudioInput(inputSource);
+                  closeMicrophonePrompt(undefined, null);
+                  return;
+                }
                 closeMicrophonePrompt(
                   () =>
                     inputSource === "external"

@@ -198,10 +198,17 @@ test("remembers device audio for the page session and provides a cohesive permis
   assert.match(source, /const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown"/);
   assert.match(source, /sessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /rememberSessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
+  assert.match(source, /systemAudio: "include"/);
+  assert.match(source, /audio: \{ suppressLocalAudioPlayback: false \}/);
+  assert.match(
+    source,
+    /if \(inputSource === "system"\) \{[\s\S]*?void startAudioInput\(inputSource\);[\s\S]*?closeMicrophonePrompt\(undefined, null\);[\s\S]*?return;/,
+  );
   assert.match(source, /systemAudioStreamRef\.current = stream;\s*systemAudioIntroductionShownRef\.current = true;\s*rememberSessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /permissionPromptSource === "system"/);
   assert.match(source, /\? "Device audio"/);
   assert.match(source, /Continue to device audio/);
+  assert.match(source, /Keep Share audio turned on in the picker\./);
   assert.match(source, /Audio is never saved\./);
   assert.match(styles, /\.microphone-permission-icon\.is-system-audio/);
   assert.match(styles, /\.microphone-permission\.is-system-audio/);
