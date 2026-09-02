@@ -13,6 +13,7 @@ import {
   MathUtils,
   Mesh,
   MeshPhysicalMaterial,
+  NormalBlending,
   PointLight,
   PerspectiveCamera,
   PMREMGenerator,
@@ -354,7 +355,7 @@ class MetalheartSculptureRenderer {
       roughness: 0.065,
       clearcoat: 1,
       clearcoatRoughness: 0.055,
-      iridescence: 0.7,
+      iridescence: 0.16,
       iridescenceIOR: 1.55,
       iridescenceThicknessRange: [135, 520],
       envMapIntensity: 3.35,
@@ -368,7 +369,7 @@ class MetalheartSculptureRenderer {
       roughness: 0.12,
       clearcoat: 1,
       clearcoatRoughness: 0.08,
-      iridescence: 0.34,
+      iridescence: 0.08,
       iridescenceIOR: 1.35,
       iridescenceThicknessRange: [160, 390],
       envMapIntensity: 2.35,
@@ -382,7 +383,7 @@ class MetalheartSculptureRenderer {
       roughness: 0.052,
       clearcoat: 1,
       clearcoatRoughness: 0.035,
-      iridescence: 1,
+      iridescence: 0.28,
       iridescenceIOR: 1.82,
       iridescenceThicknessRange: [110, 690],
       envMapIntensity: 3.65,
@@ -401,9 +402,10 @@ class MetalheartSculptureRenderer {
           map: this.glowTexture,
           color: 0xc8eeff,
           transparent: true,
-          opacity: 0.15,
+          opacity: 0.24,
           depthWrite: false,
-          blending: AdditiveBlending,
+          depthTest: false,
+          blending: NormalBlending,
         })
       : null;
     this.streakMaterial = this.streakTexture
@@ -423,10 +425,10 @@ class MetalheartSculptureRenderer {
           map: this.beamTexture,
           color: 0xff7a43,
           transparent: true,
-          opacity: 0.14,
+          opacity: 0.28,
           depthWrite: false,
           depthTest: false,
-          blending: AdditiveBlending,
+          blending: NormalBlending,
         })
       : null;
     this.pinkBeamMaterial = this.beamTexture
@@ -434,10 +436,10 @@ class MetalheartSculptureRenderer {
           map: this.beamTexture,
           color: 0xff56a3,
           transparent: true,
-          opacity: 0.11,
+          opacity: 0.22,
           depthWrite: false,
           depthTest: false,
-          blending: AdditiveBlending,
+          blending: NormalBlending,
         })
       : null;
     this.orangeBeam = this.orangeBeamMaterial ? new Sprite(this.orangeBeamMaterial) : null;
@@ -607,7 +609,7 @@ class MetalheartSculptureRenderer {
     if (this.glowMaterial) {
       const glow = new Sprite(this.glowMaterial);
       glow.position.set(0, 0, -0.45);
-      glow.scale.set(length * 0.72, length * 0.36, 1);
+      glow.scale.set(length * 1.18, length * 0.62, 1);
       glow.renderOrder = -1;
       group.add(glow);
     }
@@ -738,18 +740,18 @@ class MetalheartSculptureRenderer {
       this.orangeBeam.position.set(focus.x - 0.08, focus.y + 0.03, -1.8);
       this.orangeBeam.scale.set(Math.max(6.2, this.viewWidth * 0.92), this.viewHeight * 0.3, 1);
       this.orangeBeamMaterial.rotation = -0.16 + Math.sin(now * 0.00015) * 0.035;
-      this.orangeBeamMaterial.opacity = 0.15 + pulseEnvelope * 0.16;
+      this.orangeBeamMaterial.opacity = 0.3 + pulseEnvelope * 0.2;
     }
     if (this.pinkBeam && this.pinkBeamMaterial) {
       this.pinkBeam.position.set(focus.x + 0.04, focus.y - 0.04, -1.7);
       this.pinkBeam.scale.set(Math.max(5.4, this.viewWidth * 0.78), this.viewHeight * 0.24, 1);
       this.pinkBeamMaterial.rotation = 0.42 + Math.cos(now * 0.00013) * 0.045;
-      this.pinkBeamMaterial.opacity = 0.11 + pulseEnvelope * 0.13;
+      this.pinkBeamMaterial.opacity = 0.24 + pulseEnvelope * 0.17;
     }
     this.chromeMaterial.emissiveIntensity = 0.035 + pulseEnvelope * 0.2;
     this.iridescentMaterial.emissiveIntensity = 0.06 + pulseEnvelope * 0.34;
-    this.iridescentMaterial.iridescence = 0.92 + pulseEnvelope * 0.08;
-    if (this.glowMaterial) this.glowMaterial.opacity = 0.19 + pulseEnvelope * 0.14;
+    this.iridescentMaterial.iridescence = 0.24 + pulseEnvelope * 0.08;
+    if (this.glowMaterial) this.glowMaterial.opacity = 0.26 + pulseEnvelope * 0.17;
     this.renderer.toneMappingExposure = 1.4 + pulseEnvelope * 0.46;
     this.camera.position.z = CAMERA_DISTANCE - pulseEnvelope * 0.38;
     this.camera.position.x = Math.sin(now * 0.00011) * 0.08;

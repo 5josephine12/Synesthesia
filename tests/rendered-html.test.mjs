@@ -441,7 +441,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /export function renderMetalheartFrame/);
   assert.match(styleThreeSource, /new MeshPhysicalMaterial/);
   assert.match(styleThreeSource, /metalness: 1/);
-  assert.match(styleThreeSource, /iridescence: 1/);
+  assert.match(styleThreeSource, /iridescence: 0\.28/);
   assert.match(styleThreeSource, /new PMREMGenerator/);
   assert.match(styleThreeSource, /new RoomEnvironment/);
   assert.match(styleThreeSource, /new ExtrudeGeometry/);
@@ -450,15 +450,15 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /antialias: true/);
   assert.match(styleThreeSource, /const plateCount = 3 \+ Math\.floor/);
   assert.match(styleThreeSource, /const shardCount = 1 \+ Math\.floor/);
-  assert.doesNotMatch(styleThreeSource, /shadowTexture|shadowMaterial|NormalBlending/);
+  assert.doesNotMatch(styleThreeSource, /shadowTexture|shadowMaterial/);
   assert.match(styleThreeSource, /this\.amberLight\.color\.setHSL\(0\.035/);
   assert.match(styleThreeSource, /this\.pinkLight\.color\.setHSL\(0\.945/);
   assert.match(styleThreeSource, /this\.glowMaterial\?\.color\.setHSL\(0\.975/);
   assert.match(styleThreeSource, /function createBeamTexture/);
-  assert.match(styleThreeSource, /this\.orangeBeamMaterial\.opacity = 0\.15/);
-  assert.match(styleThreeSource, /this\.pinkBeamMaterial\.opacity = 0\.11/);
+  assert.match(styleThreeSource, /this\.orangeBeamMaterial\.opacity = 0\.3/);
+  assert.match(styleThreeSource, /this\.pinkBeamMaterial\.opacity = 0\.24/);
   assert.match(auraSource, /brightness\(1\.68\) saturate\(1\.42\)/);
-  assert.match(auraSource, /context\.globalAlpha = 0\.69/);
+  assert.match(auraSource, /context\.globalAlpha = 0\.34/);
   assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
   assert.match(styleFourSource, /new ShaderMaterial/);
   assert.match(styleFourSource, /const fragmentShader = \/\* glsl \*\//);

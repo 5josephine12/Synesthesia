@@ -2039,9 +2039,12 @@ function drawChronologicalAuraLayers(
           );
           blurredContext.restore();
 
+          // Screen blending disappears over the visualizer's white ground.
+          // A low-alpha normal pass preserves the warm chromatic halo there,
+          // while the following screen pass still blooms over darker layers.
           context.save();
-          context.globalCompositeOperation = "screen";
-          context.globalAlpha = 0.69;
+          context.globalCompositeOperation = "source-over";
+          context.globalAlpha = 0.34;
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
           context.drawImage(blurredLayer, 0, 0, width, height);
@@ -2049,7 +2052,15 @@ function drawChronologicalAuraLayers(
 
           context.save();
           context.globalCompositeOperation = "screen";
-          context.globalAlpha = 0.24;
+          context.globalAlpha = 0.5;
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = "high";
+          context.drawImage(blurredLayer, 0, 0, width, height);
+          context.restore();
+
+          context.save();
+          context.globalCompositeOperation = "screen";
+          context.globalAlpha = 0.16;
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
           context.drawImage(metalheartCanvas, 0, 0, width, height);
