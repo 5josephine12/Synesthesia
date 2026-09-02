@@ -13,7 +13,6 @@ import {
   MathUtils,
   Mesh,
   MeshPhysicalMaterial,
-  NormalBlending,
   PointLight,
   PerspectiveCamera,
   PMREMGenerator,
@@ -97,7 +96,7 @@ const CAMERA_FOV = 31;
 const CAMERA_DISTANCE = 12;
 const FORMATION_DURATION = 1900;
 const MAX_SCULPTURE_NODES = 8;
-const WEBGL_PIXEL_BUDGET = 720_000;
+const WEBGL_PIXEL_BUDGET = 1_050_000;
 const TAU = Math.PI * 2;
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -268,10 +267,8 @@ class MetalheartSculptureRenderer {
   private readonly bladeGeometry = makeBladeGeometry();
   private readonly shardGeometry = new ConeGeometry(0.045, 2.1, 4, 1, false);
   private readonly glowTexture: CanvasTexture | null;
-  private readonly shadowTexture: CanvasTexture | null;
   private readonly streakTexture: CanvasTexture | null;
   private readonly glowMaterial: SpriteMaterial | null;
-  private readonly shadowMaterial: SpriteMaterial | null;
   private readonly streakMaterial: SpriteMaterial | null;
   private readonly pulseStreak: Sprite | null;
   private readonly pulseLight = new PointLight(0xdff8ff, 0, 9.5, 1.45);
@@ -293,7 +290,7 @@ class MetalheartSculptureRenderer {
     this.renderer = new WebGLRenderer({
       canvas: this.canvas,
       alpha: true,
-      antialias: false,
+      antialias: true,
       depth: true,
       stencil: false,
       premultipliedAlpha: true,
@@ -321,13 +318,13 @@ class MetalheartSculptureRenderer {
     this.chromeMaterial = new MeshPhysicalMaterial({
       color: new Color(0x9aa5b5),
       metalness: 1,
-      roughness: 0.095,
+      roughness: 0.065,
       clearcoat: 1,
       clearcoatRoughness: 0.055,
       iridescence: 0.7,
       iridescenceIOR: 1.55,
       iridescenceThicknessRange: [135, 520],
-      envMapIntensity: 3,
+      envMapIntensity: 3.35,
       emissive: new Color(0x07101b),
       emissiveIntensity: 0.035,
       side: DoubleSide,
@@ -335,7 +332,7 @@ class MetalheartSculptureRenderer {
     this.blackChromeMaterial = new MeshPhysicalMaterial({
       color: new Color(0x060810),
       metalness: 1,
-      roughness: 0.16,
+      roughness: 0.12,
       clearcoat: 1,
       clearcoatRoughness: 0.08,
       iridescence: 0.34,
@@ -349,13 +346,13 @@ class MetalheartSculptureRenderer {
     this.iridescentMaterial = new MeshPhysicalMaterial({
       color: new Color(0xc4d7ee),
       metalness: 0.96,
-      roughness: 0.07,
+      roughness: 0.052,
       clearcoat: 1,
       clearcoatRoughness: 0.035,
       iridescence: 1,
       iridescenceIOR: 1.82,
       iridescenceThicknessRange: [110, 690],
-      envMapIntensity: 3.4,
+      envMapIntensity: 3.65,
       emissive: new Color(0x0a1624),
       emissiveIntensity: 0.06,
       side: DoubleSide,
@@ -364,7 +361,6 @@ class MetalheartSculptureRenderer {
     // Keep the glow texture neutral so the live Aura/Pixel palette can tint
     // the light spill instead of baking Metalheart into an isolated cyan look.
     this.glowTexture = createRadialTexture("rgba(255, 255, 255, 0.82)", "rgba(255, 255, 255, 0)");
-    this.shadowTexture = createRadialTexture("rgba(0, 0, 7, 0.92)", "rgba(0, 0, 9, 0)", 160);
     this.streakTexture = createStreakTexture();
     this.glowMaterial = this.glowTexture
       ? new SpriteMaterial({
@@ -374,16 +370,6 @@ class MetalheartSculptureRenderer {
           opacity: 0.15,
           depthWrite: false,
           blending: AdditiveBlending,
-        })
-      : null;
-    this.shadowMaterial = this.shadowTexture
-      ? new SpriteMaterial({
-          map: this.shadowTexture,
-          color: 0x02030a,
-          transparent: true,
-          opacity: 0.16,
-          depthWrite: false,
-          blending: NormalBlending,
         })
       : null;
     this.streakMaterial = this.streakTexture
@@ -406,7 +392,6 @@ class MetalheartSculptureRenderer {
       this.blackChromeMaterial,
       this.iridescentMaterial,
       ...(this.glowMaterial ? [this.glowMaterial] : []),
-      ...(this.shadowMaterial ? [this.shadowMaterial] : []),
       ...(this.streakMaterial ? [this.streakMaterial] : []),
     ]);
 
@@ -459,13 +444,13 @@ class MetalheartSculptureRenderer {
     const tintMaterial = this.iridescentMaterial.clone();
     const accentHue = ((particle.accent?.h ?? particle.color?.h ?? 205) % 360) / 360;
     const bodyHue = ((particle.color?.h ?? particle.accent?.h ?? 205) % 360) / 360;
-    tintMaterial.color.setHSL(accentHue, 0.5, 0.7);
-    tintMaterial.emissive.setHSL(accentHue, 0.82, 0.075);
-    tintMaterial.emissiveIntensity = 0.095;
+    tintMaterial.color.setHSL(accentHue, 0.18, 0.74);
+    tintMaterial.emissive.setHSL(accentHue, 0.5, 0.055);
+    tintMaterial.emissiveIntensity = 0.055;
     const secondaryTintMaterial = this.iridescentMaterial.clone();
-    secondaryTintMaterial.color.setHSL(bodyHue, 0.44, 0.7);
-    secondaryTintMaterial.emissive.setHSL(bodyHue, 0.8, 0.065);
-    secondaryTintMaterial.emissiveIntensity = 0.085;
+    secondaryTintMaterial.color.setHSL(bodyHue, 0.14, 0.72);
+    secondaryTintMaterial.emissive.setHSL(bodyHue, 0.46, 0.05);
+    secondaryTintMaterial.emissiveIntensity = 0.05;
     const primaryGeometry = makeRibbonGeometry(seed, length, ribbonWidth, 0.021, particle.curvature);
     const primaryRibbon = new Mesh(
       primaryGeometry,
@@ -486,7 +471,7 @@ class MetalheartSculptureRenderer {
     darkRibbon.rotation.set(0.28 + hash(seed, 8) * 0.38, 0.12, -0.32);
     group.add(darkRibbon);
 
-    const plateCount = 5 + Math.floor(hash(seed, 11) * 4);
+    const plateCount = 3 + Math.floor(hash(seed, 11) * 3);
     for (let index = 0; index < plateCount; index += 1) {
       const materialIndex = index % 5;
       const plate = new Mesh(
@@ -495,9 +480,9 @@ class MetalheartSculptureRenderer {
           ? tintMaterial
           : materialIndex === 2
             ? secondaryTintMaterial
-            : materialIndex === 3
-              ? this.chromeMaterial
-              : this.blackChromeMaterial,
+            : materialIndex === 4
+              ? this.blackChromeMaterial
+              : this.chromeMaterial,
       );
       const progress = plateCount === 1 ? 0.5 : index / (plateCount - 1);
       plate.position.set(
@@ -518,7 +503,7 @@ class MetalheartSculptureRenderer {
       group.add(plate);
     }
 
-    const shardCount = 3 + Math.floor(hash(seed, 181) * 3);
+    const shardCount = 1 + Math.floor(hash(seed, 181) * 2);
     for (let index = 0; index < shardCount; index += 1) {
       const materialIndex = (index + 2) % 5;
       const shard = new Mesh(
@@ -527,9 +512,9 @@ class MetalheartSculptureRenderer {
           ? tintMaterial
           : materialIndex === 2
             ? secondaryTintMaterial
-            : materialIndex === 3
-              ? this.chromeMaterial
-              : this.blackChromeMaterial,
+            : materialIndex === 4
+              ? this.blackChromeMaterial
+              : this.chromeMaterial,
       );
       shard.position.set(
         (hash(seed, 190 + index) - 0.5) * length * 0.74,
@@ -549,13 +534,6 @@ class MetalheartSculptureRenderer {
       group.add(shard);
     }
 
-    if (this.shadowMaterial) {
-      const shadow = new Sprite(this.shadowMaterial);
-      shadow.position.z = -1.7;
-      shadow.scale.set(length * 1.46, length * 0.74, 1);
-      shadow.renderOrder = -2;
-      group.add(shadow);
-    }
     if (this.glowMaterial) {
       const glow = new Sprite(this.glowMaterial);
       glow.position.set(0, 0, -0.45);
@@ -727,10 +705,8 @@ class MetalheartSculptureRenderer {
     this.blackChromeMaterial.dispose();
     this.iridescentMaterial.dispose();
     this.glowMaterial?.dispose();
-    this.shadowMaterial?.dispose();
     this.streakMaterial?.dispose();
     this.glowTexture?.dispose();
-    this.shadowTexture?.dispose();
     this.streakTexture?.dispose();
     this.environmentTarget.dispose();
     this.renderer.dispose();

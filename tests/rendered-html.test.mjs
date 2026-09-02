@@ -440,9 +440,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /new RoomEnvironment/);
   assert.match(styleThreeSource, /new ExtrudeGeometry/);
   assert.match(styleThreeSource, /const MAX_SCULPTURE_NODES = 8/);
-  assert.match(styleThreeSource, /const WEBGL_PIXEL_BUDGET = 720_000/);
-  assert.match(styleThreeSource, /antialias: false/);
-  assert.match(styleThreeSource, /const plateCount = 5 \+ Math\.floor/);
+  assert.match(styleThreeSource, /const WEBGL_PIXEL_BUDGET = 1_050_000/);
+  assert.match(styleThreeSource, /antialias: true/);
+  assert.match(styleThreeSource, /const plateCount = 3 \+ Math\.floor/);
+  assert.match(styleThreeSource, /const shardCount = 1 \+ Math\.floor/);
+  assert.doesNotMatch(styleThreeSource, /shadowTexture|shadowMaterial|NormalBlending/);
   assert.match(styleThreeSource, /this\.cyanLight\.color\.setHSL\(bodyHue/);
   assert.match(styleThreeSource, /this\.pinkLight\.color\.setHSL\(accentHue/);
   assert.match(styleThreeSource, /this\.glowMaterial\?\.color\.setHSL\(accentHue/);

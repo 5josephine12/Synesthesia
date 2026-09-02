@@ -2000,17 +2000,23 @@ function drawChronologicalAuraLayers(
           context.save();
           context.globalCompositeOperation = "screen";
           context.globalAlpha = 0.62;
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = "high";
           context.drawImage(blurredLayer, 0, 0, width, height);
           context.restore();
 
           context.save();
           context.globalCompositeOperation = "screen";
           context.globalAlpha = 0.2;
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = "high";
           context.drawImage(metalheartCanvas, 0, 0, width, height);
           context.restore();
 
           context.save();
           context.globalCompositeOperation = "source-over";
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = "high";
           context.drawImage(metalheartCanvas, 0, 0, width, height);
           context.restore();
         }
