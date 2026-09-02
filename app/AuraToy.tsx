@@ -2094,7 +2094,6 @@ export function AuraToy() {
   const [microphoneModeDirection, setMicrophoneModeDirection] = useState<-1 | 1>(1);
   const [artStyle, setArtStyle] = useState<ArtStyleId>("aura");
   const [telemetry, setTelemetry] = useState(false);
-  const [artStyleDirection, setArtStyleDirection] = useState<-1 | 1>(1);
 
   const keyboardMap = useMemo(() => {
     const allKeys = [...WHITE_KEYS, ...UPPER_KEYS].sort((a, b) => a.midi - b.midi);
@@ -2120,7 +2119,6 @@ export function AuraToy() {
 
   useEffect(() => {
     artStyleRef.current = artStyle;
-    wakeRendererRef.current?.();
   }, [artStyle]);
 
   useEffect(() => {
@@ -4681,13 +4679,14 @@ export function AuraToy() {
   const selectArtStyleByIndex = useCallback(
     (nextIndex: number) => {
       const nextStyle = ART_STYLE_SLOTS[nextIndex];
-      if (!nextStyle || nextStyle.id === artStyle) return;
-      const currentIndex = ART_STYLE_SLOTS.findIndex(({ id }) => id === artStyle);
-      setArtStyleDirection(nextIndex >= currentIndex ? 1 : -1);
+      if (!nextStyle || nextStyle.id === artStyleRef.current) return;
+      // The renderer reads this ref directly, so update it before React's next render.
+      artStyleRef.current = nextStyle.id;
       setArtStyle(nextStyle.id);
+      wakeRendererRef.current?.();
       hapticFeedback("confirm");
     },
-    [artStyle],
+    [],
   );
 
   const enterFullscreenView = useCallback(() => {
@@ -5011,8 +5010,7 @@ export function AuraToy() {
                 >
                   <span className="mode-screen-glass" aria-hidden="true">
                     <span
-                      key={`${artStyle}-${artStyleDirection}`}
-                      className={`mode-readout ${artStyleDirection > 0 ? "is-forward" : "is-backward"}`}
+                      className="mode-readout"
                     >
                       {activeArtStyle.label}
                     </span>
@@ -5045,9 +5043,14 @@ export function AuraToy() {
                       aria-pressed={selected}
                       title={style.label}
                       onPointerDown={(event) => {
-                        if (event.button === 0) selectStyle();
+                        if (event.button !== 0) return;
+                        event.preventDefault();
+                        selectStyle();
                       }}
-                      onClick={selectStyle}
+                      onClick={(event) => {
+                        // Pointer input already switches on press; retain click for keyboard use.
+                        if (event.detail === 0) selectStyle();
+                      }}
                     />
                   );
                 })}

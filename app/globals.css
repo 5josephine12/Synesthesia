@@ -266,11 +266,7 @@ button {
   cursor: pointer;
   opacity: 1;
   touch-action: manipulation;
-  transition:
-    transform 80ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 100ms ease-out,
-    background 70ms linear,
-    filter 90ms ease-out;
+  transition: none;
 }
 
 .art-style-pad:nth-child(1) {
@@ -493,6 +489,10 @@ button {
 
 .mode-readout.is-backward {
   animation: dialRollBackward 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.art-style-screen .mode-readout {
+  animation: none;
 }
 
 .mode-stepper {

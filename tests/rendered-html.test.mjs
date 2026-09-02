@@ -235,6 +235,18 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /TelemetryBeatClock|telemetryBeatPulse|telemetryActivationAt/);
 });
 
+test("switches art styles synchronously without duplicate pointer work", async () => {
+  const source = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(source, /artStyleRef\.current = nextStyle\.id;\s*setArtStyle\(nextStyle\.id\);\s*wakeRendererRef\.current\?\.\(\)/);
+  assert.match(source, /onPointerDown=\{\(event\) => \{[\s\S]*?event\.preventDefault\(\);[\s\S]*?selectStyle\(\)/);
+  assert.match(source, /onClick=\{\(event\) => \{[\s\S]*?if \(event\.detail === 0\) selectStyle\(\)/);
+  assert.doesNotMatch(source, /artStyleDirection|setArtStyleDirection/);
+  assert.match(styles, /\.art-style-pad\s*\{[\s\S]*?transition: none;/);
+  assert.match(styles, /\.art-style-screen \.mode-readout\s*\{\s*animation: none;/);
+});
+
 test("keeps every shipped client asset inside a kilobyte budget", async () => {
   const clientDirectory = new URL("../dist/client/", import.meta.url);
   const files = await filesBelow(clientDirectory);
