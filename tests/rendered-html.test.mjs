@@ -442,6 +442,6 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const MAX_SCULPTURE_NODES = 8/);
   assert.match(styleThreeSource, /const WEBGL_PIXEL_BUDGET = 720_000/);
   assert.match(styleThreeSource, /antialias: false/);
-  assert.match(styleThreeSource, /const plateCount = 3 \+ Math\.floor/);
+  assert.match(styleThreeSource, /const plateCount = 5 \+ Math\.floor/);
   assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
 });

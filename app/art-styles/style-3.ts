@@ -45,6 +45,8 @@ export type MetalheartParticleState = {
   curvature: number;
   velocity: number;
   createdAt: number;
+  color?: { h: number; s: number; l: number };
+  accent?: { h: number; s: number; l: number };
 };
 
 export type MetalheartPulseState = {
@@ -124,23 +126,23 @@ function hash(seed: number, index: number) {
 
 function makeBladeGeometry() {
   const shape = new Shape();
-  shape.moveTo(-1.08, -0.13);
-  shape.lineTo(-0.73, -0.32);
-  shape.lineTo(-0.18, -0.23);
-  shape.lineTo(0.06, -0.43);
-  shape.lineTo(1.12, -0.08);
-  shape.lineTo(0.52, 0.18);
-  shape.lineTo(0.15, 0.34);
-  shape.lineTo(-0.25, 0.19);
-  shape.lineTo(-0.8, 0.31);
+  shape.moveTo(-1.42, -0.035);
+  shape.lineTo(-0.78, -0.11);
+  shape.lineTo(-0.2, -0.07);
+  shape.lineTo(0.08, -0.17);
+  shape.lineTo(1.48, -0.018);
+  shape.lineTo(0.48, 0.085);
+  shape.lineTo(0.12, 0.14);
+  shape.lineTo(-0.3, 0.065);
+  shape.lineTo(-0.92, 0.12);
   shape.closePath();
   const geometry = new ExtrudeGeometry(shape, {
-    depth: 0.13,
+    depth: 0.026,
     steps: 1,
     bevelEnabled: true,
     bevelSegments: 1,
-    bevelSize: 0.045,
-    bevelThickness: 0.045,
+    bevelSize: 0.009,
+    bevelThickness: 0.009,
   });
   geometry.center();
   geometry.computeVertexNormals();
@@ -171,8 +173,10 @@ function makeRibbonGeometry(
       new Vector3(
         (progress - 0.5) * length,
         Math.sin(progress * Math.PI * 1.85 + phase) * width * (1.1 + taper * 1.45) +
-          curvature * width * (progress - 0.5) * 1.25,
-        Math.cos(progress * Math.PI * 2.35 + phase * 0.72) * width * (0.72 + taper * 1.7),
+          curvature * width * (progress - 0.5) * 1.25 +
+          (hash(seed, 40 + index) - 0.5) * width * 3.4,
+        Math.cos(progress * Math.PI * 2.35 + phase * 0.72) * width * (0.72 + taper * 1.7) +
+          (hash(seed, 60 + index) - 0.5) * width * 2.8,
       ),
     );
   }
@@ -231,14 +235,18 @@ function createStreakTexture() {
 }
 
 function disposeObject(object: Object3D, preserve: ReadonlySet<BufferGeometry | Material>) {
+  const disposableGeometries = new Set<BufferGeometry>();
+  const disposableMaterials = new Set<Material>();
   object.traverse((child) => {
     if (!(child instanceof Mesh)) return;
-    if (!preserve.has(child.geometry)) child.geometry.dispose();
+    if (!preserve.has(child.geometry)) disposableGeometries.add(child.geometry);
     const materials = Array.isArray(child.material) ? child.material : [child.material];
     for (const material of materials) {
-      if (!preserve.has(material)) material.dispose();
+      if (!preserve.has(material)) disposableMaterials.add(material);
     }
   });
+  for (const geometry of disposableGeometries) geometry.dispose();
+  for (const material of disposableMaterials) material.dispose();
 }
 
 type ClusterRecord = {
@@ -258,7 +266,7 @@ class MetalheartSculptureRenderer {
   private readonly blackChromeMaterial: MeshPhysicalMaterial;
   private readonly iridescentMaterial: MeshPhysicalMaterial;
   private readonly bladeGeometry = makeBladeGeometry();
-  private readonly shardGeometry = new ConeGeometry(0.13, 1.35, 5, 1, false);
+  private readonly shardGeometry = new ConeGeometry(0.045, 2.1, 4, 1, false);
   private readonly glowTexture: CanvasTexture | null;
   private readonly shadowTexture: CanvasTexture | null;
   private readonly streakTexture: CanvasTexture | null;
@@ -361,7 +369,7 @@ class MetalheartSculptureRenderer {
           map: this.glowTexture,
           color: 0xc8eeff,
           transparent: true,
-          opacity: 0.16,
+          opacity: 0.11,
           depthWrite: false,
           blending: AdditiveBlending,
         })
@@ -371,7 +379,7 @@ class MetalheartSculptureRenderer {
           map: this.shadowTexture,
           color: 0x02030a,
           transparent: true,
-          opacity: 0.64,
+          opacity: 0.16,
           depthWrite: false,
           blending: NormalBlending,
         })
@@ -442,18 +450,25 @@ class MetalheartSculptureRenderer {
   private createCluster(particle: MetalheartParticleState) {
     const seed = particle.id * 4099 + particle.midi * 131 + particle.repeat * 17;
     const group = new Group();
-    const length = 2.25 + particle.stretch * 0.5;
-    const ribbonWidth = 0.1 + particle.thickness * 0.22;
-    const primaryGeometry = makeRibbonGeometry(seed, length, ribbonWidth, 0.075, particle.curvature);
-    const primaryRibbon = new Mesh(primaryGeometry, this.chromeMaterial);
+    const length =
+      (2.4 + particle.stretch * 0.68) *
+      lerp(0.72, 1.72, Math.pow(hash(seed, 4), 1.7));
+    const ribbonWidth = 0.035 + particle.thickness * 0.085;
+    const tintMaterial = this.iridescentMaterial.clone();
+    const accentHue = ((particle.accent?.h ?? particle.color?.h ?? 205) % 360) / 360;
+    tintMaterial.color.setHSL(accentHue, 0.46, 0.69);
+    tintMaterial.emissive.setHSL(accentHue, 0.72, 0.055);
+    tintMaterial.emissiveIntensity = 0.065;
+    const primaryGeometry = makeRibbonGeometry(seed, length, ribbonWidth, 0.021, particle.curvature);
+    const primaryRibbon = new Mesh(primaryGeometry, hash(seed, 5) > 0.46 ? this.chromeMaterial : tintMaterial);
     primaryRibbon.rotation.x = (hash(seed, 7) - 0.5) * 0.62;
     group.add(primaryRibbon);
 
     const darkGeometry = makeRibbonGeometry(
       seed + 73,
-      length * 0.78,
-      ribbonWidth * 0.76,
-      0.095,
+      length * lerp(0.58, 1.08, hash(seed, 6)),
+      ribbonWidth * 0.54,
+      0.026,
       -particle.curvature,
       Math.PI * 0.56,
     );
@@ -461,54 +476,66 @@ class MetalheartSculptureRenderer {
     darkRibbon.rotation.set(0.28 + hash(seed, 8) * 0.38, 0.12, -0.32);
     group.add(darkRibbon);
 
-    const plateCount = 3 + Math.floor(hash(seed, 11) * 3);
+    const plateCount = 5 + Math.floor(hash(seed, 11) * 4);
     for (let index = 0; index < plateCount; index += 1) {
       const plate = new Mesh(
         this.bladeGeometry,
-        index % 3 === 0 ? this.iridescentMaterial : index % 2 === 0 ? this.chromeMaterial : this.blackChromeMaterial,
+        index % 4 === 0 ? tintMaterial : index % 2 === 0 ? this.chromeMaterial : this.blackChromeMaterial,
       );
       const progress = plateCount === 1 ? 0.5 : index / (plateCount - 1);
       plate.position.set(
         lerp(-length * 0.33, length * 0.34, progress),
-        (hash(seed, 30 + index) - 0.5) * ribbonWidth * 3.2,
-        (hash(seed, 50 + index) - 0.5) * 0.72,
+        (hash(seed, 30 + index) - 0.5) * ribbonWidth * 8.4,
+        (hash(seed, 50 + index) - 0.5) * 1.12,
       );
       plate.rotation.set(
-        (hash(seed, 70 + index) - 0.5) * 1.15,
-        (hash(seed, 90 + index) - 0.5) * 1.25,
-        (hash(seed, 110 + index) - 0.5) * 0.82 + particle.angle * 0.36,
+        (hash(seed, 70 + index) - 0.5) * 1.82,
+        (hash(seed, 90 + index) - 0.5) * 1.7,
+        (hash(seed, 110 + index) - 0.5) * 1.46 + particle.angle * 0.36,
       );
       plate.scale.set(
-        lerp(0.38, 0.76, hash(seed, 130 + index)),
-        lerp(0.5, 1.05, hash(seed, 150 + index)),
-        lerp(0.75, 1.2, hash(seed, 170 + index)),
+        lerp(0.28, 1.18, Math.pow(hash(seed, 130 + index), 1.35)),
+        lerp(0.18, 0.54, hash(seed, 150 + index)),
+        lerp(0.48, 0.95, hash(seed, 170 + index)),
       );
       group.add(plate);
     }
 
-    for (let index = 0; index < 2; index += 1) {
-      const shard = new Mesh(this.shardGeometry, index === 0 ? this.chromeMaterial : this.blackChromeMaterial);
-      shard.position.set(
-        (index === 0 ? -1 : 1) * length * lerp(0.22, 0.37, hash(seed, 190 + index)),
-        (hash(seed, 200 + index) - 0.5) * ribbonWidth * 4,
-        (hash(seed, 210 + index) - 0.5) * 0.6,
+    const shardCount = 3 + Math.floor(hash(seed, 181) * 3);
+    for (let index = 0; index < shardCount; index += 1) {
+      const shard = new Mesh(
+        this.shardGeometry,
+        index % 3 === 0 ? tintMaterial : index % 2 === 0 ? this.chromeMaterial : this.blackChromeMaterial,
       );
-      shard.rotation.set(hash(seed, 220 + index) * 1.2, hash(seed, 230 + index) * 1.1, particle.angle + index * 1.7);
-      shard.scale.set(0.72, lerp(0.85, 1.55, hash(seed, 240 + index)), 0.72);
+      shard.position.set(
+        (hash(seed, 190 + index) - 0.5) * length * 0.74,
+        (hash(seed, 200 + index) - 0.5) * ribbonWidth * 10,
+        (hash(seed, 210 + index) - 0.5) * 1.18,
+      );
+      shard.rotation.set(
+        hash(seed, 220 + index) * 2.1,
+        hash(seed, 230 + index) * 1.9,
+        particle.angle + hash(seed, 235 + index) * TAU,
+      );
+      shard.scale.set(
+        lerp(0.42, 0.84, hash(seed, 238 + index)),
+        lerp(0.72, 2.4, hash(seed, 240 + index)),
+        lerp(0.42, 0.84, hash(seed, 244 + index)),
+      );
       group.add(shard);
     }
 
     if (this.shadowMaterial) {
       const shadow = new Sprite(this.shadowMaterial);
       shadow.position.z = -1.7;
-      shadow.scale.set(length * 1.7, length * 1.05, 1);
+      shadow.scale.set(length * 1.46, length * 0.74, 1);
       shadow.renderOrder = -2;
       group.add(shadow);
     }
     if (this.glowMaterial) {
       const glow = new Sprite(this.glowMaterial);
       glow.position.set(0, 0, -0.45);
-      glow.scale.set(length * 0.9, length * 0.58, 1);
+      glow.scale.set(length * 0.72, length * 0.36, 1);
       glow.renderOrder = -1;
       group.add(glow);
     }
@@ -536,10 +563,10 @@ class MetalheartSculptureRenderer {
     }
     const path = new CatmullRomCurve3(points, false, "centripetal", 0.5);
     const section = new Shape();
-    section.moveTo(-0.035, -0.055);
-    section.lineTo(0.035, -0.055);
-    section.lineTo(0.035, 0.055);
-    section.lineTo(-0.035, 0.055);
+    section.moveTo(-0.012, -0.02);
+    section.lineTo(0.012, -0.02);
+    section.lineTo(0.012, 0.02);
+    section.lineTo(-0.012, 0.02);
     section.closePath();
     const geometry = new ExtrudeGeometry(section, {
       steps: Math.min(36, 12 + points.length * 5),
@@ -594,6 +621,11 @@ class MetalheartSculptureRenderer {
       return null;
     }
 
+    const paletteParticle = active[active.length - 1];
+    const paletteHue = ((paletteParticle.accent?.h ?? paletteParticle.color?.h ?? 314) % 360) / 360;
+    this.cyanLight.color.setHSL(0.54, 0.88, 0.66);
+    this.pinkLight.color.setHSL(paletteHue, 0.9, 0.65);
+
     let forming = false;
     for (const record of this.clusters.values()) {
       const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - record.particle.createdAt);
@@ -618,7 +650,7 @@ class MetalheartSculptureRenderer {
       4.8,
     );
     this.pulseLight.intensity = pulseEnvelope * 58;
-    this.pulseLight.color.set((pulse?.x ?? 0.5) < 0.5 ? 0x8be7ff : 0xff9be8);
+    this.pulseLight.color.setHSL((paletteHue + 0.065) % 1, 0.92, 0.72);
     if (this.pulseStreak && this.streakMaterial) {
       this.pulseStreak.position.set(
         lerp(-this.viewWidth * 0.35, this.viewWidth * 0.35, easeInOutSine(pulseProgress)),
