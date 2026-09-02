@@ -357,7 +357,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleTwoSource, /for \(let tone = 0; tone < bodyColors\.length; tone \+= 1\)/);
   assert.match(auraSource, /alpha: clamp\(\(0\.94 \+ blob\.velocity \* 0\.06\) \* arrival \* layerEmphasis, 0, 1\)/);
   assert.match(auraSource, /lerp\(0\.74, 0\.92, recency \* recency\)/);
-  assert.match(auraSource, /const blendsWithEarlierArtwork = runStart > 0/);
+  assert.match(auraSource, /const blendsWithEarlierArtwork = runStart > 0 \|\| hasEarlierArtwork/);
   assert.match(auraSource, /context\.globalCompositeOperation = "screen"/);
   assert.match(auraSource, /context\.filter = `blur\(\$\{clamp\(Math\.min\(width, height\) \* 0\.009, 4, 9\)\}px\)`/);
   assert.match(auraSource, /context\.globalCompositeOperation = "color"/);
@@ -374,6 +374,15 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const rgb565Cache = new Int16Array\(65536\)/);
   assert.doesNotMatch(auraSource, /const dottedBlobs = blobs\.slice/);
   assert.match(auraSource, /blurredSettledCount !== settledCount/);
+  assert.match(auraSource, /const MAX_LIVE_VISUAL_PARTICLES = 96/);
+  assert.match(auraSource, /const compactVisualHistory = \(\) =>/);
+  assert.match(auraSource, /blobs\.length <= MAX_LIVE_VISUAL_PARTICLES/);
+  assert.match(auraSource, /visibleDottedIds\.size === DOTTED_VISIBLE_FORMATIONS/);
+  assert.match(auraSource, /blobsRef\.current = \[\.\.\.retainedSettled, \.\.\.unsettled\]/);
+  assert.match(auraSource, /compactedHistoryActiveRef\.current = true/);
+  assert.match(auraSource, /const drawableRunStart = Math\.max\(runStart, settledOrganicPrefix\)/);
+  assert.match(auraSource, /artStyleLayerCountRef\.current\[currentArtStyle\]/);
+  assert.doesNotMatch(auraSource, /blobsRef\.current\.reduce\(/);
   assert.match(telemetrySource, /function chordLabelsForActiveNodes/);
   assert.match(telemetrySource, /nodes\.length !== cachedChordNodeCount/);
   assert.match(telemetrySource, /const SNAPSHOT_FRAME_INTERVAL = 1000 \/ 15/);

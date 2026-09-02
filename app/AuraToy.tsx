@@ -311,6 +311,7 @@ const BLOB_ARRIVAL_DURATION = 550;
 const DOTTED_VISIBLE_FORMATIONS = 4;
 const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
+const MAX_LIVE_VISUAL_PARTICLES = 96;
 const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown";
 const DEVICE_AUDIO_CAPTURE_OPTIONS: DeviceAudioCaptureOptions = {
   video: { displaySurface: "browser" },
@@ -1792,6 +1793,8 @@ function drawChronologicalAuraLayers(
   fallbackArtStyle: ArtStyleId,
   blurRadius: number,
   replayProgress?: number,
+  settledOrganicPrefix = 0,
+  hasEarlierArtwork = false,
 ) {
   const replayPosition = replayProgress === undefined
     ? Number.POSITIVE_INFINITY
@@ -1839,7 +1842,7 @@ function drawChronologicalAuraLayers(
         width,
         pixelAccentContext,
       );
-      const blendsWithEarlierArtwork = runStart > 0;
+      const blendsWithEarlierArtwork = runStart > 0 || hasEarlierArtwork;
       if (blendsWithEarlierArtwork) {
         context.save();
         context.globalCompositeOperation = "screen";
@@ -1877,28 +1880,31 @@ function drawChronologicalAuraLayers(
         context.restore();
       }
     } else {
-      organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
-      drawAuraComposition(
-        organicContext,
-        blobs,
-        organicLayer.width,
-        organicLayer.height,
-        renderNow,
-        replayProgress,
-        runStart,
-        runEnd,
-        fallbackArtStyle,
-      );
-      blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
-      blurredContext.save();
-      blurredContext.filter = `blur(${Math.max(0.35, blurRadius)}px)`;
-      blurredContext.drawImage(organicLayer, 0, 0);
-      blurredContext.restore();
+      const drawableRunStart = Math.max(runStart, settledOrganicPrefix);
+      if (drawableRunStart < runEnd) {
+        organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
+        drawAuraComposition(
+          organicContext,
+          blobs,
+          organicLayer.width,
+          organicLayer.height,
+          renderNow,
+          replayProgress,
+          drawableRunStart,
+          runEnd,
+          fallbackArtStyle,
+        );
+        blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
+        blurredContext.save();
+        blurredContext.filter = `blur(${Math.max(0.35, blurRadius)}px)`;
+        blurredContext.drawImage(organicLayer, 0, 0);
+        blurredContext.restore();
 
-      context.save();
-      context.globalCompositeOperation = "source-over";
-      context.drawImage(blurredLayer, 0, 0, width, height);
-      context.restore();
+        context.save();
+        context.globalCompositeOperation = "source-over";
+        context.drawImage(blurredLayer, 0, 0, width, height);
+        context.restore();
+      }
     }
 
     runStart = runEnd;
@@ -2027,6 +2033,15 @@ export function AuraToy() {
   const blobsRef = useRef<BlobParticle[]>([]);
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
+  const artStyleLayerCountRef = useRef<Record<ArtStyleId, number>>({
+    aura: 0,
+    "style-2": 0,
+    "style-3": 0,
+    "style-4": 0,
+  });
+  const compactedHistoryCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const compactedHistoryActiveRef = useRef(false);
+  const settledVisualCountRef = useRef(0);
   const grainRef = useRef<HTMLCanvasElement | null>(null);
   const colorRebuildLayersRef = useRef(0);
   const additiveLayerStartRef = useRef(0);
@@ -2412,10 +2427,8 @@ export function AuraToy() {
     const identity = `AURA|${mode}|${note.name}`;
     const repeat = noteRepeatRef.current.get(identity) ?? 0;
     noteRepeatRef.current.set(identity, repeat + 1);
-    const compositionIndex = blobsRef.current.reduce(
-      (count, blob) => count + (blob.artStyle === currentArtStyle ? 1 : 0),
-      0,
-    );
+    const compositionIndex = artStyleLayerCountRef.current[currentArtStyle];
+    artStyleLayerCountRef.current[currentArtStyle] = compositionIndex + 1;
 
     const identitySeed = fnv1a(identity);
     const identityRng = mulberry32(identitySeed);
@@ -3763,6 +3776,8 @@ export function AuraToy() {
     const blurredContext = blurred.getContext("2d", { alpha: true });
     const settled = document.createElement("canvas");
     const settledContext = settled.getContext("2d", { alpha: true });
+    const historyBlurred = document.createElement("canvas");
+    const historyBlurredContext = historyBlurred.getContext("2d", { alpha: true });
     const settledSnapshot = document.createElement("canvas");
     const settledSnapshotContext = settledSnapshot.getContext("2d", { alpha: true });
     const saturationProbe = document.createElement("canvas");
@@ -3775,10 +3790,12 @@ export function AuraToy() {
       !pixelAccentContext ||
       !blurredContext ||
       !settledContext ||
+      !historyBlurredContext ||
       !settledSnapshotContext ||
       !saturationProbeContext
     ) return;
 
+    compactedHistoryCanvasRef.current = settled;
     grainRef.current = makeNoiseTile(160, 20);
     const grainPattern = context.createPattern(grainRef.current, "repeat");
     let width = 1;
@@ -3792,12 +3809,14 @@ export function AuraToy() {
     let overBudgetFrames = 0;
     let lastQualityAdjustmentAt = -Infinity;
     let blurredSettledCount = -1;
+    let historyBlurredSettledCount = -1;
     let blurredBlobCount = -1;
     let blurredFallbackArtStyle: ArtStyleId | null = null;
     let lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
     let lastPixelBlobCount = -1;
     let lastPixelFallbackArtStyle: ArtStyleId | null = null;
     let lastPixelReducedMotion = false;
+    let hasCompactedOrganicHistory = false;
     let scheduledWakeTimer: number | null = null;
     let scheduledWakeAt = Number.POSITIVE_INFINITY;
 
@@ -3812,7 +3831,8 @@ export function AuraToy() {
       const targetWidth = Math.max(1, Math.round(width * renderScale));
       const targetHeight = Math.max(1, Math.round(height * renderScale));
       if (offscreen.width !== targetWidth || offscreen.height !== targetHeight) {
-        const canPreserveSettled = preserveSettled && settledCount > 0;
+        const canPreserveSettled =
+          preserveSettled && (settledCount > 0 || hasCompactedOrganicHistory);
         if (canPreserveSettled) {
           settledSnapshot.width = settled.width;
           settledSnapshot.height = settled.height;
@@ -3823,7 +3843,10 @@ export function AuraToy() {
         offscreen.height = targetHeight;
         blurred.width = targetWidth;
         blurred.height = targetHeight;
+        historyBlurred.width = targetWidth;
+        historyBlurred.height = targetHeight;
         blurredSettledCount = -1;
+        historyBlurredSettledCount = -1;
         blurredBlobCount = -1;
         blurredFallbackArtStyle = null;
         settled.width = targetWidth;
@@ -3884,8 +3907,13 @@ export function AuraToy() {
       pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
       pixelAccentContext.clearRect(0, 0, pixelAccents.width, pixelAccents.height);
       blurredContext.clearRect(0, 0, blurred.width, blurred.height);
+      historyBlurredContext.clearRect(0, 0, historyBlurred.width, historyBlurred.height);
       settledCount = 0;
+      settledVisualCountRef.current = 0;
+      compactedHistoryActiveRef.current = false;
+      hasCompactedOrganicHistory = false;
       blurredSettledCount = -1;
+      historyBlurredSettledCount = -1;
       blurredBlobCount = -1;
       blurredFallbackArtStyle = null;
       lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
@@ -3923,6 +3951,46 @@ export function AuraToy() {
         scheduledWakeAt = Number.POSITIVE_INFINITY;
         wakeRenderer();
       }, Math.max(0, targetAt - performance.now()));
+    };
+
+    const compactVisualHistory = () => {
+      const blobs = blobsRef.current;
+      if (blobs.length <= MAX_LIVE_VISUAL_PARTICLES || settledCount === 0) return;
+
+      const visibleDottedIds = new Set<number>();
+      for (let index = blobs.length - 1; index >= 0; index -= 1) {
+        const blob = blobs[index];
+        if ((blob.artStyle ?? artStyleRef.current) !== "style-2") continue;
+        visibleDottedIds.add(blob.id);
+        if (visibleDottedIds.size === DOTTED_VISIBLE_FORMATIONS) break;
+      }
+
+      const retainedSettled: BlobParticle[] = [];
+      let removedOrganicCount = 0;
+      for (let index = 0; index < settledCount; index += 1) {
+        const blob = blobs[index];
+        const isDotted = (blob.artStyle ?? artStyleRef.current) === "style-2";
+        if (isDotted && visibleDottedIds.has(blob.id)) retainedSettled.push(blob);
+        else if (!isDotted) removedOrganicCount += 1;
+      }
+      const unsettled = blobs.slice(settledCount);
+      const removedCount = settledCount - retainedSettled.length;
+      if (removedCount === 0) return;
+
+      blobsRef.current = [...retainedSettled, ...unsettled];
+      settledCount = retainedSettled.length;
+      settledVisualCountRef.current = settledCount;
+      additiveLayerStartRef.current = Math.max(0, additiveLayerStartRef.current - removedCount);
+      blurredSettledCount = -1;
+      historyBlurredSettledCount = -1;
+      blurredBlobCount = -1;
+      lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
+      lastPixelBlobCount = -1;
+      replayRenderStatesRef.current = new WeakMap();
+      if (removedOrganicCount > 0) {
+        hasCompactedOrganicHistory = true;
+        compactedHistoryActiveRef.current = true;
+      }
     };
 
     const animate = (now: number) => {
@@ -3986,10 +4054,12 @@ export function AuraToy() {
         }
         if (performance.now() - settleStartedAt >= AURA_SETTLE_BUDGET_MS) break;
       }
+      settledVisualCountRef.current = settledCount;
+      compactVisualHistory();
 
       const blurScale = offscreen.width / Math.max(1, width);
       let newestDottedCreatedAt = Number.NEGATIVE_INFINITY;
-      let containsOrganicStyle = false;
+      let containsOrganicStyle = hasCompactedOrganicHistory;
       for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
         const blob = blobsRef.current[index];
         if ((blob.artStyle ?? currentArtStyle) === "style-2") {
@@ -4051,6 +4121,23 @@ export function AuraToy() {
       }
 
       if (hasDottedStyle && containsOrganicStyle) {
+        if (
+          hasCompactedOrganicHistory &&
+          historyBlurredSettledCount !== settledCount
+        ) {
+          historyBlurredContext.clearRect(0, 0, historyBlurred.width, historyBlurred.height);
+          historyBlurredContext.save();
+          historyBlurredContext.filter = `blur(${Math.max(0.35, blurRadius)}px)`;
+          historyBlurredContext.drawImage(settled, 0, 0);
+          historyBlurredContext.restore();
+          historyBlurredSettledCount = settledCount;
+        }
+        if (hasCompactedOrganicHistory) {
+          context.save();
+          context.globalCompositeOperation = "lighter";
+          context.drawImage(historyBlurred, 0, 0, width, height);
+          context.restore();
+        }
         drawChronologicalAuraLayers(
           context,
           offscreen,
@@ -4068,6 +4155,9 @@ export function AuraToy() {
           reducedMotionRef.current,
           currentArtStyle,
           blurRadius,
+          undefined,
+          hasCompactedOrganicHistory ? settledCount : 0,
+          hasCompactedOrganicHistory,
         );
       } else if (hasDottedStyle) {
         const pixelLayerNeedsRefresh =
@@ -4196,6 +4286,9 @@ export function AuraToy() {
     return () => {
       wakeRendererRef.current = null;
       resetRendererRef.current = null;
+      if (compactedHistoryCanvasRef.current === settled) compactedHistoryCanvasRef.current = null;
+      compactedHistoryActiveRef.current = false;
+      settledVisualCountRef.current = 0;
       window.removeEventListener("resize", handleResize);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       resizeObserver.disconnect();
@@ -4207,6 +4300,15 @@ export function AuraToy() {
   const renderArtwork = useCallback((output: HTMLCanvasElement, replayProgress?: number) => {
     const outputContext = output.getContext("2d", { alpha: false });
     if (!outputContext) return;
+    const compactedHistory = compactedHistoryCanvasRef.current;
+    const hasCompactedHistory =
+      compactedHistoryActiveRef.current &&
+      compactedHistory !== null &&
+      compactedHistory.width > 0 &&
+      compactedHistory.height > 0;
+    const settledPrefix = hasCompactedHistory
+      ? Math.min(settledVisualCountRef.current, blobsRef.current.length)
+      : 0;
 
     let auraLayer = exportLayersRef.current.get(output);
     if (!auraLayer) {
@@ -4250,7 +4352,7 @@ export function AuraToy() {
     layerContext.clearRect(0, 0, layerWidth, layerHeight);
     pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
     pixelAccentLayerContext.clearRect(0, 0, pixelAccentLayer.width, pixelAccentLayer.height);
-    if (replayProgress === undefined) {
+    if (replayProgress === undefined || hasCompactedHistory) {
       replayRenderStatesRef.current.delete(output);
       const settledAt = (blobsRef.current.at(-1)?.createdAt ?? performance.now()) + BLOB_ARRIVAL_DURATION;
       drawAuraComposition(
@@ -4259,8 +4361,8 @@ export function AuraToy() {
         layerWidth,
         layerHeight,
         settledAt,
-        undefined,
-        0,
+        replayProgress,
+        settledPrefix,
         blobsRef.current.length,
         artStyleRef.current,
       );
@@ -4371,10 +4473,17 @@ export function AuraToy() {
     const hasDottedStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) === "style-2",
     );
-    const containsOrganicStyle = blobsRef.current.some(
+    const containsOrganicStyle = hasCompactedHistory || blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
     );
     paintArtworkBackground(outputContext, output.width, output.height);
+    if (hasCompactedHistory && compactedHistory) {
+      outputContext.save();
+      outputContext.globalCompositeOperation = "source-over";
+      outputContext.filter = `blur(${outputBlurRadius * layerScale}px)`;
+      outputContext.drawImage(compactedHistory, 0, 0, output.width, output.height);
+      outputContext.restore();
+    }
     if (hasDottedStyle && containsOrganicStyle) {
       drawChronologicalAuraLayers(
         outputContext,
@@ -4394,6 +4503,8 @@ export function AuraToy() {
         artStyleRef.current,
         outputBlurRadius * layerScale,
         replayProgress,
+        settledPrefix,
+        hasCompactedHistory,
       );
     } else if (hasDottedStyle) {
       drawDottedSigilFlowLayer(
@@ -4649,6 +4760,12 @@ export function AuraToy() {
     blobsRef.current = [];
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
+    artStyleLayerCountRef.current = {
+      aura: 0,
+      "style-2": 0,
+      "style-3": 0,
+      "style-4": 0,
+    };
     colorRebuildLayersRef.current = 0;
     additiveLayerStartRef.current = 0;
     resetRendererRef.current?.();
