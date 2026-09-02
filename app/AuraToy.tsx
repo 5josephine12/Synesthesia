@@ -2029,7 +2029,7 @@ function drawChronologicalAuraLayers(
           // without adding another WebGL render target or an accumulating layer.
           blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
           blurredContext.save();
-          blurredContext.filter = `blur(${Math.max(2, blurRadius * 1.65)}px) brightness(1.55) saturate(1.28)`;
+          blurredContext.filter = `blur(${Math.max(2.4, blurRadius * 1.8)}px) brightness(1.68) saturate(1.42)`;
           blurredContext.drawImage(
             metalheartCanvas,
             0,
@@ -2041,7 +2041,7 @@ function drawChronologicalAuraLayers(
 
           context.save();
           context.globalCompositeOperation = "screen";
-          context.globalAlpha = 0.62;
+          context.globalAlpha = 0.69;
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
           context.drawImage(blurredLayer, 0, 0, width, height);
@@ -2049,7 +2049,7 @@ function drawChronologicalAuraLayers(
 
           context.save();
           context.globalCompositeOperation = "screen";
-          context.globalAlpha = 0.2;
+          context.globalAlpha = 0.24;
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
           context.drawImage(metalheartCanvas, 0, 0, width, height);

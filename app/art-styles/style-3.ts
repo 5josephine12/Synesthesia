@@ -233,6 +233,34 @@ function createStreakTexture() {
   return texture;
 }
 
+function createBeamTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 384;
+  canvas.height = 96;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const lengthFade = context.createLinearGradient(0, 0, canvas.width, 0);
+  lengthFade.addColorStop(0, "rgba(255, 255, 255, 0)");
+  lengthFade.addColorStop(0.06, "rgba(255, 255, 255, 0.96)");
+  lengthFade.addColorStop(0.19, "rgba(255, 255, 255, 0.5)");
+  lengthFade.addColorStop(0.62, "rgba(255, 255, 255, 0.13)");
+  lengthFade.addColorStop(1, "rgba(255, 255, 255, 0)");
+  context.fillStyle = lengthFade;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = "destination-in";
+  const widthFade = context.createLinearGradient(0, 0, 0, canvas.height);
+  widthFade.addColorStop(0, "rgba(255, 255, 255, 0)");
+  widthFade.addColorStop(0.34, "rgba(255, 255, 255, 0.2)");
+  widthFade.addColorStop(0.5, "rgba(255, 255, 255, 1)");
+  widthFade.addColorStop(0.66, "rgba(255, 255, 255, 0.2)");
+  widthFade.addColorStop(1, "rgba(255, 255, 255, 0)");
+  context.fillStyle = widthFade;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
+
 function disposeObject(object: Object3D, preserve: ReadonlySet<BufferGeometry | Material>) {
   const disposableGeometries = new Set<BufferGeometry>();
   const disposableMaterials = new Set<Material>();
@@ -268,12 +296,17 @@ class MetalheartSculptureRenderer {
   private readonly shardGeometry = new ConeGeometry(0.045, 2.1, 4, 1, false);
   private readonly glowTexture: CanvasTexture | null;
   private readonly streakTexture: CanvasTexture | null;
+  private readonly beamTexture: CanvasTexture | null;
   private readonly glowMaterial: SpriteMaterial | null;
   private readonly streakMaterial: SpriteMaterial | null;
+  private readonly orangeBeamMaterial: SpriteMaterial | null;
+  private readonly pinkBeamMaterial: SpriteMaterial | null;
   private readonly pulseStreak: Sprite | null;
-  private readonly pulseLight = new PointLight(0xdff8ff, 0, 9.5, 1.45);
-  private readonly cyanLight = new PointLight(0x54cfff, 26, 15, 1.7);
-  private readonly pinkLight = new PointLight(0xff69dc, 20, 15, 1.8);
+  private readonly orangeBeam: Sprite | null;
+  private readonly pinkBeam: Sprite | null;
+  private readonly pulseLight = new PointLight(0xffe4d1, 0, 9.5, 1.45);
+  private readonly amberLight = new PointLight(0xff713d, 31, 15, 1.7);
+  private readonly pinkLight = new PointLight(0xff4f9a, 25, 15, 1.8);
   private readonly environmentTarget: WebGLRenderTarget;
   private readonly preservedResources: ReadonlySet<BufferGeometry | Material>;
   private readonly clusters = new Map<number, ClusterRecord>();
@@ -300,7 +333,7 @@ class MetalheartSculptureRenderer {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.28;
+    this.renderer.toneMappingExposure = 1.34;
     this.renderer.setPixelRatio(1);
 
     const pmrem = new PMREMGenerator(this.renderer);
@@ -316,7 +349,7 @@ class MetalheartSculptureRenderer {
     this.scene.environment = this.environmentTarget.texture;
 
     this.chromeMaterial = new MeshPhysicalMaterial({
-      color: new Color(0x9aa5b5),
+      color: new Color(0xb8a9aa),
       metalness: 1,
       roughness: 0.065,
       clearcoat: 1,
@@ -325,7 +358,7 @@ class MetalheartSculptureRenderer {
       iridescenceIOR: 1.55,
       iridescenceThicknessRange: [135, 520],
       envMapIntensity: 3.35,
-      emissive: new Color(0x07101b),
+      emissive: new Color(0x1a0603),
       emissiveIntensity: 0.035,
       side: DoubleSide,
     });
@@ -339,12 +372,12 @@ class MetalheartSculptureRenderer {
       iridescenceIOR: 1.35,
       iridescenceThicknessRange: [160, 390],
       envMapIntensity: 2.35,
-      emissive: new Color(0x010205),
+      emissive: new Color(0x070103),
       emissiveIntensity: 0.02,
       side: DoubleSide,
     });
     this.iridescentMaterial = new MeshPhysicalMaterial({
-      color: new Color(0xc4d7ee),
+      color: new Color(0xe0c1ca),
       metalness: 0.96,
       roughness: 0.052,
       clearcoat: 1,
@@ -353,15 +386,16 @@ class MetalheartSculptureRenderer {
       iridescenceIOR: 1.82,
       iridescenceThicknessRange: [110, 690],
       envMapIntensity: 3.65,
-      emissive: new Color(0x0a1624),
+      emissive: new Color(0x210510),
       emissiveIntensity: 0.06,
       side: DoubleSide,
     });
 
-    // Keep the glow texture neutral so the live Aura/Pixel palette can tint
-    // the light spill instead of baking Metalheart into an isolated cyan look.
+    // Keep the texture neutral so the warm Metalheart lighting can tint every
+    // halo consistently without baking a colored fringe into the bitmap.
     this.glowTexture = createRadialTexture("rgba(255, 255, 255, 0.82)", "rgba(255, 255, 255, 0)");
     this.streakTexture = createStreakTexture();
+    this.beamTexture = createBeamTexture();
     this.glowMaterial = this.glowTexture
       ? new SpriteMaterial({
           map: this.glowTexture,
@@ -384,6 +418,30 @@ class MetalheartSculptureRenderer {
         })
       : null;
     this.pulseStreak = this.streakMaterial ? new Sprite(this.streakMaterial) : null;
+    this.orangeBeamMaterial = this.beamTexture
+      ? new SpriteMaterial({
+          map: this.beamTexture,
+          color: 0xff7a43,
+          transparent: true,
+          opacity: 0.14,
+          depthWrite: false,
+          depthTest: false,
+          blending: AdditiveBlending,
+        })
+      : null;
+    this.pinkBeamMaterial = this.beamTexture
+      ? new SpriteMaterial({
+          map: this.beamTexture,
+          color: 0xff56a3,
+          transparent: true,
+          opacity: 0.11,
+          depthWrite: false,
+          depthTest: false,
+          blending: AdditiveBlending,
+        })
+      : null;
+    this.orangeBeam = this.orangeBeamMaterial ? new Sprite(this.orangeBeamMaterial) : null;
+    this.pinkBeam = this.pinkBeamMaterial ? new Sprite(this.pinkBeamMaterial) : null;
 
     this.preservedResources = new Set<BufferGeometry | Material>([
       this.bladeGeometry,
@@ -393,17 +451,29 @@ class MetalheartSculptureRenderer {
       this.iridescentMaterial,
       ...(this.glowMaterial ? [this.glowMaterial] : []),
       ...(this.streakMaterial ? [this.streakMaterial] : []),
+      ...(this.orangeBeamMaterial ? [this.orangeBeamMaterial] : []),
+      ...(this.pinkBeamMaterial ? [this.pinkBeamMaterial] : []),
     ]);
 
     this.camera.position.set(0, 0, CAMERA_DISTANCE);
     this.scene.add(this.sculpture);
-    this.scene.add(new AmbientLight(0x97a9c7, 0.48));
-    const keyLight = new DirectionalLight(0xf8fbff, 3.25);
+    this.scene.add(new AmbientLight(0xd5a1a7, 0.5));
+    const keyLight = new DirectionalLight(0xfff0df, 3.65);
     keyLight.position.set(-4.5, 5.6, 7.5);
     this.scene.add(keyLight);
-    this.cyanLight.position.set(-4.2, -1.4, 4.5);
+    this.amberLight.position.set(-4.2, -1.4, 4.5);
     this.pinkLight.position.set(4.8, 2.2, 3.5);
-    this.scene.add(this.cyanLight, this.pinkLight, this.pulseLight);
+    this.scene.add(this.amberLight, this.pinkLight, this.pulseLight);
+    if (this.orangeBeam) {
+      this.orangeBeam.center.set(0.07, 0.5);
+      this.orangeBeam.renderOrder = -4;
+      this.scene.add(this.orangeBeam);
+    }
+    if (this.pinkBeam) {
+      this.pinkBeam.center.set(0.09, 0.5);
+      this.pinkBeam.renderOrder = -3;
+      this.scene.add(this.pinkBeam);
+    }
     if (this.pulseStreak) {
       this.pulseStreak.renderOrder = 20;
       this.scene.add(this.pulseStreak);
@@ -442,15 +512,15 @@ class MetalheartSculptureRenderer {
       lerp(0.72, 1.72, Math.pow(hash(seed, 4), 1.7));
     const ribbonWidth = 0.035 + particle.thickness * 0.085;
     const tintMaterial = this.iridescentMaterial.clone();
-    const accentHue = ((particle.accent?.h ?? particle.color?.h ?? 205) % 360) / 360;
-    const bodyHue = ((particle.color?.h ?? particle.accent?.h ?? 205) % 360) / 360;
-    tintMaterial.color.setHSL(accentHue, 0.18, 0.74);
-    tintMaterial.emissive.setHSL(accentHue, 0.5, 0.055);
-    tintMaterial.emissiveIntensity = 0.055;
+    const warmHue = hash(seed, 303) > 0.46 ? 0.035 : 0.945;
+    const secondaryHue = warmHue < 0.5 ? 0.945 : 0.035;
+    tintMaterial.color.setHSL(warmHue, 0.24, 0.72);
+    tintMaterial.emissive.setHSL(warmHue, 0.86, 0.09);
+    tintMaterial.emissiveIntensity = 0.085;
     const secondaryTintMaterial = this.iridescentMaterial.clone();
-    secondaryTintMaterial.color.setHSL(bodyHue, 0.14, 0.72);
-    secondaryTintMaterial.emissive.setHSL(bodyHue, 0.46, 0.05);
-    secondaryTintMaterial.emissiveIntensity = 0.05;
+    secondaryTintMaterial.color.setHSL(secondaryHue, 0.2, 0.75);
+    secondaryTintMaterial.emissive.setHSL(secondaryHue, 0.82, 0.08);
+    secondaryTintMaterial.emissiveIntensity = 0.075;
     const primaryGeometry = makeRibbonGeometry(seed, length, ribbonWidth, 0.021, particle.curvature);
     const primaryRibbon = new Mesh(
       primaryGeometry,
@@ -623,13 +693,12 @@ class MetalheartSculptureRenderer {
       return null;
     }
 
-    const paletteParticle = active[active.length - 1];
-    const bodyHue = ((paletteParticle.color?.h ?? paletteParticle.accent?.h ?? 205) % 360) / 360;
-    const accentHue = ((paletteParticle.accent?.h ?? paletteParticle.color?.h ?? 314) % 360) / 360;
-    this.cyanLight.color.setHSL(bodyHue, 0.9, 0.68);
-    this.pinkLight.color.setHSL(accentHue, 0.92, 0.67);
-    this.glowMaterial?.color.setHSL(accentHue, 0.88, 0.72);
-    this.streakMaterial?.color.setHSL(bodyHue, 0.9, 0.76);
+    const focusParticle = active[active.length - 1];
+    const focus = this.particlePosition(focusParticle);
+    this.amberLight.color.setHSL(0.035, 0.94, 0.66);
+    this.pinkLight.color.setHSL(0.945, 0.92, 0.66);
+    this.glowMaterial?.color.setHSL(0.975, 0.9, 0.72);
+    this.streakMaterial?.color.setHSL(0.045, 0.92, 0.78);
 
     let forming = false;
     for (const record of this.clusters.values()) {
@@ -655,7 +724,7 @@ class MetalheartSculptureRenderer {
       4.8,
     );
     this.pulseLight.intensity = pulseEnvelope * 58;
-    this.pulseLight.color.setHSL((accentHue + 0.045) % 1, 0.94, 0.75);
+    this.pulseLight.color.setHSL(0.055, 0.92, 0.78);
     if (this.pulseStreak && this.streakMaterial) {
       this.pulseStreak.position.set(
         lerp(-this.viewWidth * 0.35, this.viewWidth * 0.35, easeInOutSine(pulseProgress)),
@@ -665,18 +734,30 @@ class MetalheartSculptureRenderer {
       this.pulseStreak.scale.set(this.viewWidth * 0.72, 0.22 + pulseEnvelope * 0.18, 1);
       this.streakMaterial.opacity = pulseEnvelope * 0.62;
     }
+    if (this.orangeBeam && this.orangeBeamMaterial) {
+      this.orangeBeam.position.set(focus.x - 0.08, focus.y + 0.03, -1.8);
+      this.orangeBeam.scale.set(Math.max(6.2, this.viewWidth * 0.92), this.viewHeight * 0.3, 1);
+      this.orangeBeamMaterial.rotation = -0.16 + Math.sin(now * 0.00015) * 0.035;
+      this.orangeBeamMaterial.opacity = 0.15 + pulseEnvelope * 0.16;
+    }
+    if (this.pinkBeam && this.pinkBeamMaterial) {
+      this.pinkBeam.position.set(focus.x + 0.04, focus.y - 0.04, -1.7);
+      this.pinkBeam.scale.set(Math.max(5.4, this.viewWidth * 0.78), this.viewHeight * 0.24, 1);
+      this.pinkBeamMaterial.rotation = 0.42 + Math.cos(now * 0.00013) * 0.045;
+      this.pinkBeamMaterial.opacity = 0.11 + pulseEnvelope * 0.13;
+    }
     this.chromeMaterial.emissiveIntensity = 0.035 + pulseEnvelope * 0.2;
     this.iridescentMaterial.emissiveIntensity = 0.06 + pulseEnvelope * 0.34;
     this.iridescentMaterial.iridescence = 0.92 + pulseEnvelope * 0.08;
-    if (this.glowMaterial) this.glowMaterial.opacity = 0.15 + pulseEnvelope * 0.11;
-    this.renderer.toneMappingExposure = 1.28 + pulseEnvelope * 0.4;
+    if (this.glowMaterial) this.glowMaterial.opacity = 0.19 + pulseEnvelope * 0.14;
+    this.renderer.toneMappingExposure = 1.4 + pulseEnvelope * 0.46;
     this.camera.position.z = CAMERA_DISTANCE - pulseEnvelope * 0.38;
     this.camera.position.x = Math.sin(now * 0.00011) * 0.08;
     this.camera.lookAt(0, 0, 0);
     this.sculpture.rotation.y = Math.sin(now * 0.00013) * 0.075;
     this.sculpture.rotation.x = Math.cos(now * 0.0001) * 0.035;
-    this.cyanLight.intensity = 26 + pulseEnvelope * 13;
-    this.pinkLight.intensity = 20 + pulseEnvelope * 10;
+    this.amberLight.intensity = 34 + pulseEnvelope * 16;
+    this.pinkLight.intensity = 27 + pulseEnvelope * 13;
 
     this.renderer.render(this.scene, this.camera);
     return { canvas: this.canvas, forming };
@@ -706,8 +787,11 @@ class MetalheartSculptureRenderer {
     this.iridescentMaterial.dispose();
     this.glowMaterial?.dispose();
     this.streakMaterial?.dispose();
+    this.orangeBeamMaterial?.dispose();
+    this.pinkBeamMaterial?.dispose();
     this.glowTexture?.dispose();
     this.streakTexture?.dispose();
+    this.beamTexture?.dispose();
     this.environmentTarget.dispose();
     this.renderer.dispose();
   }
@@ -762,11 +846,11 @@ export function drawMetalheartParticle(
   context.lineJoin = "miter";
   const gradient = context.createLinearGradient(-length / 2, -height, length / 2, height);
   gradient.addColorStop(0, "#03050b");
-  gradient.addColorStop(0.22, "#718099");
-  gradient.addColorStop(0.38, "#f9fcff");
-  gradient.addColorStop(0.52, "#78e8ff");
-  gradient.addColorStop(0.66, "#080b14");
-  gradient.addColorStop(0.82, hash(seed, 8) > 0.5 ? "#ff8ce5" : "#779dff");
+  gradient.addColorStop(0.22, "#9a6268");
+  gradient.addColorStop(0.38, "#fff2df");
+  gradient.addColorStop(0.52, "#ff7a43");
+  gradient.addColorStop(0.66, "#13060a");
+  gradient.addColorStop(0.82, hash(seed, 8) > 0.5 ? "#ff58a3" : "#ff9874");
   gradient.addColorStop(1, "#020309");
   context.strokeStyle = gradient;
   context.lineWidth = Math.max(1, height);
@@ -792,7 +876,7 @@ export function drawMetalheartPulse(
   context.globalCompositeOperation = "screen";
   context.beginPath();
   context.ellipse(centerX, centerY, radius * 1.75, radius, -0.12, 0, TAU);
-  context.strokeStyle = `rgba(207, 244, 255, ${fade * 0.32})`;
+  context.strokeStyle = `rgba(255, 223, 203, ${fade * 0.32})`;
   context.lineWidth = Math.max(0.6, Math.min(width, height) * 0.0015);
   context.stroke();
   context.restore();
