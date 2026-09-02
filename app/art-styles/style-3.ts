@@ -214,11 +214,11 @@ function createStreakTexture() {
   const context = canvas.getContext("2d");
   if (!context) return null;
   const horizontal = context.createLinearGradient(0, 0, canvas.width, 0);
-  horizontal.addColorStop(0, "rgba(70, 150, 255, 0)");
-  horizontal.addColorStop(0.38, "rgba(104, 225, 255, 0.38)");
+  horizontal.addColorStop(0, "rgba(255, 255, 255, 0)");
+  horizontal.addColorStop(0.38, "rgba(255, 255, 255, 0.38)");
   horizontal.addColorStop(0.5, "rgba(255, 255, 255, 1)");
-  horizontal.addColorStop(0.62, "rgba(255, 118, 226, 0.38)");
-  horizontal.addColorStop(1, "rgba(255, 95, 218, 0)");
+  horizontal.addColorStop(0.62, "rgba(255, 255, 255, 0.38)");
+  horizontal.addColorStop(1, "rgba(255, 255, 255, 0)");
   context.fillStyle = horizontal;
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.globalCompositeOperation = "destination-in";
@@ -303,7 +303,7 @@ class MetalheartSculptureRenderer {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.18;
+    this.renderer.toneMappingExposure = 1.28;
     this.renderer.setPixelRatio(1);
 
     const pmrem = new PMREMGenerator(this.renderer);
@@ -324,10 +324,10 @@ class MetalheartSculptureRenderer {
       roughness: 0.095,
       clearcoat: 1,
       clearcoatRoughness: 0.055,
-      iridescence: 0.62,
+      iridescence: 0.7,
       iridescenceIOR: 1.55,
       iridescenceThicknessRange: [135, 520],
-      envMapIntensity: 2.7,
+      envMapIntensity: 3,
       emissive: new Color(0x07101b),
       emissiveIntensity: 0.035,
       side: DoubleSide,
@@ -355,13 +355,15 @@ class MetalheartSculptureRenderer {
       iridescence: 1,
       iridescenceIOR: 1.82,
       iridescenceThicknessRange: [110, 690],
-      envMapIntensity: 3.1,
+      envMapIntensity: 3.4,
       emissive: new Color(0x0a1624),
       emissiveIntensity: 0.06,
       side: DoubleSide,
     });
 
-    this.glowTexture = createRadialTexture("rgba(142, 229, 255, 0.78)", "rgba(255, 94, 220, 0)");
+    // Keep the glow texture neutral so the live Aura/Pixel palette can tint
+    // the light spill instead of baking Metalheart into an isolated cyan look.
+    this.glowTexture = createRadialTexture("rgba(255, 255, 255, 0.82)", "rgba(255, 255, 255, 0)");
     this.shadowTexture = createRadialTexture("rgba(0, 0, 7, 0.92)", "rgba(0, 0, 9, 0)", 160);
     this.streakTexture = createStreakTexture();
     this.glowMaterial = this.glowTexture
@@ -369,7 +371,7 @@ class MetalheartSculptureRenderer {
           map: this.glowTexture,
           color: 0xc8eeff,
           transparent: true,
-          opacity: 0.11,
+          opacity: 0.15,
           depthWrite: false,
           blending: AdditiveBlending,
         })
@@ -456,11 +458,19 @@ class MetalheartSculptureRenderer {
     const ribbonWidth = 0.035 + particle.thickness * 0.085;
     const tintMaterial = this.iridescentMaterial.clone();
     const accentHue = ((particle.accent?.h ?? particle.color?.h ?? 205) % 360) / 360;
-    tintMaterial.color.setHSL(accentHue, 0.46, 0.69);
-    tintMaterial.emissive.setHSL(accentHue, 0.72, 0.055);
-    tintMaterial.emissiveIntensity = 0.065;
+    const bodyHue = ((particle.color?.h ?? particle.accent?.h ?? 205) % 360) / 360;
+    tintMaterial.color.setHSL(accentHue, 0.5, 0.7);
+    tintMaterial.emissive.setHSL(accentHue, 0.82, 0.075);
+    tintMaterial.emissiveIntensity = 0.095;
+    const secondaryTintMaterial = this.iridescentMaterial.clone();
+    secondaryTintMaterial.color.setHSL(bodyHue, 0.44, 0.7);
+    secondaryTintMaterial.emissive.setHSL(bodyHue, 0.8, 0.065);
+    secondaryTintMaterial.emissiveIntensity = 0.085;
     const primaryGeometry = makeRibbonGeometry(seed, length, ribbonWidth, 0.021, particle.curvature);
-    const primaryRibbon = new Mesh(primaryGeometry, hash(seed, 5) > 0.46 ? this.chromeMaterial : tintMaterial);
+    const primaryRibbon = new Mesh(
+      primaryGeometry,
+      hash(seed, 5) > 0.46 ? secondaryTintMaterial : tintMaterial,
+    );
     primaryRibbon.rotation.x = (hash(seed, 7) - 0.5) * 0.62;
     group.add(primaryRibbon);
 
@@ -478,9 +488,16 @@ class MetalheartSculptureRenderer {
 
     const plateCount = 5 + Math.floor(hash(seed, 11) * 4);
     for (let index = 0; index < plateCount; index += 1) {
+      const materialIndex = index % 5;
       const plate = new Mesh(
         this.bladeGeometry,
-        index % 4 === 0 ? tintMaterial : index % 2 === 0 ? this.chromeMaterial : this.blackChromeMaterial,
+        materialIndex === 0
+          ? tintMaterial
+          : materialIndex === 2
+            ? secondaryTintMaterial
+            : materialIndex === 3
+              ? this.chromeMaterial
+              : this.blackChromeMaterial,
       );
       const progress = plateCount === 1 ? 0.5 : index / (plateCount - 1);
       plate.position.set(
@@ -503,9 +520,16 @@ class MetalheartSculptureRenderer {
 
     const shardCount = 3 + Math.floor(hash(seed, 181) * 3);
     for (let index = 0; index < shardCount; index += 1) {
+      const materialIndex = (index + 2) % 5;
       const shard = new Mesh(
         this.shardGeometry,
-        index % 3 === 0 ? tintMaterial : index % 2 === 0 ? this.chromeMaterial : this.blackChromeMaterial,
+        materialIndex === 0
+          ? tintMaterial
+          : materialIndex === 2
+            ? secondaryTintMaterial
+            : materialIndex === 3
+              ? this.chromeMaterial
+              : this.blackChromeMaterial,
       );
       shard.position.set(
         (hash(seed, 190 + index) - 0.5) * length * 0.74,
@@ -622,9 +646,12 @@ class MetalheartSculptureRenderer {
     }
 
     const paletteParticle = active[active.length - 1];
-    const paletteHue = ((paletteParticle.accent?.h ?? paletteParticle.color?.h ?? 314) % 360) / 360;
-    this.cyanLight.color.setHSL(0.54, 0.88, 0.66);
-    this.pinkLight.color.setHSL(paletteHue, 0.9, 0.65);
+    const bodyHue = ((paletteParticle.color?.h ?? paletteParticle.accent?.h ?? 205) % 360) / 360;
+    const accentHue = ((paletteParticle.accent?.h ?? paletteParticle.color?.h ?? 314) % 360) / 360;
+    this.cyanLight.color.setHSL(bodyHue, 0.9, 0.68);
+    this.pinkLight.color.setHSL(accentHue, 0.92, 0.67);
+    this.glowMaterial?.color.setHSL(accentHue, 0.88, 0.72);
+    this.streakMaterial?.color.setHSL(bodyHue, 0.9, 0.76);
 
     let forming = false;
     for (const record of this.clusters.values()) {
@@ -650,7 +677,7 @@ class MetalheartSculptureRenderer {
       4.8,
     );
     this.pulseLight.intensity = pulseEnvelope * 58;
-    this.pulseLight.color.setHSL((paletteHue + 0.065) % 1, 0.92, 0.72);
+    this.pulseLight.color.setHSL((accentHue + 0.045) % 1, 0.94, 0.75);
     if (this.pulseStreak && this.streakMaterial) {
       this.pulseStreak.position.set(
         lerp(-this.viewWidth * 0.35, this.viewWidth * 0.35, easeInOutSine(pulseProgress)),
@@ -663,7 +690,8 @@ class MetalheartSculptureRenderer {
     this.chromeMaterial.emissiveIntensity = 0.035 + pulseEnvelope * 0.2;
     this.iridescentMaterial.emissiveIntensity = 0.06 + pulseEnvelope * 0.34;
     this.iridescentMaterial.iridescence = 0.92 + pulseEnvelope * 0.08;
-    this.renderer.toneMappingExposure = 1.18 + pulseEnvelope * 0.34;
+    if (this.glowMaterial) this.glowMaterial.opacity = 0.15 + pulseEnvelope * 0.11;
+    this.renderer.toneMappingExposure = 1.28 + pulseEnvelope * 0.4;
     this.camera.position.z = CAMERA_DISTANCE - pulseEnvelope * 0.38;
     this.camera.position.x = Math.sin(now * 0.00011) * 0.08;
     this.camera.lookAt(0, 0, 0);

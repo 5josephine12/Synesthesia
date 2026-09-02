@@ -443,5 +443,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const WEBGL_PIXEL_BUDGET = 720_000/);
   assert.match(styleThreeSource, /antialias: false/);
   assert.match(styleThreeSource, /const plateCount = 5 \+ Math\.floor/);
+  assert.match(styleThreeSource, /this\.cyanLight\.color\.setHSL\(bodyHue/);
+  assert.match(styleThreeSource, /this\.pinkLight\.color\.setHSL\(accentHue/);
+  assert.match(styleThreeSource, /this\.glowMaterial\?\.color\.setHSL\(accentHue/);
+  assert.match(auraSource, /brightness\(1\.55\) saturate\(1\.28\)/);
+  assert.match(auraSource, /context\.globalAlpha = 0\.62/);
   assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
 });

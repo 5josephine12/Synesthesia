@@ -1982,6 +1982,33 @@ function drawChronologicalAuraLayers(
     } else if (runKind === "metalheart") {
       if (metalheartCanvas) {
         if (lastMetalheartIndex >= runStart && lastMetalheartIndex < runEnd) {
+          // Bloom a single reduced-resolution copy before the crisp WebGL pass.
+          // It recreates Metalheart's luminous, overexposed rendering language
+          // without adding another WebGL render target or an accumulating layer.
+          blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
+          blurredContext.save();
+          blurredContext.filter = `blur(${Math.max(2, blurRadius * 1.65)}px) brightness(1.55) saturate(1.28)`;
+          blurredContext.drawImage(
+            metalheartCanvas,
+            0,
+            0,
+            blurredLayer.width,
+            blurredLayer.height,
+          );
+          blurredContext.restore();
+
+          context.save();
+          context.globalCompositeOperation = "screen";
+          context.globalAlpha = 0.62;
+          context.drawImage(blurredLayer, 0, 0, width, height);
+          context.restore();
+
+          context.save();
+          context.globalCompositeOperation = "screen";
+          context.globalAlpha = 0.2;
+          context.drawImage(metalheartCanvas, 0, 0, width, height);
+          context.restore();
+
           context.save();
           context.globalCompositeOperation = "source-over";
           context.drawImage(metalheartCanvas, 0, 0, width, height);
