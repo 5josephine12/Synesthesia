@@ -14,10 +14,14 @@ const telemetryRendererReady = import("./art-styles/telemetry").then((renderer) 
 
 type MetalheartRenderer = typeof import("./art-styles/style-3");
 let metalheartRenderer: MetalheartRenderer | null = null;
-const metalheartRendererReady = import("./art-styles/style-3").then((renderer) => {
-  metalheartRenderer = renderer;
-  return renderer;
-});
+let metalheartRendererReady: Promise<MetalheartRenderer> | null = null;
+function loadMetalheartRenderer() {
+  metalheartRendererReady ??= import("./art-styles/style-3").then((renderer) => {
+    metalheartRenderer = renderer;
+    return renderer;
+  });
+  return metalheartRendererReady;
+}
 
 type SolidControlIconName =
   | "check"
@@ -335,7 +339,7 @@ const BLOB_ARRIVAL_DURATION = 550;
 const DOTTED_VISIBLE_FORMATIONS = 4;
 const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
-const METALHEART_FORMATION_DURATION = 1600;
+const METALHEART_FORMATION_DURATION = 1900;
 const METALHEART_PULSE_DURATION = 920;
 const MAX_LIVE_VISUAL_PARTICLES = 48;
 const HARD_MAX_LIVE_VISUAL_PARTICLES = 72;
@@ -420,6 +424,13 @@ const PIXEL_COMPOSITION_ANCHORS = [
   [0.91, 0.44],
   [0.27, 0.74],
   [0.73, 0.73],
+] as const;
+
+const METALHEART_COMPOSITION_ANCHORS = [
+  [0.38, 0.34],
+  [0.64, 0.46],
+  [0.43, 0.62],
+  [0.69, 0.3],
 ] as const;
 
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
@@ -1858,6 +1869,7 @@ function drawChronologicalAuraLayers(
   blurRadius: number,
   replayProgress?: number,
   hasEarlierArtwork = false,
+  metalheartCanvas?: CanvasImageSource | null,
 ) {
   const replayPosition = replayProgress === undefined
     ? Number.POSITIVE_INFINITY
@@ -1873,6 +1885,14 @@ function drawChronologicalAuraLayers(
     dottedCount += 1;
     if (dottedCount === DOTTED_VISIBLE_FORMATIONS) {
       dottedWindowStart = index;
+      break;
+    }
+  }
+  let lastMetalheartIndex = -1;
+  if (metalheartCanvas) {
+    for (let index = visibleLimit - 1; index >= 0; index -= 1) {
+      if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-3") continue;
+      lastMetalheartIndex = index;
       break;
     }
   }
@@ -1960,6 +1980,16 @@ function drawChronologicalAuraLayers(
         context.restore();
       }
     } else if (runKind === "metalheart") {
+      if (metalheartCanvas) {
+        if (lastMetalheartIndex >= runStart && lastMetalheartIndex < runEnd) {
+          context.save();
+          context.globalCompositeOperation = "source-over";
+          context.drawImage(metalheartCanvas, 0, 0, width, height);
+          context.restore();
+        }
+        runStart = runEnd;
+        continue;
+      }
       organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
       drawAuraComposition(
         organicContext,
@@ -2250,11 +2280,25 @@ export function AuraToy() {
 
   useEffect(() => {
     let active = true;
-    void Promise.all([metalheartRendererReady, telemetryRendererReady]).then(() => {
+    void telemetryRendererReady.then(() => {
       if (active) wakeRendererRef.current?.();
     });
+    const warmMetalheart = () => {
+      void loadMetalheartRenderer().then((renderer) => {
+        renderer.warmMetalheartRenderer();
+        if (active) wakeRendererRef.current?.();
+      });
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const idleId = idleWindow.requestIdleCallback?.(warmMetalheart, { timeout: 2400 });
+    const fallbackTimer = idleId === undefined ? window.setTimeout(warmMetalheart, 1600) : null;
     return () => {
       active = false;
+      if (idleId !== undefined) idleWindow.cancelIdleCallback?.(idleId);
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
     };
   }, []);
 
@@ -2568,6 +2612,12 @@ export function AuraToy() {
         PIXEL_COMPOSITION_ANCHORS.length,
       )
     ];
+    const metalheartAnchor = METALHEART_COMPOSITION_ANCHORS[
+      modulo(
+        Math.floor(compositionIndex / 3) + modeIndex,
+        METALHEART_COMPOSITION_ANCHORS.length,
+      )
+    ];
     const baseAngle =
       profile.angleBias + (identityRng() - 0.5) * Math.PI * 0.82 + (note.pc - 5.5) * 0.045;
     const trailDirection = baseAngle + (modeIndex - 2) * 0.12;
@@ -2579,6 +2629,14 @@ export function AuraToy() {
           0.06,
           0.94,
         )
+      : currentArtStyle === "style-3"
+        ? clamp(
+            lerp(baseX, metalheartAnchor[0], 0.7) +
+              Math.cos(trailDirection) * trailDistance * 0.32 +
+              (identityRng() - 0.5) * 0.022,
+            0.12,
+            0.88,
+          )
       : clamp(
           baseX + Math.cos(trailDirection) * trailDistance + Math.cos(trailDirection + Math.PI / 2) * trailBend,
           0.035,
@@ -2590,6 +2648,14 @@ export function AuraToy() {
           0.07,
           0.78,
         )
+      : currentArtStyle === "style-3"
+        ? clamp(
+            lerp(baseY, metalheartAnchor[1], 0.68) +
+              Math.sin(trailDirection) * trailDistance * 0.24 +
+              (identityRng() - 0.5) * 0.018,
+            0.12,
+            0.78,
+          )
       : clamp(
           baseY +
             Math.sin(trailDirection) * trailDistance * 0.74 +
@@ -4107,6 +4173,7 @@ export function AuraToy() {
       additiveLayerStartRef.current = 0;
       metalheartPulseRef.current.startedAt = Number.NEGATIVE_INFINITY;
       metalheartPulseRef.current.strength = 0;
+      metalheartRenderer?.resetMetalheartRenderer();
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
     };
@@ -4184,7 +4251,9 @@ export function AuraToy() {
 
       const compactedBlobs = blobs.slice(0, compactCount);
       const compactedVisibleBlobs = compactedBlobs.filter((blob, index) => {
-        const isDotted = (blob.artStyle ?? artStyleRef.current) === "style-2";
+        const blobStyle = blob.artStyle ?? artStyleRef.current;
+        if (blobStyle === "style-3") return false;
+        const isDotted = blobStyle === "style-2";
         return !isDotted || index >= oldestVisibleDottedIndex;
       });
       if (compactedVisibleBlobs.length > 0) {
@@ -4317,6 +4386,31 @@ export function AuraToy() {
       }
       const hasDottedStyle = Number.isFinite(newestDottedCreatedAt);
       const containsOrganicStyle = hasAuraStyle || hasMetalheartStyle;
+      const metalheartPulse = metalheartPulseRef.current;
+      const metalheartPulseProgress =
+        (now - metalheartPulse.startedAt) / METALHEART_PULSE_DURATION;
+      const metalheartPulseIsActive =
+        hasMetalheartStyle &&
+        !reducedMotionRef.current &&
+        metalheartPulseProgress >= 0 &&
+        metalheartPulseProgress < 1;
+      const metalheartFrame = hasMetalheartStyle
+        ? metalheartRenderer?.renderMetalheartFrame({
+            particles: blobsRef.current,
+            width,
+            height,
+            now,
+            reducedMotion: reducedMotionRef.current,
+            pulse: metalheartPulseIsActive
+              ? {
+                  progress: metalheartPulseProgress,
+                  strength: metalheartPulse.strength,
+                  x: metalheartPulse.x,
+                  y: metalheartPulse.y,
+                }
+              : undefined,
+          })
+        : null;
       const dottedMotionIsActive =
         hasDottedStyle &&
         !reducedMotionRef.current &&
@@ -4391,6 +4485,7 @@ export function AuraToy() {
           blurRadius,
           undefined,
           hasCompactedHistory,
+          metalheartFrame?.canvas,
         );
       } else if (hasDottedStyle) {
         const pixelLayerNeedsRefresh =
@@ -4431,15 +4526,7 @@ export function AuraToy() {
         context.restore();
       }
 
-      const metalheartPulse = metalheartPulseRef.current;
-      const metalheartPulseProgress =
-        (now - metalheartPulse.startedAt) / METALHEART_PULSE_DURATION;
-      const metalheartPulseIsActive =
-        hasMetalheartStyle &&
-        !reducedMotionRef.current &&
-        metalheartPulseProgress >= 0 &&
-        metalheartPulseProgress < 1;
-      if (metalheartPulseIsActive) {
+      if (metalheartPulseIsActive && !metalheartFrame) {
         metalheartRenderer?.drawMetalheartPulse(context, {
           centerX: metalheartPulse.x * width,
           centerY: metalheartPulse.y * height,
@@ -4511,6 +4598,7 @@ export function AuraToy() {
       }
       if (
         hasArrivingBlob ||
+        metalheartFrame?.forming ||
         metalheartPulseIsActive ||
         dottedMotionIsActive ||
         settledCount < blobsRef.current.length ||
@@ -4552,6 +4640,7 @@ export function AuraToy() {
       resizeObserver.disconnect();
       cancelScheduledWake();
       window.cancelAnimationFrame(frame);
+      metalheartRenderer?.disposeMetalheartRenderer();
     };
   }, []);
 
@@ -4734,6 +4823,15 @@ export function AuraToy() {
     const containsOrganicStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
     );
+    const exportMetalheartFrame = hasMetalheartStyle
+      ? metalheartRenderer?.renderMetalheartFrame({
+          particles: blobsRef.current,
+          width: output.width,
+          height: output.height,
+          now: performance.now(),
+          reducedMotion: replayProgress === undefined,
+        })
+      : null;
     paintArtworkBackground(outputContext, output.width, output.height);
     if (hasCompactedHistory && compactedHistory) {
       outputContext.save();
@@ -4765,6 +4863,7 @@ export function AuraToy() {
         outputBlurRadius * layerScale,
         replayProgress,
         hasCompactedHistory,
+        exportMetalheartFrame?.canvas,
       );
     } else if (hasDottedStyle) {
       drawDottedSigilFlowLayer(
@@ -5060,6 +5159,12 @@ export function AuraToy() {
       // The renderer reads this ref directly, so update it before React's next render.
       artStyleRef.current = nextStyle.id;
       setArtStyle(nextStyle.id);
+      if (nextStyle.id === "style-3") {
+        void loadMetalheartRenderer().then((renderer) => {
+          renderer.warmMetalheartRenderer();
+          wakeRendererRef.current?.();
+        });
+      }
       wakeRendererRef.current?.();
       hapticFeedback("confirm");
     },

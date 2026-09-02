@@ -1,3 +1,73 @@
+import {
+  ACESFilmicToneMapping,
+  AdditiveBlending,
+  AmbientLight,
+  CanvasTexture,
+  CatmullRomCurve3,
+  Color,
+  ConeGeometry,
+  DirectionalLight,
+  DoubleSide,
+  ExtrudeGeometry,
+  Group,
+  MathUtils,
+  Mesh,
+  MeshPhysicalMaterial,
+  NormalBlending,
+  PointLight,
+  PerspectiveCamera,
+  PMREMGenerator,
+  Scene,
+  Shape,
+  Sprite,
+  SpriteMaterial,
+  SRGBColorSpace,
+  Vector3,
+  WebGLRenderer,
+  type BufferGeometry,
+  type Material,
+  type Object3D,
+  type WebGLRenderTarget,
+} from "three";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+
+export type MetalheartParticleState = {
+  id: number;
+  artStyle?: string;
+  midi: number;
+  repeat: number;
+  x: number;
+  y: number;
+  radius: number;
+  angle: number;
+  stretch: number;
+  thickness: number;
+  curvature: number;
+  velocity: number;
+  createdAt: number;
+};
+
+export type MetalheartPulseState = {
+  progress: number;
+  strength: number;
+  x: number;
+  y: number;
+};
+
+export type MetalheartFrameOptions = {
+  particles: readonly MetalheartParticleState[];
+  width: number;
+  height: number;
+  now: number;
+  reducedMotion: boolean;
+  pulse?: MetalheartPulseState;
+};
+
+export type MetalheartFrame = {
+  canvas: HTMLCanvasElement;
+  forming: boolean;
+};
+
 export type MetalheartParticleOptions = {
   seed: number;
   midi: number;
@@ -21,6 +91,11 @@ export type MetalheartPulseOptions = {
   strength: number;
 };
 
+const CAMERA_FOV = 31;
+const CAMERA_DISTANCE = 12;
+const FORMATION_DURATION = 1900;
+const MAX_SCULPTURE_NODES = 8;
+const WEBGL_PIXEL_BUDGET = 720_000;
 const TAU = Math.PI * 2;
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -36,6 +111,10 @@ function easeOutCubic(value: number) {
   return 1 - Math.pow(1 - progress, 3);
 }
 
+function easeInOutSine(value: number) {
+  return -(Math.cos(Math.PI * clamp(value, 0, 1)) - 1) / 2;
+}
+
 function hash(seed: number, index: number) {
   let value = (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
   value = Math.imul(value ^ (value >>> 16), 0x21f0aaad);
@@ -43,187 +122,625 @@ function hash(seed: number, index: number) {
   return ((value ^ (value >>> 15)) >>> 0) / 4294967296;
 }
 
-function hsla(hue: number, saturation: number, lightness: number, alpha: number) {
-  return `hsla(${Math.round(hue)}, ${Math.round(saturation)}%, ${Math.round(lightness)}%, ${clamp(alpha, 0, 1)})`;
+function makeBladeGeometry() {
+  const shape = new Shape();
+  shape.moveTo(-1.08, -0.13);
+  shape.lineTo(-0.73, -0.32);
+  shape.lineTo(-0.18, -0.23);
+  shape.lineTo(0.06, -0.43);
+  shape.lineTo(1.12, -0.08);
+  shape.lineTo(0.52, 0.18);
+  shape.lineTo(0.15, 0.34);
+  shape.lineTo(-0.25, 0.19);
+  shape.lineTo(-0.8, 0.31);
+  shape.closePath();
+  const geometry = new ExtrudeGeometry(shape, {
+    depth: 0.13,
+    steps: 1,
+    bevelEnabled: true,
+    bevelSegments: 1,
+    bevelSize: 0.045,
+    bevelThickness: 0.045,
+  });
+  geometry.center();
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
-function traceMechanicalPlate(
-  context: CanvasRenderingContext2D,
+function makeRibbonGeometry(
+  seed: number,
   length: number,
-  height: number,
-  variant: number,
+  width: number,
+  depth: number,
   curvature: number,
+  offset = 0,
 ) {
-  const notch = (0.1 + variant * 0.018) * length;
-  const bend = curvature * height * 0.12;
-  context.beginPath();
-  context.moveTo(-length * 0.52, height * (0.08 + variant * 0.018));
-  context.lineTo(-length * 0.34, -height * 0.42 + bend);
-  context.lineTo(-length * 0.1, -height * (0.5 - variant * 0.035));
-  context.lineTo(length * 0.02, -height * 0.32);
-  context.lineTo(length * 0.18 + notch, -height * 0.46 - bend);
-  context.lineTo(length * 0.54, -height * 0.12);
-  context.lineTo(length * 0.37, height * 0.26 + bend);
-  context.lineTo(length * 0.08, height * (0.48 - variant * 0.025));
-  context.lineTo(-length * 0.12, height * 0.29);
-  context.lineTo(-length * 0.41, height * 0.42 - bend);
-  context.closePath();
+  const crossSection = new Shape();
+  crossSection.moveTo(-width * 0.5, -depth * 0.5);
+  crossSection.lineTo(width * 0.5, -depth * 0.5);
+  crossSection.lineTo(width * 0.5, depth * 0.5);
+  crossSection.lineTo(-width * 0.5, depth * 0.5);
+  crossSection.closePath();
+
+  const points: Vector3[] = [];
+  const phase = hash(seed, 2) * TAU + offset;
+  for (let index = 0; index < 7; index += 1) {
+    const progress = index / 6;
+    const taper = Math.sin(progress * Math.PI);
+    points.push(
+      new Vector3(
+        (progress - 0.5) * length,
+        Math.sin(progress * Math.PI * 1.85 + phase) * width * (1.1 + taper * 1.45) +
+          curvature * width * (progress - 0.5) * 1.25,
+        Math.cos(progress * Math.PI * 2.35 + phase * 0.72) * width * (0.72 + taper * 1.7),
+      ),
+    );
+  }
+  const path = new CatmullRomCurve3(points, false, "centripetal", 0.45);
+  const geometry = new ExtrudeGeometry(crossSection, {
+    steps: 30,
+    bevelEnabled: false,
+    extrudePath: path,
+  });
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
-function chromeGradient(
-  context: CanvasRenderingContext2D,
-  length: number,
-  height: number,
-  alpha: number,
-  accentHue: number,
-  reverse: boolean,
-) {
-  const gradient = context.createLinearGradient(
-    -length * 0.48,
-    reverse ? height * 0.36 : -height * 0.38,
-    length * 0.5,
-    reverse ? -height * 0.34 : height * 0.4,
-  );
-  gradient.addColorStop(0, `rgba(1, 3, 9, ${alpha * 0.96})`);
-  gradient.addColorStop(0.16, `rgba(20, 27, 42, ${alpha * 0.98})`);
-  gradient.addColorStop(0.3, hsla(218, 40, 76, alpha * 0.84));
-  gradient.addColorStop(0.39, `rgba(250, 253, 255, ${alpha})`);
-  gradient.addColorStop(0.47, hsla(190, 94, 75, alpha * 0.96));
-  gradient.addColorStop(0.59, `rgba(9, 14, 25, ${alpha * 0.98})`);
-  gradient.addColorStop(0.73, hsla(accentHue, 88, 71, alpha * 0.88));
-  gradient.addColorStop(0.84, `rgba(238, 246, 255, ${alpha * 0.94})`);
-  gradient.addColorStop(1, `rgba(3, 5, 12, ${alpha * 0.96})`);
-  return gradient;
+function createRadialTexture(inner: string, outer: string, size = 128) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, inner);
+  gradient.addColorStop(0.34, inner);
+  gradient.addColorStop(1, outer);
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, size, size);
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
 }
 
+function createStreakTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 32;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const horizontal = context.createLinearGradient(0, 0, canvas.width, 0);
+  horizontal.addColorStop(0, "rgba(70, 150, 255, 0)");
+  horizontal.addColorStop(0.38, "rgba(104, 225, 255, 0.38)");
+  horizontal.addColorStop(0.5, "rgba(255, 255, 255, 1)");
+  horizontal.addColorStop(0.62, "rgba(255, 118, 226, 0.38)");
+  horizontal.addColorStop(1, "rgba(255, 95, 218, 0)");
+  context.fillStyle = horizontal;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.globalCompositeOperation = "destination-in";
+  const vertical = context.createLinearGradient(0, 0, 0, canvas.height);
+  vertical.addColorStop(0, "rgba(255, 255, 255, 0)");
+  vertical.addColorStop(0.45, "rgba(255, 255, 255, 0.92)");
+  vertical.addColorStop(0.55, "rgba(255, 255, 255, 0.92)");
+  vertical.addColorStop(1, "rgba(255, 255, 255, 0)");
+  context.fillStyle = vertical;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  const texture = new CanvasTexture(canvas);
+  texture.colorSpace = SRGBColorSpace;
+  return texture;
+}
+
+function disposeObject(object: Object3D, preserve: ReadonlySet<BufferGeometry | Material>) {
+  object.traverse((child) => {
+    if (!(child instanceof Mesh)) return;
+    if (!preserve.has(child.geometry)) child.geometry.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) {
+      if (!preserve.has(material)) material.dispose();
+    }
+  });
+}
+
+type ClusterRecord = {
+  group: Group;
+  particle: MetalheartParticleState;
+  seed: number;
+};
+
+class MetalheartSculptureRenderer {
+  readonly canvas: HTMLCanvasElement;
+
+  private readonly renderer: WebGLRenderer;
+  private readonly scene = new Scene();
+  private readonly camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.1, 80);
+  private readonly sculpture = new Group();
+  private readonly chromeMaterial: MeshPhysicalMaterial;
+  private readonly blackChromeMaterial: MeshPhysicalMaterial;
+  private readonly iridescentMaterial: MeshPhysicalMaterial;
+  private readonly bladeGeometry = makeBladeGeometry();
+  private readonly shardGeometry = new ConeGeometry(0.13, 1.35, 5, 1, false);
+  private readonly glowTexture: CanvasTexture | null;
+  private readonly shadowTexture: CanvasTexture | null;
+  private readonly streakTexture: CanvasTexture | null;
+  private readonly glowMaterial: SpriteMaterial | null;
+  private readonly shadowMaterial: SpriteMaterial | null;
+  private readonly streakMaterial: SpriteMaterial | null;
+  private readonly pulseStreak: Sprite | null;
+  private readonly pulseLight = new PointLight(0xdff8ff, 0, 9.5, 1.45);
+  private readonly cyanLight = new PointLight(0x54cfff, 26, 15, 1.7);
+  private readonly pinkLight = new PointLight(0xff69dc, 20, 15, 1.8);
+  private readonly environmentTarget: WebGLRenderTarget;
+  private readonly preservedResources: ReadonlySet<BufferGeometry | Material>;
+  private readonly clusters = new Map<number, ClusterRecord>();
+  private bridge: Mesh | null = null;
+  private activeSignature = "";
+  private width = 0;
+  private height = 0;
+  private viewWidth = 1;
+  private viewHeight = 1;
+
+  constructor() {
+    this.canvas = document.createElement("canvas");
+    this.canvas.setAttribute("aria-hidden", "true");
+    this.renderer = new WebGLRenderer({
+      canvas: this.canvas,
+      alpha: true,
+      antialias: false,
+      depth: true,
+      stencil: false,
+      premultipliedAlpha: true,
+      powerPreference: "high-performance",
+      precision: "mediump",
+    });
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.outputColorSpace = SRGBColorSpace;
+    this.renderer.toneMapping = ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.18;
+    this.renderer.setPixelRatio(1);
+
+    const pmrem = new PMREMGenerator(this.renderer);
+    const room = new RoomEnvironment();
+    this.environmentTarget = pmrem.fromScene(room, 0.035, 0.1, 100, { size: 64 });
+    pmrem.dispose();
+    room.traverse((object) => {
+      if (!(object instanceof Mesh)) return;
+      object.geometry.dispose();
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) material.dispose();
+    });
+    this.scene.environment = this.environmentTarget.texture;
+
+    this.chromeMaterial = new MeshPhysicalMaterial({
+      color: new Color(0x9aa5b5),
+      metalness: 1,
+      roughness: 0.095,
+      clearcoat: 1,
+      clearcoatRoughness: 0.055,
+      iridescence: 0.62,
+      iridescenceIOR: 1.55,
+      iridescenceThicknessRange: [135, 520],
+      envMapIntensity: 2.7,
+      emissive: new Color(0x07101b),
+      emissiveIntensity: 0.035,
+      side: DoubleSide,
+    });
+    this.blackChromeMaterial = new MeshPhysicalMaterial({
+      color: new Color(0x060810),
+      metalness: 1,
+      roughness: 0.16,
+      clearcoat: 1,
+      clearcoatRoughness: 0.08,
+      iridescence: 0.34,
+      iridescenceIOR: 1.35,
+      iridescenceThicknessRange: [160, 390],
+      envMapIntensity: 2.35,
+      emissive: new Color(0x010205),
+      emissiveIntensity: 0.02,
+      side: DoubleSide,
+    });
+    this.iridescentMaterial = new MeshPhysicalMaterial({
+      color: new Color(0xc4d7ee),
+      metalness: 0.96,
+      roughness: 0.07,
+      clearcoat: 1,
+      clearcoatRoughness: 0.035,
+      iridescence: 1,
+      iridescenceIOR: 1.82,
+      iridescenceThicknessRange: [110, 690],
+      envMapIntensity: 3.1,
+      emissive: new Color(0x0a1624),
+      emissiveIntensity: 0.06,
+      side: DoubleSide,
+    });
+
+    this.glowTexture = createRadialTexture("rgba(142, 229, 255, 0.78)", "rgba(255, 94, 220, 0)");
+    this.shadowTexture = createRadialTexture("rgba(0, 0, 7, 0.92)", "rgba(0, 0, 9, 0)", 160);
+    this.streakTexture = createStreakTexture();
+    this.glowMaterial = this.glowTexture
+      ? new SpriteMaterial({
+          map: this.glowTexture,
+          color: 0xc8eeff,
+          transparent: true,
+          opacity: 0.16,
+          depthWrite: false,
+          blending: AdditiveBlending,
+        })
+      : null;
+    this.shadowMaterial = this.shadowTexture
+      ? new SpriteMaterial({
+          map: this.shadowTexture,
+          color: 0x02030a,
+          transparent: true,
+          opacity: 0.64,
+          depthWrite: false,
+          blending: NormalBlending,
+        })
+      : null;
+    this.streakMaterial = this.streakTexture
+      ? new SpriteMaterial({
+          map: this.streakTexture,
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          depthTest: false,
+          blending: AdditiveBlending,
+        })
+      : null;
+    this.pulseStreak = this.streakMaterial ? new Sprite(this.streakMaterial) : null;
+
+    this.preservedResources = new Set<BufferGeometry | Material>([
+      this.bladeGeometry,
+      this.shardGeometry,
+      this.chromeMaterial,
+      this.blackChromeMaterial,
+      this.iridescentMaterial,
+      ...(this.glowMaterial ? [this.glowMaterial] : []),
+      ...(this.shadowMaterial ? [this.shadowMaterial] : []),
+      ...(this.streakMaterial ? [this.streakMaterial] : []),
+    ]);
+
+    this.camera.position.set(0, 0, CAMERA_DISTANCE);
+    this.scene.add(this.sculpture);
+    this.scene.add(new AmbientLight(0x97a9c7, 0.48));
+    const keyLight = new DirectionalLight(0xf8fbff, 3.25);
+    keyLight.position.set(-4.5, 5.6, 7.5);
+    this.scene.add(keyLight);
+    this.cyanLight.position.set(-4.2, -1.4, 4.5);
+    this.pinkLight.position.set(4.8, 2.2, 3.5);
+    this.scene.add(this.cyanLight, this.pinkLight, this.pulseLight);
+    if (this.pulseStreak) {
+      this.pulseStreak.renderOrder = 20;
+      this.scene.add(this.pulseStreak);
+    }
+  }
+
+  private syncSize(width: number, height: number) {
+    const pixelScale = Math.min(1, Math.sqrt(WEBGL_PIXEL_BUDGET / Math.max(1, width * height)));
+    const targetWidth = Math.max(1, Math.round(width * pixelScale));
+    const targetHeight = Math.max(1, Math.round(height * pixelScale));
+    if (targetWidth !== this.width || targetHeight !== this.height) {
+      this.width = targetWidth;
+      this.height = targetHeight;
+      this.renderer.setSize(targetWidth, targetHeight, false);
+    }
+    const aspect = Math.max(0.2, width / Math.max(1, height));
+    this.camera.aspect = aspect;
+    this.camera.updateProjectionMatrix();
+    this.viewHeight = 2 * Math.tan(MathUtils.degToRad(CAMERA_FOV) / 2) * CAMERA_DISTANCE;
+    this.viewWidth = this.viewHeight * aspect;
+  }
+
+  private particlePosition(particle: MetalheartParticleState) {
+    return new Vector3(
+      (particle.x - 0.5) * this.viewWidth,
+      (0.5 - particle.y) * this.viewHeight,
+      lerp(-1.2, 1.25, hash(particle.id, 41)),
+    );
+  }
+
+  private createCluster(particle: MetalheartParticleState) {
+    const seed = particle.id * 4099 + particle.midi * 131 + particle.repeat * 17;
+    const group = new Group();
+    const length = 2.25 + particle.stretch * 0.5;
+    const ribbonWidth = 0.1 + particle.thickness * 0.22;
+    const primaryGeometry = makeRibbonGeometry(seed, length, ribbonWidth, 0.075, particle.curvature);
+    const primaryRibbon = new Mesh(primaryGeometry, this.chromeMaterial);
+    primaryRibbon.rotation.x = (hash(seed, 7) - 0.5) * 0.62;
+    group.add(primaryRibbon);
+
+    const darkGeometry = makeRibbonGeometry(
+      seed + 73,
+      length * 0.78,
+      ribbonWidth * 0.76,
+      0.095,
+      -particle.curvature,
+      Math.PI * 0.56,
+    );
+    const darkRibbon = new Mesh(darkGeometry, this.blackChromeMaterial);
+    darkRibbon.rotation.set(0.28 + hash(seed, 8) * 0.38, 0.12, -0.32);
+    group.add(darkRibbon);
+
+    const plateCount = 3 + Math.floor(hash(seed, 11) * 3);
+    for (let index = 0; index < plateCount; index += 1) {
+      const plate = new Mesh(
+        this.bladeGeometry,
+        index % 3 === 0 ? this.iridescentMaterial : index % 2 === 0 ? this.chromeMaterial : this.blackChromeMaterial,
+      );
+      const progress = plateCount === 1 ? 0.5 : index / (plateCount - 1);
+      plate.position.set(
+        lerp(-length * 0.33, length * 0.34, progress),
+        (hash(seed, 30 + index) - 0.5) * ribbonWidth * 3.2,
+        (hash(seed, 50 + index) - 0.5) * 0.72,
+      );
+      plate.rotation.set(
+        (hash(seed, 70 + index) - 0.5) * 1.15,
+        (hash(seed, 90 + index) - 0.5) * 1.25,
+        (hash(seed, 110 + index) - 0.5) * 0.82 + particle.angle * 0.36,
+      );
+      plate.scale.set(
+        lerp(0.38, 0.76, hash(seed, 130 + index)),
+        lerp(0.5, 1.05, hash(seed, 150 + index)),
+        lerp(0.75, 1.2, hash(seed, 170 + index)),
+      );
+      group.add(plate);
+    }
+
+    for (let index = 0; index < 2; index += 1) {
+      const shard = new Mesh(this.shardGeometry, index === 0 ? this.chromeMaterial : this.blackChromeMaterial);
+      shard.position.set(
+        (index === 0 ? -1 : 1) * length * lerp(0.22, 0.37, hash(seed, 190 + index)),
+        (hash(seed, 200 + index) - 0.5) * ribbonWidth * 4,
+        (hash(seed, 210 + index) - 0.5) * 0.6,
+      );
+      shard.rotation.set(hash(seed, 220 + index) * 1.2, hash(seed, 230 + index) * 1.1, particle.angle + index * 1.7);
+      shard.scale.set(0.72, lerp(0.85, 1.55, hash(seed, 240 + index)), 0.72);
+      group.add(shard);
+    }
+
+    if (this.shadowMaterial) {
+      const shadow = new Sprite(this.shadowMaterial);
+      shadow.position.z = -1.7;
+      shadow.scale.set(length * 1.7, length * 1.05, 1);
+      shadow.renderOrder = -2;
+      group.add(shadow);
+    }
+    if (this.glowMaterial) {
+      const glow = new Sprite(this.glowMaterial);
+      glow.position.set(0, 0, -0.45);
+      glow.scale.set(length * 0.9, length * 0.58, 1);
+      glow.renderOrder = -1;
+      group.add(glow);
+    }
+    group.scale.setScalar(0.001);
+    this.sculpture.add(group);
+    return { group, particle, seed } satisfies ClusterRecord;
+  }
+
+  private rebuildBridge(active: readonly MetalheartParticleState[]) {
+    if (this.bridge) {
+      this.sculpture.remove(this.bridge);
+      this.bridge.geometry.dispose();
+      this.bridge = null;
+    }
+    if (active.length < 2) return;
+    const bridgeParticles = active.slice(Math.max(0, active.length - 5));
+    const points = bridgeParticles.map((particle, index) => {
+      const point = this.particlePosition(particle);
+      point.z -= 0.35;
+      point.y += Math.sin(index * 1.8 + particle.id * 0.03) * 0.18;
+      return point;
+    });
+    if (points.length === 2) {
+      points.splice(1, 0, points[0].clone().lerp(points[1], 0.5).add(new Vector3(0, 0.28, -0.3)));
+    }
+    const path = new CatmullRomCurve3(points, false, "centripetal", 0.5);
+    const section = new Shape();
+    section.moveTo(-0.035, -0.055);
+    section.lineTo(0.035, -0.055);
+    section.lineTo(0.035, 0.055);
+    section.lineTo(-0.035, 0.055);
+    section.closePath();
+    const geometry = new ExtrudeGeometry(section, {
+      steps: Math.min(36, 12 + points.length * 5),
+      bevelEnabled: false,
+      extrudePath: path,
+    });
+    geometry.computeVertexNormals();
+    this.bridge = new Mesh(geometry, this.iridescentMaterial);
+    this.bridge.renderOrder = -1;
+    this.sculpture.add(this.bridge);
+  }
+
+  private syncParticles(particles: readonly MetalheartParticleState[]) {
+    const metalParticles: MetalheartParticleState[] = [];
+    for (let index = particles.length - 1; index >= 0 && metalParticles.length < MAX_SCULPTURE_NODES; index -= 1) {
+      const particle = particles[index];
+      if (particle.artStyle !== "style-3") continue;
+      metalParticles.push(particle);
+    }
+    metalParticles.reverse();
+    const signature = `${this.width}x${this.height}:${metalParticles.map((particle) => particle.id).join(":")}`;
+    const activeIds = new Set(metalParticles.map((particle) => particle.id));
+    for (const [id, record] of this.clusters) {
+      if (activeIds.has(id)) continue;
+      this.sculpture.remove(record.group);
+      disposeObject(record.group, this.preservedResources);
+      this.clusters.delete(id);
+    }
+    for (const particle of metalParticles) {
+      let record = this.clusters.get(particle.id);
+      if (!record) {
+        record = this.createCluster(particle);
+        this.clusters.set(particle.id, record);
+      }
+      record.particle = particle;
+      record.group.position.copy(this.particlePosition(particle));
+    }
+    if (signature !== this.activeSignature) {
+      this.activeSignature = signature;
+      this.rebuildBridge(metalParticles);
+    }
+    return metalParticles;
+  }
+
+  render(options: MetalheartFrameOptions): MetalheartFrame | null {
+    const { particles, width, height, now, reducedMotion, pulse } = options;
+    if (width <= 0 || height <= 0) return null;
+    this.syncSize(width, height);
+    const active = this.syncParticles(particles);
+    if (active.length === 0) {
+      this.renderer.clear();
+      return null;
+    }
+
+    let forming = false;
+    for (const record of this.clusters.values()) {
+      const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - record.particle.createdAt);
+      const arrival = easeOutCubic(age / FORMATION_DURATION);
+      if (arrival < 0.999) forming = true;
+      const scale = (0.38 + record.particle.radius * 3.5) * lerp(0.015, 1, arrival);
+      record.group.scale.setScalar(scale);
+      record.group.rotation.set(
+        record.particle.curvature * 0.13 + Math.sin(record.seed * 0.013) * 0.12,
+        (hash(record.seed, 301) - 0.5) * 0.8 + Math.sin(now * 0.00016 + record.seed) * 0.055,
+        record.particle.angle * 0.68 + (1 - arrival) * 0.42,
+      );
+    }
+
+    const pulseProgress = pulse?.progress ?? 2;
+    const pulseEnvelope = pulseProgress >= 0 && pulseProgress < 1
+      ? Math.sin(pulseProgress * Math.PI) * Math.pow(1 - pulseProgress, 0.65) * clamp(pulse?.strength ?? 0, 0, 1)
+      : 0;
+    this.pulseLight.position.set(
+      lerp(-this.viewWidth * 0.56, this.viewWidth * 0.56, easeInOutSine(pulseProgress)),
+      (0.5 - (pulse?.y ?? 0.5)) * this.viewHeight,
+      4.8,
+    );
+    this.pulseLight.intensity = pulseEnvelope * 58;
+    this.pulseLight.color.set((pulse?.x ?? 0.5) < 0.5 ? 0x8be7ff : 0xff9be8);
+    if (this.pulseStreak && this.streakMaterial) {
+      this.pulseStreak.position.set(
+        lerp(-this.viewWidth * 0.35, this.viewWidth * 0.35, easeInOutSine(pulseProgress)),
+        (0.5 - (pulse?.y ?? 0.5)) * this.viewHeight,
+        3.6,
+      );
+      this.pulseStreak.scale.set(this.viewWidth * 0.72, 0.22 + pulseEnvelope * 0.18, 1);
+      this.streakMaterial.opacity = pulseEnvelope * 0.62;
+    }
+    this.chromeMaterial.emissiveIntensity = 0.035 + pulseEnvelope * 0.2;
+    this.iridescentMaterial.emissiveIntensity = 0.06 + pulseEnvelope * 0.34;
+    this.iridescentMaterial.iridescence = 0.92 + pulseEnvelope * 0.08;
+    this.renderer.toneMappingExposure = 1.18 + pulseEnvelope * 0.34;
+    this.camera.position.z = CAMERA_DISTANCE - pulseEnvelope * 0.38;
+    this.camera.position.x = Math.sin(now * 0.00011) * 0.08;
+    this.camera.lookAt(0, 0, 0);
+    this.sculpture.rotation.y = Math.sin(now * 0.00013) * 0.075;
+    this.sculpture.rotation.x = Math.cos(now * 0.0001) * 0.035;
+    this.cyanLight.intensity = 26 + pulseEnvelope * 13;
+    this.pinkLight.intensity = 20 + pulseEnvelope * 10;
+
+    this.renderer.render(this.scene, this.camera);
+    return { canvas: this.canvas, forming };
+  }
+
+  reset() {
+    for (const record of this.clusters.values()) {
+      this.sculpture.remove(record.group);
+      disposeObject(record.group, this.preservedResources);
+    }
+    this.clusters.clear();
+    if (this.bridge) {
+      this.sculpture.remove(this.bridge);
+      this.bridge.geometry.dispose();
+      this.bridge = null;
+    }
+    this.activeSignature = "";
+    this.renderer.clear();
+  }
+
+  dispose() {
+    this.reset();
+    this.bladeGeometry.dispose();
+    this.shardGeometry.dispose();
+    this.chromeMaterial.dispose();
+    this.blackChromeMaterial.dispose();
+    this.iridescentMaterial.dispose();
+    this.glowMaterial?.dispose();
+    this.shadowMaterial?.dispose();
+    this.streakMaterial?.dispose();
+    this.glowTexture?.dispose();
+    this.shadowTexture?.dispose();
+    this.streakTexture?.dispose();
+    this.environmentTarget.dispose();
+    this.renderer.dispose();
+  }
+}
+
+let sculptureRenderer: MetalheartSculptureRenderer | null = null;
+let webglUnavailable = false;
+
+function getSculptureRenderer() {
+  if (webglUnavailable) return null;
+  try {
+    sculptureRenderer ??= new MetalheartSculptureRenderer();
+    return sculptureRenderer;
+  } catch {
+    webglUnavailable = true;
+    return null;
+  }
+}
+
+export function warmMetalheartRenderer() {
+  void getSculptureRenderer();
+}
+
+export function renderMetalheartFrame(options: MetalheartFrameOptions) {
+  return getSculptureRenderer()?.render(options) ?? null;
+}
+
+export function resetMetalheartRenderer() {
+  sculptureRenderer?.reset();
+}
+
+export function disposeMetalheartRenderer() {
+  sculptureRenderer?.dispose();
+  sculptureRenderer = null;
+  webglUnavailable = false;
+}
+
+// Canvas fallbacks keep the style responsive during the lazy WebGL warm-up and
+// on browsers that cannot create a WebGL context.
 export function drawMetalheartParticle(
   context: CanvasRenderingContext2D,
   options: MetalheartParticleOptions,
 ) {
-  const {
-    seed,
-    midi,
-    radius,
-    alpha,
-    arrival,
-    time,
-    stretch,
-    thickness,
-    curvature,
-    velocity,
-    repeat,
-  } = options;
-  if (radius <= 0 || alpha <= 0) return;
-
+  const { seed, radius, alpha, arrival, stretch, thickness, curvature, velocity } = options;
   const reveal = easeOutCubic(arrival);
-  const formation = clamp(time / 1600, 0, 1);
-  const flex = (1 - formation) * Math.sin(time * 0.0022 + seed * 0.017) * 0.075;
-  const accentHue = (midi + repeat) % 3 === 0 ? 314 : (midi + repeat) % 3 === 1 ? 205 : 184;
-  const length = radius * (1.82 + stretch * 0.54) * lerp(0.62, 1, reveal);
-  const height = radius * (0.62 + thickness * 0.82) * lerp(0.76, 1, reveal);
-  const plateCount = 3 + Math.floor(hash(seed, 2) * 3);
-
+  if (radius <= 0 || alpha <= 0 || reveal <= 0) return;
+  const length = radius * (1.5 + stretch * 0.52) * lerp(0.24, 1, reveal);
+  const height = radius * (0.24 + thickness * 0.42);
   context.save();
-  context.rotate(flex);
   context.globalAlpha = alpha;
-  context.lineJoin = "miter";
   context.lineCap = "square";
-
-  // A dark extrusion gives the sculpture weight without relying on expensive blur.
-  context.save();
-  context.translate(radius * 0.055, radius * 0.075);
-  context.fillStyle = `rgba(0, 2, 8, ${0.72 * reveal})`;
-  traceMechanicalPlate(context, length, height, 2, curvature);
-  context.fill();
-  context.restore();
-
-  for (let plate = 0; plate < plateCount; plate += 1) {
-    const plateProgress = plateCount === 1 ? 0.5 : plate / (plateCount - 1);
-    const plateReveal = clamp((reveal - plateProgress * 0.14) / 0.72, 0, 1);
-    if (plateReveal <= 0) continue;
-    const direction = plate % 2 === 0 ? 1 : -1;
-    const plateLength = length * lerp(0.38, 0.78, hash(seed, 20 + plate));
-    const plateHeight = height * lerp(0.34, 0.76, hash(seed, 40 + plate));
-    const plateX = lerp(-length * 0.28, length * 0.3, plateProgress);
-    const plateY = direction * height * lerp(0.05, 0.28, hash(seed, 60 + plate));
-    const plateAngle = direction * lerp(0.06, 0.32, hash(seed, 80 + plate)) + flex * 0.8;
-
-    context.save();
-    context.translate(plateX, plateY);
-    context.rotate(plateAngle);
-    context.scale(lerp(0.42, 1, plateReveal), lerp(0.72, 1, plateReveal));
-    context.fillStyle = chromeGradient(
-      context,
-      plateLength,
-      plateHeight,
-      plateReveal,
-      accentHue + plate * 5,
-      plate % 2 === 1,
-    );
-    traceMechanicalPlate(context, plateLength, plateHeight, plate, curvature * direction);
-    context.fill();
-
-    context.strokeStyle = plate % 2 === 0
-      ? `rgba(245, 251, 255, ${0.58 * plateReveal})`
-      : hsla(accentHue, 92, 80, 0.48 * plateReveal);
-    context.lineWidth = Math.max(0.55, radius * 0.014);
-    context.stroke();
-
-    context.beginPath();
-    context.moveTo(-plateLength * 0.31, -plateHeight * 0.18);
-    context.lineTo(plateLength * 0.27, plateHeight * 0.1);
-    context.strokeStyle = `rgba(255, 255, 255, ${0.7 * plateReveal})`;
-    context.lineWidth = Math.max(0.45, radius * 0.009);
-    context.stroke();
-    context.restore();
-  }
-
-  // A continuous liquid-metal spine binds individual plates into one sculpture.
-  const ribbonGradient = context.createLinearGradient(-length * 0.54, 0, length * 0.54, 0);
-  ribbonGradient.addColorStop(0, `rgba(2, 4, 11, ${0.2 * reveal})`);
-  ribbonGradient.addColorStop(0.22, hsla(220, 34, 74, 0.74 * reveal));
-  ribbonGradient.addColorStop(0.43, `rgba(255, 255, 255, ${0.92 * reveal})`);
-  ribbonGradient.addColorStop(0.56, hsla(191, 96, 76, 0.88 * reveal));
-  ribbonGradient.addColorStop(0.72, `rgba(7, 11, 23, ${0.86 * reveal})`);
-  ribbonGradient.addColorStop(0.88, hsla(accentHue, 92, 76, 0.72 * reveal));
-  ribbonGradient.addColorStop(1, `rgba(2, 4, 10, ${0.08 * reveal})`);
+  context.lineJoin = "miter";
+  const gradient = context.createLinearGradient(-length / 2, -height, length / 2, height);
+  gradient.addColorStop(0, "#03050b");
+  gradient.addColorStop(0.22, "#718099");
+  gradient.addColorStop(0.38, "#f9fcff");
+  gradient.addColorStop(0.52, "#78e8ff");
+  gradient.addColorStop(0.66, "#080b14");
+  gradient.addColorStop(0.82, hash(seed, 8) > 0.5 ? "#ff8ce5" : "#779dff");
+  gradient.addColorStop(1, "#020309");
+  context.strokeStyle = gradient;
+  context.lineWidth = Math.max(1, height);
   context.beginPath();
-  context.moveTo(-length * 0.56, height * 0.1);
-  context.bezierCurveTo(
-    -length * 0.22,
-    -height * (0.52 + curvature * 0.08),
-    length * 0.18,
-    height * (0.48 - curvature * 0.07),
-    length * 0.58,
-    -height * 0.07,
-  );
-  context.strokeStyle = ribbonGradient;
-  context.lineWidth = Math.max(1, height * (0.18 + velocity * 0.08));
+  context.moveTo(-length / 2, height * curvature * 0.5);
+  context.bezierCurveTo(-length * 0.18, -height * 2.4, length * 0.18, height * 2.2, length / 2, -height * curvature * 0.45);
   context.stroke();
-
-  context.beginPath();
-  context.moveTo(-length * 0.5, height * 0.06);
-  context.bezierCurveTo(-length * 0.18, -height * 0.42, length * 0.2, height * 0.38, length * 0.52, -height * 0.05);
-  context.strokeStyle = `rgba(255, 255, 255, ${0.72 * reveal})`;
-  context.lineWidth = Math.max(0.5, radius * 0.012);
+  context.strokeStyle = `rgba(255, 255, 255, ${0.7 * reveal})`;
+  context.lineWidth = Math.max(0.6, radius * (0.008 + velocity * 0.004));
   context.stroke();
-
-  // Fine mechanical struts echo the references without adding persistent DOM or textures.
-  const strutCount = 3 + ((seed + repeat) % 3);
-  for (let strut = 0; strut < strutCount; strut += 1) {
-    const phase = (strut / strutCount) * TAU + hash(seed, 120 + strut) * 0.8;
-    const inner = radius * lerp(0.18, 0.42, hash(seed, 140 + strut));
-    const outer = radius * lerp(0.78, 1.38, hash(seed, 160 + strut)) * reveal;
-    context.beginPath();
-    context.moveTo(Math.cos(phase) * inner, Math.sin(phase) * inner);
-    context.lineTo(Math.cos(phase + curvature * 0.04) * outer, Math.sin(phase + curvature * 0.04) * outer);
-    context.strokeStyle = strut % 2 === 0
-      ? `rgba(231, 242, 255, ${0.38 * reveal})`
-      : hsla(accentHue, 86, 72, 0.32 * reveal);
-    context.lineWidth = Math.max(0.45, radius * 0.008);
-    context.stroke();
-  }
-
   context.restore();
 }
 
@@ -234,39 +751,13 @@ export function drawMetalheartPulse(
   const { centerX, centerY, width, height, progress, strength } = options;
   if (progress < 0 || progress >= 1 || strength <= 0) return;
   const fade = Math.pow(1 - progress, 2) * clamp(strength, 0, 1);
-  const sweepX = lerp(-width * 0.18, width * 1.18, easeOutCubic(progress));
-  const bandWidth = clamp(Math.min(width, height) * 0.075, 36, 110);
-
+  const radius = Math.min(width, height) * lerp(0.035, 0.22, easeOutCubic(progress));
   context.save();
   context.globalCompositeOperation = "screen";
-
-  const sweep = context.createLinearGradient(
-    sweepX - bandWidth,
-    0,
-    sweepX + bandWidth,
-    0,
-  );
-  sweep.addColorStop(0, "rgba(84, 136, 255, 0)");
-  sweep.addColorStop(0.36, `rgba(102, 211, 255, ${fade * 0.055})`);
-  sweep.addColorStop(0.5, `rgba(255, 255, 255, ${fade * 0.11})`);
-  sweep.addColorStop(0.66, `rgba(241, 116, 255, ${fade * 0.055})`);
-  sweep.addColorStop(1, "rgba(241, 116, 255, 0)");
-  context.fillStyle = sweep;
-  context.fillRect(0, 0, width, height);
-
-  const rippleRadius = Math.min(width, height) * lerp(0.035, 0.22, easeOutCubic(progress));
   context.beginPath();
-  context.ellipse(centerX, centerY, rippleRadius * 1.7, rippleRadius, -0.12, 0, TAU);
-  context.strokeStyle = `rgba(205, 241, 255, ${fade * 0.32})`;
+  context.ellipse(centerX, centerY, radius * 1.75, radius, -0.12, 0, TAU);
+  context.strokeStyle = `rgba(207, 244, 255, ${fade * 0.32})`;
   context.lineWidth = Math.max(0.6, Math.min(width, height) * 0.0015);
   context.stroke();
-
-  const bloom = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, rippleRadius * 1.45);
-  bloom.addColorStop(0, `rgba(255, 255, 255, ${fade * 0.12})`);
-  bloom.addColorStop(0.36, `rgba(105, 218, 255, ${fade * 0.06})`);
-  bloom.addColorStop(0.72, `rgba(230, 118, 255, ${fade * 0.025})`);
-  bloom.addColorStop(1, "rgba(120, 160, 255, 0)");
-  context.fillStyle = bloom;
-  context.fillRect(centerX - rippleRadius * 1.45, centerY - rippleRadius * 1.45, rippleRadius * 2.9, rippleRadius * 2.9);
   context.restore();
 }
