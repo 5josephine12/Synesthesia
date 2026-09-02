@@ -306,8 +306,8 @@ class MetalheartSculptureRenderer {
   private readonly orangeBeam: Sprite | null;
   private readonly pinkBeam: Sprite | null;
   private readonly pulseLight = new PointLight(0xffe4d1, 0, 9.5, 1.45);
-  private readonly amberLight = new PointLight(0xff713d, 31, 15, 1.7);
-  private readonly pinkLight = new PointLight(0xff4f9a, 25, 15, 1.8);
+  private readonly amberLight = new PointLight(0xff5f28, 46, 15, 1.7);
+  private readonly pinkLight = new PointLight(0xff257e, 39, 15, 1.8);
   private readonly environmentTarget: WebGLRenderTarget;
   private readonly preservedResources: ReadonlySet<BufferGeometry | Material>;
   private readonly clusters = new Map<number, ClusterRecord>();
@@ -334,7 +334,7 @@ class MetalheartSculptureRenderer {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = SRGBColorSpace;
     this.renderer.toneMapping = ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.34;
+    this.renderer.toneMappingExposure = 1.48;
     this.renderer.setPixelRatio(1);
 
     const pmrem = new PMREMGenerator(this.renderer);
@@ -350,7 +350,7 @@ class MetalheartSculptureRenderer {
     this.scene.environment = this.environmentTarget.texture;
 
     this.chromeMaterial = new MeshPhysicalMaterial({
-      color: new Color(0xb8a9aa),
+      color: new Color(0xd1aaa4),
       metalness: 1,
       roughness: 0.065,
       clearcoat: 1,
@@ -358,13 +358,13 @@ class MetalheartSculptureRenderer {
       iridescence: 0.16,
       iridescenceIOR: 1.55,
       iridescenceThicknessRange: [135, 520],
-      envMapIntensity: 3.35,
+      envMapIntensity: 1.75,
       emissive: new Color(0x1a0603),
       emissiveIntensity: 0.035,
       side: DoubleSide,
     });
     this.blackChromeMaterial = new MeshPhysicalMaterial({
-      color: new Color(0x060810),
+      color: new Color(0x21080f),
       metalness: 1,
       roughness: 0.12,
       clearcoat: 1,
@@ -372,13 +372,13 @@ class MetalheartSculptureRenderer {
       iridescence: 0.08,
       iridescenceIOR: 1.35,
       iridescenceThicknessRange: [160, 390],
-      envMapIntensity: 2.35,
+      envMapIntensity: 1.45,
       emissive: new Color(0x070103),
       emissiveIntensity: 0.02,
       side: DoubleSide,
     });
     this.iridescentMaterial = new MeshPhysicalMaterial({
-      color: new Color(0xe0c1ca),
+      color: new Color(0xefb0bd),
       metalness: 0.96,
       roughness: 0.052,
       clearcoat: 1,
@@ -386,7 +386,7 @@ class MetalheartSculptureRenderer {
       iridescence: 0.28,
       iridescenceIOR: 1.82,
       iridescenceThicknessRange: [110, 690],
-      envMapIntensity: 3.65,
+      envMapIntensity: 1.9,
       emissive: new Color(0x210510),
       emissiveIntensity: 0.06,
       side: DoubleSide,
@@ -402,7 +402,7 @@ class MetalheartSculptureRenderer {
           map: this.glowTexture,
           color: 0xc8eeff,
           transparent: true,
-          opacity: 0.24,
+          opacity: 0.46,
           depthWrite: false,
           depthTest: false,
           blending: NormalBlending,
@@ -423,9 +423,9 @@ class MetalheartSculptureRenderer {
     this.orangeBeamMaterial = this.beamTexture
       ? new SpriteMaterial({
           map: this.beamTexture,
-          color: 0xff7a43,
+          color: 0xff5424,
           transparent: true,
-          opacity: 0.28,
+          opacity: 0.58,
           depthWrite: false,
           depthTest: false,
           blending: NormalBlending,
@@ -434,9 +434,9 @@ class MetalheartSculptureRenderer {
     this.pinkBeamMaterial = this.beamTexture
       ? new SpriteMaterial({
           map: this.beamTexture,
-          color: 0xff56a3,
+          color: 0xff247f,
           transparent: true,
-          opacity: 0.22,
+          opacity: 0.48,
           depthWrite: false,
           depthTest: false,
           blending: NormalBlending,
@@ -516,13 +516,13 @@ class MetalheartSculptureRenderer {
     const tintMaterial = this.iridescentMaterial.clone();
     const warmHue = hash(seed, 303) > 0.46 ? 0.035 : 0.945;
     const secondaryHue = warmHue < 0.5 ? 0.945 : 0.035;
-    tintMaterial.color.setHSL(warmHue, 0.24, 0.72);
-    tintMaterial.emissive.setHSL(warmHue, 0.86, 0.09);
-    tintMaterial.emissiveIntensity = 0.085;
+    tintMaterial.color.setHSL(warmHue, 0.38, 0.7);
+    tintMaterial.emissive.setHSL(warmHue, 0.9, 0.1);
+    tintMaterial.emissiveIntensity = 0.13;
     const secondaryTintMaterial = this.iridescentMaterial.clone();
-    secondaryTintMaterial.color.setHSL(secondaryHue, 0.2, 0.75);
-    secondaryTintMaterial.emissive.setHSL(secondaryHue, 0.82, 0.08);
-    secondaryTintMaterial.emissiveIntensity = 0.075;
+    secondaryTintMaterial.color.setHSL(secondaryHue, 0.34, 0.73);
+    secondaryTintMaterial.emissive.setHSL(secondaryHue, 0.88, 0.09);
+    secondaryTintMaterial.emissiveIntensity = 0.115;
     const primaryGeometry = makeRibbonGeometry(seed, length, ribbonWidth, 0.021, particle.curvature);
     const primaryRibbon = new Mesh(
       primaryGeometry,
@@ -740,26 +740,26 @@ class MetalheartSculptureRenderer {
       this.orangeBeam.position.set(focus.x - 0.08, focus.y + 0.03, -1.8);
       this.orangeBeam.scale.set(Math.max(6.2, this.viewWidth * 0.92), this.viewHeight * 0.3, 1);
       this.orangeBeamMaterial.rotation = -0.16 + Math.sin(now * 0.00015) * 0.035;
-      this.orangeBeamMaterial.opacity = 0.3 + pulseEnvelope * 0.2;
+      this.orangeBeamMaterial.opacity = 0.62 + pulseEnvelope * 0.22;
     }
     if (this.pinkBeam && this.pinkBeamMaterial) {
       this.pinkBeam.position.set(focus.x + 0.04, focus.y - 0.04, -1.7);
       this.pinkBeam.scale.set(Math.max(5.4, this.viewWidth * 0.78), this.viewHeight * 0.24, 1);
       this.pinkBeamMaterial.rotation = 0.42 + Math.cos(now * 0.00013) * 0.045;
-      this.pinkBeamMaterial.opacity = 0.24 + pulseEnvelope * 0.17;
+      this.pinkBeamMaterial.opacity = 0.52 + pulseEnvelope * 0.2;
     }
     this.chromeMaterial.emissiveIntensity = 0.035 + pulseEnvelope * 0.2;
     this.iridescentMaterial.emissiveIntensity = 0.06 + pulseEnvelope * 0.34;
     this.iridescentMaterial.iridescence = 0.24 + pulseEnvelope * 0.08;
-    if (this.glowMaterial) this.glowMaterial.opacity = 0.26 + pulseEnvelope * 0.17;
-    this.renderer.toneMappingExposure = 1.4 + pulseEnvelope * 0.46;
+    if (this.glowMaterial) this.glowMaterial.opacity = 0.5 + pulseEnvelope * 0.2;
+    this.renderer.toneMappingExposure = 1.52 + pulseEnvelope * 0.5;
     this.camera.position.z = CAMERA_DISTANCE - pulseEnvelope * 0.38;
     this.camera.position.x = Math.sin(now * 0.00011) * 0.08;
     this.camera.lookAt(0, 0, 0);
     this.sculpture.rotation.y = Math.sin(now * 0.00013) * 0.075;
     this.sculpture.rotation.x = Math.cos(now * 0.0001) * 0.035;
-    this.amberLight.intensity = 34 + pulseEnvelope * 16;
-    this.pinkLight.intensity = 27 + pulseEnvelope * 13;
+    this.amberLight.intensity = 49 + pulseEnvelope * 19;
+    this.pinkLight.intensity = 42 + pulseEnvelope * 16;
 
     this.renderer.render(this.scene, this.camera);
     return { canvas: this.canvas, forming };

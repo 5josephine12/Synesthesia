@@ -455,10 +455,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /this\.pinkLight\.color\.setHSL\(0\.945/);
   assert.match(styleThreeSource, /this\.glowMaterial\?\.color\.setHSL\(0\.975/);
   assert.match(styleThreeSource, /function createBeamTexture/);
-  assert.match(styleThreeSource, /this\.orangeBeamMaterial\.opacity = 0\.3/);
-  assert.match(styleThreeSource, /this\.pinkBeamMaterial\.opacity = 0\.24/);
-  assert.match(auraSource, /brightness\(1\.68\) saturate\(1\.42\)/);
-  assert.match(auraSource, /context\.globalAlpha = 0\.34/);
+  assert.match(styleThreeSource, /this\.orangeBeamMaterial\.opacity = 0\.62/);
+  assert.match(styleThreeSource, /this\.pinkBeamMaterial\.opacity = 0\.52/);
+  assert.match(auraSource, /brightness\(1\.72\) sepia\(0\.32\) saturate\(1\.72\)/);
+  assert.match(auraSource, /context\.globalAlpha = 0\.58/);
   assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
   assert.match(styleFourSource, /new ShaderMaterial/);
   assert.match(styleFourSource, /const fragmentShader = \/\* glsl \*\//);

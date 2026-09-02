@@ -2029,7 +2029,7 @@ function drawChronologicalAuraLayers(
           // without adding another WebGL render target or an accumulating layer.
           blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
           blurredContext.save();
-          blurredContext.filter = `blur(${Math.max(2.4, blurRadius * 1.8)}px) brightness(1.68) saturate(1.42)`;
+          blurredContext.filter = `blur(${Math.max(2.4, blurRadius * 1.8)}px) brightness(1.72) sepia(0.32) saturate(1.72)`;
           blurredContext.drawImage(
             metalheartCanvas,
             0,
@@ -2044,7 +2044,7 @@ function drawChronologicalAuraLayers(
           // while the following screen pass still blooms over darker layers.
           context.save();
           context.globalCompositeOperation = "source-over";
-          context.globalAlpha = 0.34;
+          context.globalAlpha = 0.58;
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
           context.drawImage(blurredLayer, 0, 0, width, height);
@@ -2052,7 +2052,7 @@ function drawChronologicalAuraLayers(
 
           context.save();
           context.globalCompositeOperation = "screen";
-          context.globalAlpha = 0.5;
+          context.globalAlpha = 0.38;
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
           context.drawImage(blurredLayer, 0, 0, width, height);
@@ -2070,6 +2070,7 @@ function drawChronologicalAuraLayers(
           context.globalCompositeOperation = "source-over";
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
+          context.filter = "sepia(0.28) saturate(1.48)";
           context.drawImage(metalheartCanvas, 0, 0, width, height);
           context.restore();
         }
