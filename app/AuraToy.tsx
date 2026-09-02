@@ -201,6 +201,7 @@ type DeviceAudioCaptureOptions = Omit<DisplayMediaStreamOptions, "audio"> & {
   monitorTypeSurfaces?: "include" | "exclude";
   systemAudio?: "include" | "exclude";
   windowAudio?: "exclude" | "window" | "system";
+  audioSelection?: "preferred";
 };
 type MicrophoneModeId = "wide-spectrum" | "voice-isolation" | "standard" | "automatic";
 type MicrophoneMode = {
@@ -330,7 +331,8 @@ const DEVICE_AUDIO_CAPTURE_OPTIONS: DeviceAudioCaptureOptions = {
   surfaceSwitching: "include",
   monitorTypeSurfaces: "include",
   systemAudio: "include",
-  windowAudio: "system",
+  windowAudio: "window",
+  audioSelection: "preferred",
 };
 const TELEMETRY_TOGGLE_FADE_DURATION = 560;
 const SATURATION_CHECK_INTERVAL = 6;
@@ -2573,14 +2575,11 @@ export function AuraToy() {
     externalMidiInputRef.current = null;
     externalMidiAccessRef.current = null;
     const runtime = microphoneRef.current;
-    const retainSystemAudio =
-      audioInputSourceRef.current === "system" &&
-      runtime?.stream === systemAudioStreamRef.current &&
-      runtime.stream.getAudioTracks().some((track) => track.readyState === "live");
-    disposeMicrophoneRuntime(runtime, !retainSystemAudio, false);
-    if (!retainSystemAudio && runtime?.stream === systemAudioStreamRef.current) {
-      systemAudioStreamRef.current = null;
+    disposeMicrophoneRuntime(runtime);
+    if (systemAudioStreamRef.current && systemAudioStreamRef.current !== runtime?.stream) {
+      systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
     }
+    systemAudioStreamRef.current = null;
     microphoneRef.current = null;
     audioInputSourceRef.current = null;
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
@@ -2636,11 +2635,10 @@ export function AuraToy() {
     }
 
     const previousRuntime = microphoneRef.current;
-    const retainPreviousSystemAudio =
-      audioInputSourceRef.current === "system" &&
-      previousRuntime?.stream === systemAudioStreamRef.current &&
-      previousRuntime.stream.getAudioTracks().some((track) => track.readyState === "live");
-    disposeMicrophoneRuntime(previousRuntime, !retainPreviousSystemAudio, false);
+    disposeMicrophoneRuntime(previousRuntime);
+    if (previousRuntime?.stream === systemAudioStreamRef.current) {
+      systemAudioStreamRef.current = null;
+    }
     microphoneRef.current = null;
     const generation = microphoneGenerationRef.current + 1;
     microphoneGenerationRef.current = generation;
@@ -2659,7 +2657,7 @@ export function AuraToy() {
     let stream: MediaStream | null = null;
     let audioContext: AudioContext | null = null;
     let initialResumeAttempt: Promise<void> | null = null;
-    let reusedSystemAudio = false;
+    let selectedDisplaySurface: MediaTrackSettings["displaySurface"] | undefined;
     const pitchDetectorModule = import("pitchy");
     try {
       if (isSystemAudio) {
@@ -2670,20 +2668,11 @@ export function AuraToy() {
         if (audioContext.state === "suspended") {
           initialResumeAttempt = audioContext.resume().catch(() => undefined);
         }
-        const rememberedStream = systemAudioStreamRef.current;
-        if (rememberedStream?.getAudioTracks().some((track) => track.readyState === "live")) {
-          stream = rememberedStream;
-          reusedSystemAudio = true;
-          stream.getTracks().forEach((track) => {
-            track.enabled = true;
-          });
-        } else {
-          systemAudioStreamRef.current = null;
-          stream = await mediaDevices.getDisplayMedia(DEVICE_AUDIO_CAPTURE_OPTIONS);
-        }
+        systemAudioStreamRef.current = null;
+        stream = await mediaDevices.getDisplayMedia(DEVICE_AUDIO_CAPTURE_OPTIONS);
+        selectedDisplaySurface = stream.getVideoTracks()[0]?.getSettings().displaySurface;
         if (stream.getAudioTracks().length === 0) {
           stream.getTracks().forEach((track) => track.stop());
-          if (stream === systemAudioStreamRef.current) systemAudioStreamRef.current = null;
           stream = null;
           throw new Error("No device audio was shared");
         }
@@ -2716,10 +2705,10 @@ export function AuraToy() {
       }
       if (generation !== microphoneGenerationRef.current) {
         stream.getTracks().forEach((track) => {
-          if (!reusedSystemAudio) track.stop();
+          track.stop();
         });
         if (audioContext) void audioContext.close().catch(() => undefined);
-        if (!reusedSystemAudio && stream === systemAudioStreamRef.current) {
+        if (stream === systemAudioStreamRef.current) {
           systemAudioStreamRef.current = null;
         }
         return;
@@ -2816,7 +2805,7 @@ export function AuraToy() {
       setSystemAudioState(isSystemAudio ? "listening" : "idle");
       setExternalInputState(isExternalInput ? "listening" : "idle");
       const displaySurface = isSystemAudio
-        ? stream.getVideoTracks()[0]?.getSettings().displaySurface
+        ? selectedDisplaySurface
         : undefined;
       setMicrophoneReading(
         isExternalInput
@@ -3331,9 +3320,9 @@ export function AuraToy() {
       });
     } catch {
       stream?.getTracks().forEach((track) => {
-        if (!reusedSystemAudio) track.stop();
+        track.stop();
       });
-      if (!reusedSystemAudio && stream === systemAudioStreamRef.current) {
+      if (stream === systemAudioStreamRef.current) {
         systemAudioStreamRef.current = null;
       }
       if (audioContext) void audioContext.close().catch(() => undefined);
@@ -3354,7 +3343,11 @@ export function AuraToy() {
       setMicrophoneBeatPitchClasses([]);
       setMicrophoneReading(
         isSystemAudio
-          ? "Device audio unavailable"
+          ? selectedDisplaySurface === "monitor"
+            ? "Turn on Share system audio and allow screen audio recording"
+            : selectedDisplaySurface === "window"
+              ? "Turn on Share window audio and allow screen audio recording"
+              : "Device audio unavailable"
           : isExternalInput
             ? "External input unavailable"
             : "Microphone unavailable",
@@ -3525,10 +3518,7 @@ export function AuraToy() {
     if (externalInputState === "listening" || externalInputState === "requesting") {
       stopMicrophone();
     }
-    const hasRememberedSystemAudio =
-      systemAudioStreamRef.current?.getAudioTracks().some((track) => track.readyState === "live") ??
-      false;
-    if (!systemAudioIntroductionShownRef.current && !hasRememberedSystemAudio) {
+    if (!systemAudioIntroductionShownRef.current) {
       openMicrophonePrompt("system");
       return;
     }
@@ -5424,7 +5414,7 @@ export function AuraToy() {
                 </span>
                 <p>
                   {permissionPromptSource === "system"
-                    ? "Aura listens locally to audio from the tab, window, or entire screen you choose. Keep Share audio or Share system audio turned on. Audio is never saved."
+                    ? "Aura listens locally to audio from the tab, window, or entire screen you choose. Keep Share audio turned on. On Mac, allow your browser in Privacy & Security → Screen & System Audio Recording. Audio is never saved."
                     : permissionPromptSource === "external"
                       ? "Connect a MIDI instrument or USB audio device. Aura reads notes and audio locally; nothing is saved."
                       : "Aura listens locally to pitch, rhythm, and volume. Audio is never saved."}

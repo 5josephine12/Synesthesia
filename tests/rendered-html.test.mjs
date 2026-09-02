@@ -186,20 +186,21 @@ test("connects external MIDI and USB audio inputs from the hardware control", as
   assert.match(styles, /\.microphone-permission-icon\.is-external-input/);
 });
 
-test("remembers device audio for the page session and provides a cohesive permission dialog", async () => {
+test("opens a fresh device-audio picker and provides a cohesive permission dialog", async () => {
   const source = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
   assert.match(source, /const systemAudioStreamRef = useRef<MediaStream \| null>\(null\)/);
-  assert.match(source, /rememberedStream\?\.getAudioTracks\(\)\.some/);
-  assert.match(source, /reusedSystemAudio = true/);
-  assert.match(source, /disposeMicrophoneRuntime\(runtime, !retainSystemAudio, false\)/);
-  assert.match(source, /disposeMicrophoneRuntime\(previousRuntime, !retainPreviousSystemAudio, false\)/);
+  assert.match(source, /systemAudioStreamRef\.current = null;\s*stream = await mediaDevices\.getDisplayMedia/);
+  assert.match(source, /disposeMicrophoneRuntime\(runtime\)/);
+  assert.match(source, /disposeMicrophoneRuntime\(previousRuntime\)/);
+  assert.doesNotMatch(source, /rememberedStream|reusedSystemAudio|retainSystemAudio|retainPreviousSystemAudio/);
   assert.match(source, /const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown"/);
   assert.match(source, /sessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /rememberSessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /systemAudio: "include"/);
-  assert.match(source, /windowAudio: "system"/);
+  assert.match(source, /windowAudio: "window"/);
+  assert.match(source, /audioSelection: "preferred"/);
   assert.match(source, /video: \{ displaySurface: "monitor" \}/);
   assert.match(source, /monitorTypeSurfaces: "include"/);
   assert.match(source, /selfBrowserSurface: "exclude"/);
@@ -221,7 +222,8 @@ test("remembers device audio for the page session and provides a cohesive permis
   assert.match(source, /permissionPromptSource === "system"/);
   assert.match(source, /\? "Device audio"/);
   assert.match(source, /Continue to device audio/);
-  assert.match(source, /Keep Share audio or Share system audio turned on\./);
+  assert.match(source, /Keep Share audio turned on\./);
+  assert.match(source, /Screen & System Audio Recording/);
   assert.match(source, /displaySurface === "monitor"[\s\S]*?"Entire screen audio"/);
   assert.match(source, /displaySurface === "window"[\s\S]*?"Window audio"/);
   assert.match(source, /Audio is never saved\./);
