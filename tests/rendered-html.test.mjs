@@ -290,6 +290,7 @@ test("keeps every shipped client asset inside a kilobyte budget", async () => {
 
 test("keeps visual effects bounded and free of production diagnostics", async () => {
   const auraSource = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const styleTwoSource = await readFile(
     new URL("../app/art-styles/style-2.ts", import.meta.url),
     "utf8",
@@ -364,6 +365,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /alpha: clamp\(\(0\.94 \+ blob\.velocity \* 0\.06\) \* arrival \* layerEmphasis, 0, 1\)/);
   assert.match(auraSource, /lerp\(0\.74, 0\.92, recency \* recency\)/);
   assert.match(auraSource, /const blendsWithEarlierArtwork = runStart > 0 \|\| hasEarlierArtwork/);
+  assert.match(auraSource, /if \(runEnd <= dottedWindowStart\)/);
   assert.match(auraSource, /context\.globalCompositeOperation = "screen"/);
   assert.match(auraSource, /context\.filter = `blur\(\$\{clamp\(Math\.min\(width, height\) \* 0\.009, 4, 9\)\}px\)`/);
   assert.match(auraSource, /context\.globalCompositeOperation = "color"/);
@@ -399,4 +401,8 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(telemetrySource, /const SNAPSHOT_FRAME_INTERVAL = 1000 \/ 15/);
   assert.match(telemetrySource, /export function telemetryNextFrameAt/);
   assert.match(auraSource, /scheduleRendererWake\(nextTelemetryFrameAt\)/);
+  assert.match(auraSource, /now - runtime\.lastReadingAt >= 250/);
+  assert.match(styles, /button\s*\{[\s\S]*?touch-action: manipulation/);
+  assert.match(styles, /\.instrument-cluster\s*\{[\s\S]*?contain: layout paint style/);
+  assert.match(styles, /\.piano-key\s*\{[\s\S]*?transition: transform 90ms/);
 });

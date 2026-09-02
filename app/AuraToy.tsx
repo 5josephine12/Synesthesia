@@ -300,6 +300,7 @@ type MicrophoneRuntime = {
   lastMeterLevel: number;
   lastMeterAt: number;
   lastReading: string;
+  lastReadingAt: number;
   visualCursor: number;
 };
 
@@ -1837,6 +1838,14 @@ function drawChronologicalAuraLayers(
     }
 
     if (isDottedRun) {
+      // Pixel formations older than the visible window contribute no pixels.
+      // Skip the full-canvas clear, blur, and composite passes for those runs;
+      // repeated style switching can otherwise accumulate a large amount of
+      // invisible work even though the live composition looks unchanged.
+      if (runEnd <= dottedWindowStart) {
+        runStart = runEnd;
+        continue;
+      }
       pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
       pixelAccentContext.clearRect(0, 0, pixelAccentLayer.width, pixelAccentLayer.height);
       drawDottedSigilFlowLayer(
@@ -2794,6 +2803,7 @@ export function AuraToy() {
         lastMeterLevel: -1,
         lastMeterAt: -Infinity,
         lastReading: "Listening",
+        lastReadingAt: -Infinity,
         visualCursor: 0,
       };
       configureMicrophonePipeline(
@@ -3296,8 +3306,12 @@ export function AuraToy() {
           harmonicContext && harmonicContext.confidence > 0.08
             ? `${heardNotes}, ${NOTE_NAMES[harmonicContext.root]} ${harmonicContext.mode}`
             : heardNotes;
-        if (nextReading !== runtime.lastReading) {
+        // This text is only exposed to assistive technology. Keep the audio
+        // analysis and visuals at full speed, but avoid re-rendering the entire
+        // instrument for every rapidly changing note label.
+        if (nextReading !== runtime.lastReading && now - runtime.lastReadingAt >= 250) {
           runtime.lastReading = nextReading;
+          runtime.lastReadingAt = now;
           setMicrophoneReading(nextReading);
         }
       };
