@@ -189,6 +189,7 @@ type MicrophoneState = "idle" | "requesting" | "listening" | "error" | "unsuppor
 type AudioInputSource = "microphone" | "system" | "external";
 
 type DeviceAudioTrackConstraints = MediaTrackConstraints & {
+  restrictOwnAudio?: boolean;
   suppressLocalAudioPlayback?: boolean;
 };
 
@@ -197,6 +198,7 @@ type DeviceAudioCaptureOptions = Omit<DisplayMediaStreamOptions, "audio"> & {
   preferCurrentTab?: boolean;
   selfBrowserSurface?: "include" | "exclude";
   surfaceSwitching?: "include" | "exclude";
+  monitorTypeSurfaces?: "include" | "exclude";
   systemAudio?: "include" | "exclude";
   windowAudio?: "exclude" | "window" | "system";
 };
@@ -315,11 +317,18 @@ const MAX_LIVE_VISUAL_PARTICLES = 96;
 const HARD_MAX_LIVE_VISUAL_PARTICLES = 192;
 const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown";
 const DEVICE_AUDIO_CAPTURE_OPTIONS: DeviceAudioCaptureOptions = {
-  video: { displaySurface: "browser" },
-  audio: { suppressLocalAudioPlayback: false },
+  video: { displaySurface: "monitor" },
+  audio: {
+    autoGainControl: false,
+    echoCancellation: false,
+    noiseSuppression: false,
+    restrictOwnAudio: false,
+    suppressLocalAudioPlayback: false,
+  },
   preferCurrentTab: false,
   selfBrowserSurface: "exclude",
   surfaceSwitching: "include",
+  monitorTypeSurfaces: "include",
   systemAudio: "include",
   windowAudio: "system",
 };
@@ -2641,7 +2650,7 @@ export function AuraToy() {
     setExternalInputState(isExternalInput ? "requesting" : "idle");
     setMicrophoneReading(
       isSystemAudio
-        ? "Choose the browser tab playing audio"
+        ? "Choose a tab, window, or entire screen and share its audio"
         : isExternalInput
           ? `Connecting ${externalDeviceName || "external input"}`
           : "Listening",
@@ -2806,7 +2815,20 @@ export function AuraToy() {
       setMicrophoneState(inputSource === "microphone" ? "listening" : "idle");
       setSystemAudioState(isSystemAudio ? "listening" : "idle");
       setExternalInputState(isExternalInput ? "listening" : "idle");
-      setMicrophoneReading(isExternalInput ? externalDeviceName || "External input" : "Listening");
+      const displaySurface = isSystemAudio
+        ? stream.getVideoTracks()[0]?.getSettings().displaySurface
+        : undefined;
+      setMicrophoneReading(
+        isExternalInput
+          ? externalDeviceName || "External input"
+          : displaySurface === "monitor"
+            ? "Entire screen audio"
+            : displaySurface === "window"
+              ? "Window audio"
+              : displaySurface === "browser"
+                ? "Tab audio"
+                : "Listening",
+      );
       hapticFeedback("success");
 
       const analyze = (now: number) => {
@@ -4950,7 +4972,7 @@ export function AuraToy() {
           ? "Retry device audio capture"
           : systemAudioState === "unsupported"
             ? "Device audio capture is unsupported"
-            : "Start device audio capture; choose the browser tab playing audio";
+            : "Start device audio capture; choose a tab, window, or entire screen";
   const externalInputLabel =
     externalInputState === "listening"
       ? `Stop external input, detecting ${microphoneReading}`
@@ -5402,7 +5424,7 @@ export function AuraToy() {
                 </span>
                 <p>
                   {permissionPromptSource === "system"
-                    ? "Aura listens locally to the browser tab you choose. Select the tab playing audio and keep Share tab audio turned on. Audio is never saved."
+                    ? "Aura listens locally to audio from the tab, window, or entire screen you choose. Keep Share audio or Share system audio turned on. Audio is never saved."
                     : permissionPromptSource === "external"
                       ? "Connect a MIDI instrument or USB audio device. Aura reads notes and audio locally; nothing is saved."
                       : "Aura listens locally to pitch, rhythm, and volume. Audio is never saved."}
