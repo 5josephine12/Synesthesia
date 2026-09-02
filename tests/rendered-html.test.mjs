@@ -58,6 +58,7 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /role="switch" aria-checked="false"/);
   assert.match(html, /aria-label="Aura art style, selected"/);
   assert.match(html, /aria-label="Pixel art style"/);
+  assert.match(html, /aria-label="Metalheart art style"/);
   assert.match(html, /aria-label="Style 4 art style"/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /filled-triangle is-up/);
@@ -295,6 +296,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
     new URL("../app/art-styles/style-2.ts", import.meta.url),
     "utf8",
   );
+  const styleThreeSource = await readFile(
+    new URL("../app/art-styles/style-3.ts", import.meta.url),
+    "utf8",
+  );
   const telemetrySource = await readFile(
     new URL("../app/art-styles/telemetry.ts", import.meta.url),
     "utf8",
@@ -387,7 +392,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const VISUAL_COMPACTION_BATCH_SIZE = 2/);
   assert.match(auraSource, /const compactVisualHistory = \(now: number, blurRadius: number\) =>/);
   assert.match(auraSource, /blobs\.length <= MAX_LIVE_VISUAL_PARTICLES/);
-  assert.match(auraSource, /const minimumAge = isDotted\s*\? DOTTED_GLOW_MATURATION_DURATION\s*: BLOB_ARRIVAL_DURATION/);
+  assert.match(
+    auraSource,
+    /const minimumAge = isDotted\s*\? DOTTED_GLOW_MATURATION_DURATION\s*: blobStyle === "style-3"\s*\? METALHEART_FORMATION_DURATION\s*: BLOB_ARRIVAL_DURATION/,
+  );
   assert.match(auraSource, /Math\.min\(\s*VISUAL_COMPACTION_BATCH_SIZE,/);
   assert.match(auraSource, /const compactedBlobs = blobs\.slice\(0, compactCount\)/);
   assert.match(auraSource, /const compactedVisibleBlobs = compactedBlobs\.filter/);
@@ -397,7 +405,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /blobsRef\.current = blobs\.slice\(compactCount\)/);
   assert.match(auraSource, /compactedHistoryActiveRef\.current = true/);
   assert.match(auraSource, /context\.drawImage\(historyComposite, 0, 0, width, height\)/);
-  assert.match(auraSource, /hasCompactedHistory \|\| \(hasDottedStyle && containsOrganicStyle\)/);
+  assert.match(auraSource, /hasCompactedHistory \|\|\s*hasMetalheartStyle \|\|/);
   assert.doesNotMatch(auraSource, /hasCompactedOrganicHistory|historyBlurred|settledOrganicPrefix/);
   assert.match(auraSource, /artStyleLayerCountRef\.current\[currentArtStyle\]/);
   assert.doesNotMatch(auraSource, /blobsRef\.current\.reduce\(/);
@@ -410,4 +418,16 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styles, /button\s*\{[\s\S]*?touch-action: manipulation/);
   assert.match(styles, /\.instrument-cluster\s*\{[\s\S]*?contain: layout paint style/);
   assert.match(styles, /\.piano-key\s*\{[\s\S]*?transition: transform 90ms/);
+  assert.match(auraSource, /\{ id: "style-3", label: "Metalheart" \}/);
+  assert.match(auraSource, /const metalheartRendererReady = import\("\.\/art-styles\/style-3"\)/);
+  assert.match(auraSource, /const telemetryRendererReady = import\("\.\/art-styles\/telemetry"\)/);
+  assert.match(auraSource, /const METALHEART_FORMATION_DURATION = 1600/);
+  assert.match(auraSource, /const METALHEART_PULSE_DURATION = 920/);
+  assert.match(auraSource, /const metalheartIsActive = artStyleRef\.current === "style-3"/);
+  assert.match(auraSource, /metalheartRenderer\?\.drawMetalheartPulse/);
+  assert.match(styleThreeSource, /export function drawMetalheartParticle/);
+  assert.match(styleThreeSource, /export function drawMetalheartPulse/);
+  assert.match(styleThreeSource, /const plateCount = 3 \+ Math\.floor/);
+  assert.match(styleThreeSource, /A continuous liquid-metal spine/);
+  assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
 });

@@ -4,7 +4,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { PitchDetector } from "pitchy";
 import { drawDottedSigil } from "./art-styles/style-2";
-import { drawTelemetryOverlay, telemetryNextFrameAt } from "./art-styles/telemetry";
+
+type TelemetryRenderer = typeof import("./art-styles/telemetry");
+let telemetryRenderer: TelemetryRenderer | null = null;
+const telemetryRendererReady = import("./art-styles/telemetry").then((renderer) => {
+  telemetryRenderer = renderer;
+  return renderer;
+});
+
+type MetalheartRenderer = typeof import("./art-styles/style-3");
+let metalheartRenderer: MetalheartRenderer | null = null;
+const metalheartRendererReady = import("./art-styles/style-3").then((renderer) => {
+  metalheartRenderer = renderer;
+  return renderer;
+});
 
 type SolidControlIconName =
   | "check"
@@ -128,6 +141,13 @@ type BlobParticle = {
   softness: number;
   blendMode: AuraBlendMode;
   createdAt: number;
+};
+
+type MetalheartPulse = {
+  startedAt: number;
+  strength: number;
+  x: number;
+  y: number;
 };
 
 type KeySpec = NoteChoice & {
@@ -315,6 +335,8 @@ const BLOB_ARRIVAL_DURATION = 550;
 const DOTTED_VISIBLE_FORMATIONS = 4;
 const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
+const METALHEART_FORMATION_DURATION = 1600;
+const METALHEART_PULSE_DURATION = 920;
 const MAX_LIVE_VISUAL_PARTICLES = 48;
 const HARD_MAX_LIVE_VISUAL_PARTICLES = 72;
 const VISUAL_COMPACTION_BATCH_SIZE = 2;
@@ -1071,7 +1093,7 @@ const MICROPHONE_MODES: readonly MicrophoneMode[] = [
 const ART_STYLE_SLOTS = [
   { id: "aura", label: "Aura" },
   { id: "style-2", label: "Pixel" },
-  { id: "style-3", label: "Style 3" },
+  { id: "style-3", label: "Metalheart" },
   { id: "style-4", label: "Style 4" },
 ] as const;
 type ArtStyleId = (typeof ART_STYLE_SLOTS)[number]["id"];
@@ -1394,11 +1416,31 @@ function drawAuraParticle(
   preserveColor = false,
   artStyle: ArtStyleId = "aura",
   now = performance.now(),
+  formationAge?: number,
 ) {
-  void now;
   context.save();
   context.translate(centerX, centerY);
   context.rotate(blob.angle);
+
+  if (artStyle === "style-3") {
+    const age = formationAge ?? Math.max(0, now - blob.createdAt);
+    metalheartRenderer?.drawMetalheartParticle(context, {
+      seed: blob.id * 4099 + blob.midi * 131 + blob.repeat * 17,
+      midi: blob.midi,
+      radius,
+      alpha,
+      arrival: easeOutCubic(age / METALHEART_FORMATION_DURATION),
+      time: Math.min(age, METALHEART_FORMATION_DURATION),
+      stretch: blob.stretch,
+      thickness: blob.thickness,
+      curvature: blob.curvature,
+      velocity: blob.velocity,
+      repeat: blob.repeat,
+    });
+    context.restore();
+    return;
+  }
+
   context.shadowColor = colorToHslar(blob.color, alpha * 0.42);
   context.shadowBlur = radius * (0.16 + blob.softness * 0.34);
 
@@ -1672,18 +1714,25 @@ function drawAuraComposition(
     const replayAge = replayPosition - index;
     if (replayAge <= 0) continue;
 
-    const age = replayProgress === undefined ? Math.max(0, now - blob.createdAt) : replayAge * BLOB_ARRIVAL_DURATION;
-    const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
-    const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
     const artStyle = blob.artStyle ?? fallbackArtStyle;
-    const preserveColor = artStyle === "style-2" || blob.blendMode === "source-over";
+    const formationDuration = artStyle === "style-3"
+      ? METALHEART_FORMATION_DURATION
+      : BLOB_ARRIVAL_DURATION;
+    const age = replayProgress === undefined
+      ? Math.max(0, now - blob.createdAt)
+      : replayAge * formationDuration;
+    const arrival = easeOutCubic(age / formationDuration);
+    const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
+    const preserveColor =
+      artStyle === "style-2" || artStyle === "style-3" || blob.blendMode === "source-over";
     const alpha = clamp(
       (0.4 + blob.velocity * 0.48) * Math.min(1, replayAge) * (preserveColor ? 1.12 : 1),
       0,
       preserveColor ? 0.96 : 0.88,
     );
 
-    context.globalCompositeOperation = artStyle === "style-2" ? "source-over" : blob.blendMode;
+    context.globalCompositeOperation =
+      artStyle === "style-2" || artStyle === "style-3" ? "source-over" : blob.blendMode;
     drawAuraParticle(
       context,
       blob,
@@ -1694,6 +1743,7 @@ function drawAuraComposition(
       preserveColor,
       artStyle,
       now,
+      age,
     );
   }
   context.restore();
@@ -1814,7 +1864,7 @@ function drawChronologicalAuraLayers(
     : replayProgress * (blobs.length + 0.9);
   const visibleLimit = Math.min(blobs.length, Math.max(0, Math.ceil(replayPosition)));
   const renderNow = reducedMotion
-    ? (blobs[Math.max(0, visibleLimit - 1)]?.createdAt ?? now) + BLOB_ARRIVAL_DURATION
+    ? (blobs[Math.max(0, visibleLimit - 1)]?.createdAt ?? now) + METALHEART_FORMATION_DURATION
     : now;
   let dottedWindowStart = 0;
   let dottedCount = 0;
@@ -1829,16 +1879,25 @@ function drawChronologicalAuraLayers(
 
   let runStart = 0;
   while (runStart < visibleLimit) {
-    const isDottedRun = (blobs[runStart].artStyle ?? fallbackArtStyle) === "style-2";
+    const runStyle = blobs[runStart].artStyle ?? fallbackArtStyle;
+    const runKind = runStyle === "style-2"
+      ? "pixel"
+      : runStyle === "style-3"
+        ? "metalheart"
+        : "aura";
     let runEnd = runStart + 1;
-    while (
-      runEnd < visibleLimit &&
-      ((blobs[runEnd].artStyle ?? fallbackArtStyle) === "style-2") === isDottedRun
-    ) {
+    while (runEnd < visibleLimit) {
+      const nextStyle = blobs[runEnd].artStyle ?? fallbackArtStyle;
+      const nextKind = nextStyle === "style-2"
+        ? "pixel"
+        : nextStyle === "style-3"
+          ? "metalheart"
+          : "aura";
+      if (nextKind !== runKind) break;
       runEnd += 1;
     }
 
-    if (isDottedRun) {
+    if (runKind === "pixel") {
       // Pixel formations older than the visible window contribute no pixels.
       // Skip the full-canvas clear, blur, and composite passes for those runs;
       // repeated style switching can otherwise accumulate a large amount of
@@ -1900,6 +1959,36 @@ function drawChronologicalAuraLayers(
         context.drawImage(pixelAccentLayer, 0, 0, width, height);
         context.restore();
       }
+    } else if (runKind === "metalheart") {
+      organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
+      drawAuraComposition(
+        organicContext,
+        blobs,
+        organicLayer.width,
+        organicLayer.height,
+        renderNow,
+        replayProgress,
+        runStart,
+        runEnd,
+        fallbackArtStyle,
+      );
+
+      // A restrained screen glow supplies the luminous reflection while the
+      // source-over pass retains the sharp, machined plate edges.
+      blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
+      blurredContext.save();
+      blurredContext.filter = `blur(${Math.max(0.5, blurRadius * 0.42)}px)`;
+      blurredContext.drawImage(organicLayer, 0, 0);
+      blurredContext.restore();
+      context.save();
+      context.globalCompositeOperation = "screen";
+      context.globalAlpha = 0.26;
+      context.drawImage(blurredLayer, 0, 0, width, height);
+      context.restore();
+      context.save();
+      context.globalCompositeOperation = "source-over";
+      context.drawImage(organicLayer, 0, 0, width, height);
+      context.restore();
     } else {
       organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
       drawAuraComposition(
@@ -2083,6 +2172,12 @@ export function AuraToy() {
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
   const artStyleRef = useRef<ArtStyleId>("aura");
   const telemetryTransitionRef = useRef({ from: 0, to: 0, startedAt: 0 });
+  const metalheartPulseRef = useRef<MetalheartPulse>({
+    startedAt: Number.NEGATIVE_INFINITY,
+    strength: 0,
+    x: 0.5,
+    y: 0.5,
+  });
   const toneRef = useRef<{
     synth: AuraSynth | null;
     filter: AuraFilter | null;
@@ -2152,6 +2247,16 @@ export function AuraToy() {
   useEffect(() => {
     artStyleRef.current = artStyle;
   }, [artStyle]);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([metalheartRendererReady, telemetryRendererReady]).then(() => {
+      if (active) wakeRendererRef.current?.();
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const now = performance.now();
@@ -2512,6 +2617,8 @@ export function AuraToy() {
     const stretch =
       currentArtStyle === "style-2"
         ? lerp(0.78, 1.32, identityRng())
+        : currentArtStyle === "style-3"
+          ? lerp(1.65, 3.15, identityRng()) * (0.94 + Math.min(repeat, 6) * 0.025)
         : lerp(minimumStretch, maximumStretch, identityRng()) *
           (0.96 + Math.min(repeat, 8) * 0.018);
     const paletteOffset = AURA_MAPPING.seedHash % RADIOGRAPHIC_HUES.length;
@@ -2533,7 +2640,7 @@ export function AuraToy() {
     }
 
     const blendMode: AuraBlendMode =
-      currentArtStyle === "style-2"
+      currentArtStyle === "style-2" || currentArtStyle === "style-3"
         ? "source-over"
         : colorRebuildLayersRef.current > 0
           ? "source-over"
@@ -2559,6 +2666,8 @@ export function AuraToy() {
       angle:
         currentArtStyle === "style-2"
           ? (identityRng() - 0.5) * 1.35 + (note.pc - 5.5) * 0.08
+          : currentArtStyle === "style-3"
+            ? baseAngle * 0.72 + (identityRng() - 0.5) * 0.32
           : baseAngle + Math.sin(repeat * 0.62) * 0.055,
       stretch,
       thickness: 0.2 + identityRng() * 0.42 + velocity * 0.12 + Math.min(repeat, 8) * 0.012,
@@ -2937,6 +3046,23 @@ export function AuraToy() {
           spectralFlux,
           beatBandEnergy,
         );
+        const metalheartIsActive = artStyleRef.current === "style-3";
+        if (beatDetected && metalheartIsActive) {
+          let latestMetal: BlobParticle | undefined;
+          for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
+            const candidate = blobsRef.current[index];
+            if (candidate.artStyle !== "style-3") continue;
+            latestMetal = candidate;
+            break;
+          }
+          metalheartPulseRef.current = {
+            startedAt: now,
+            strength: clamp(0.42 + level * 0.5, 0.42, 0.92),
+            x: latestMetal?.x ?? 0.5,
+            y: latestMetal?.y ?? 0.45,
+          };
+          wakeRendererRef.current?.();
+        }
         const previousFlux = runtime.smoothedFlux;
         runtime.smoothedFlux = lerp(previousFlux, spectralFlux, 0.085);
 
@@ -3266,14 +3392,22 @@ export function AuraToy() {
 
         if (!activeSignal) return;
         if (detectedMidi === null) return;
-        const visualInterval = beatDetected ? 60 : lerp(165, 72, level);
+        const visualInterval = metalheartIsActive
+          ? lerp(210, 108, level)
+          : beatDetected
+            ? 60
+            : lerp(165, 72, level);
         if (now - runtime.lastVisualAt < visualInterval) return;
         if (!clearPitch && !beatDetected && recentStableMidi === null && level < 0.1) return;
 
         const harmonicContext = isolatesVoice ? null : detectHarmonicContext(runtime.chroma);
         const velocity = clamp(0.26 + level * 0.64 + (beatDetected ? 0.1 : 0), 0.26, 1);
         const beatCompanion =
-          !isolatesVoice && beatDetected && !monophonicFrame && noteCandidates.length > 1
+          !metalheartIsActive &&
+          !isolatesVoice &&
+          beatDetected &&
+          !monophonicFrame &&
+          noteCandidates.length > 1
             ? noteCandidates[(runtime.visualCursor + 1) % noteCandidates.length]
             : null;
         const primaryVisualNote = midiToNote(clamp(detectedMidi, MIN_MIDI, MAX_MIDI));
@@ -3971,6 +4105,8 @@ export function AuraToy() {
       lastPixelFallbackArtStyle = null;
       colorRebuildLayersRef.current = 0;
       additiveLayerStartRef.current = 0;
+      metalheartPulseRef.current.startedAt = Number.NEGATIVE_INFINITY;
+      metalheartPulseRef.current.strength = 0;
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
     };
@@ -4021,11 +4157,14 @@ export function AuraToy() {
       let compactCount = 0;
       for (let index = 0; index < settledCount; index += 1) {
         const blob = blobs[index];
-        const isDotted = (blob.artStyle ?? artStyleRef.current) === "style-2";
+        const blobStyle = blob.artStyle ?? artStyleRef.current;
+        const isDotted = blobStyle === "style-2";
         const isInvisibleDotted = isDotted && index < oldestVisibleDottedIndex;
         const minimumAge = isDotted
           ? DOTTED_GLOW_MATURATION_DURATION
-          : BLOB_ARRIVAL_DURATION;
+          : blobStyle === "style-3"
+            ? METALHEART_FORMATION_DURATION
+            : BLOB_ARRIVAL_DURATION;
         if (
           !isInvisibleDotted &&
           !reducedMotionRef.current &&
@@ -4121,14 +4260,18 @@ export function AuraToy() {
       const settleStartedAt = performance.now();
       while (settledCount < blobsRef.current.length) {
         const blob = blobsRef.current[settledCount];
-        if (!reducedMotionRef.current && now - blob.createdAt < BLOB_ARRIVAL_DURATION) break;
-        if ((blob.artStyle ?? currentArtStyle) !== "style-2") {
+        const blobStyle = blob.artStyle ?? currentArtStyle;
+        const formationDuration = blobStyle === "style-3"
+          ? METALHEART_FORMATION_DURATION
+          : BLOB_ARRIVAL_DURATION;
+        if (!reducedMotionRef.current && now - blob.createdAt < formationDuration) break;
+        if (blobStyle !== "style-2" && blobStyle !== "style-3") {
           drawAuraComposition(
             settledContext,
             blobsRef.current,
             settled.width,
             settled.height,
-            blob.createdAt + BLOB_ARRIVAL_DURATION,
+            blob.createdAt + formationDuration,
             undefined,
             settledCount,
             settledCount + 1,
@@ -4137,7 +4280,8 @@ export function AuraToy() {
         }
         settledCount += 1;
         if (
-          (blob.artStyle ?? currentArtStyle) !== "style-2" &&
+          blobStyle !== "style-2" &&
+          blobStyle !== "style-3" &&
           colorRebuildLayersRef.current === 0 &&
           settledCount - additiveLayerStartRef.current >= SATURATION_MINIMUM_LAYERS &&
           settledCount % SATURATION_CHECK_INTERVAL === 0 &&
@@ -4158,17 +4302,21 @@ export function AuraToy() {
       }
 
       let newestDottedCreatedAt = Number.NEGATIVE_INFINITY;
-      let containsOrganicStyle = false;
+      let hasAuraStyle = false;
+      let hasMetalheartStyle = false;
       for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
         const blob = blobsRef.current[index];
-        if ((blob.artStyle ?? currentArtStyle) === "style-2") {
+        const blobStyle = blob.artStyle ?? currentArtStyle;
+        if (blobStyle === "style-2") {
           if (!Number.isFinite(newestDottedCreatedAt)) newestDottedCreatedAt = blob.createdAt;
+        } else if (blobStyle === "style-3") {
+          hasMetalheartStyle = true;
         } else {
-          containsOrganicStyle = true;
+          hasAuraStyle = true;
         }
-        if (containsOrganicStyle && Number.isFinite(newestDottedCreatedAt)) break;
       }
       const hasDottedStyle = Number.isFinite(newestDottedCreatedAt);
+      const containsOrganicStyle = hasAuraStyle || hasMetalheartStyle;
       const dottedMotionIsActive =
         hasDottedStyle &&
         !reducedMotionRef.current &&
@@ -4181,7 +4329,7 @@ export function AuraToy() {
           : reducedMotionRef.current
             ? 0.4
             : 0.65) * blurScale;
-      if (!hasDottedStyle) {
+      if (!hasDottedStyle && !hasMetalheartStyle) {
         const organicLayerNeedsRefresh =
           settledCount < blobsRef.current.length ||
           blurredSettledCount !== settledCount ||
@@ -4219,7 +4367,11 @@ export function AuraToy() {
         }
       }
 
-      if (hasCompactedHistory || (hasDottedStyle && containsOrganicStyle)) {
+      if (
+        hasCompactedHistory ||
+        hasMetalheartStyle ||
+        (hasDottedStyle && containsOrganicStyle)
+      ) {
         drawChronologicalAuraLayers(
           context,
           offscreen,
@@ -4279,6 +4431,25 @@ export function AuraToy() {
         context.restore();
       }
 
+      const metalheartPulse = metalheartPulseRef.current;
+      const metalheartPulseProgress =
+        (now - metalheartPulse.startedAt) / METALHEART_PULSE_DURATION;
+      const metalheartPulseIsActive =
+        hasMetalheartStyle &&
+        !reducedMotionRef.current &&
+        metalheartPulseProgress >= 0 &&
+        metalheartPulseProgress < 1;
+      if (metalheartPulseIsActive) {
+        metalheartRenderer?.drawMetalheartPulse(context, {
+          centerX: metalheartPulse.x * width,
+          centerY: metalheartPulse.y * height,
+          width,
+          height,
+          progress: metalheartPulseProgress,
+          strength: metalheartPulse.strength,
+        });
+      }
+
       if (grainPattern) {
         drawGrainPattern(context, width, height, grainPattern, 0.055);
       }
@@ -4299,8 +4470,8 @@ export function AuraToy() {
         Math.abs(telemetryTransition.to - telemetryTransition.from) > 0.001;
 
       // Screen-only: exports render from drawAuraComposition without this pass.
-      if (telemetryOpacity > 0.001) {
-        drawTelemetryOverlay(
+      if (telemetryOpacity > 0.001 && telemetryRenderer) {
+        telemetryRenderer.drawTelemetryOverlay(
           context,
           blobsRef.current,
           width,
@@ -4311,14 +4482,18 @@ export function AuraToy() {
         );
       }
       const nextTelemetryFrameAt = telemetryOpacity > 0.001
-        ? telemetryNextFrameAt(now)
+        ? (telemetryRenderer?.telemetryNextFrameAt(now) ?? Number.POSITIVE_INFINITY)
         : Number.POSITIVE_INFINITY;
 
       const newestBlob = blobsRef.current.at(-1);
+      const newestFormationDuration =
+        (newestBlob?.artStyle ?? currentArtStyle) === "style-3"
+          ? METALHEART_FORMATION_DURATION
+          : BLOB_ARRIVAL_DURATION;
       const hasArrivingBlob =
         !reducedMotionRef.current &&
         newestBlob !== undefined &&
-        now - newestBlob.createdAt < BLOB_ARRIVAL_DURATION;
+        now - newestBlob.createdAt < newestFormationDuration;
       const renderDuration = performance.now() - renderStartedAt;
       if (renderDuration > AURA_RENDER_BUDGET_MS) {
         overBudgetFrames += 1;
@@ -4336,6 +4511,7 @@ export function AuraToy() {
       }
       if (
         hasArrivingBlob ||
+        metalheartPulseIsActive ||
         dottedMotionIsActive ||
         settledCount < blobsRef.current.length ||
         telemetryIsTransitioning ||
@@ -4552,6 +4728,9 @@ export function AuraToy() {
     const hasDottedStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) === "style-2",
     );
+    const hasMetalheartStyle = blobsRef.current.some(
+      (blob) => (blob.artStyle ?? artStyleRef.current) === "style-3",
+    );
     const containsOrganicStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
     );
@@ -4562,7 +4741,11 @@ export function AuraToy() {
       outputContext.drawImage(compactedHistory, 0, 0, output.width, output.height);
       outputContext.restore();
     }
-    if (hasCompactedHistory || (hasDottedStyle && containsOrganicStyle)) {
+    if (
+      hasCompactedHistory ||
+      hasMetalheartStyle ||
+      (hasDottedStyle && containsOrganicStyle)
+    ) {
       drawChronologicalAuraLayers(
         outputContext,
         auraLayer,
