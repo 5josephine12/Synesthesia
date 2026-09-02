@@ -23,6 +23,17 @@ function loadMetalheartRenderer() {
   return metalheartRendererReady;
 }
 
+type LiquidMetalRenderer = typeof import("./art-styles/style-4");
+let liquidMetalRenderer: LiquidMetalRenderer | null = null;
+let liquidMetalRendererReady: Promise<LiquidMetalRenderer> | null = null;
+function loadLiquidMetalRenderer() {
+  liquidMetalRendererReady ??= import("./art-styles/style-4").then((renderer) => {
+    liquidMetalRenderer = renderer;
+    return renderer;
+  });
+  return liquidMetalRendererReady;
+}
+
 type SolidControlIconName =
   | "check"
   | "close"
@@ -341,6 +352,7 @@ const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
 const METALHEART_FORMATION_DURATION = 1900;
 const METALHEART_PULSE_DURATION = 920;
+const LIQUID_METAL_FORMATION_DURATION = 2100;
 const MAX_LIVE_VISUAL_PARTICLES = 48;
 const HARD_MAX_LIVE_VISUAL_PARTICLES = 72;
 const VISUAL_COMPACTION_BATCH_SIZE = 2;
@@ -431,6 +443,15 @@ const METALHEART_COMPOSITION_ANCHORS = [
   [0.64, 0.46],
   [0.43, 0.62],
   [0.69, 0.3],
+] as const;
+
+const LIQUID_METAL_COMPOSITION_ANCHORS = [
+  [0.28, 0.34],
+  [0.46, 0.42],
+  [0.66, 0.32],
+  [0.36, 0.64],
+  [0.6, 0.64],
+  [0.76, 0.5],
 ] as const;
 
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
@@ -1105,7 +1126,7 @@ const ART_STYLE_SLOTS = [
   { id: "aura", label: "Aura" },
   { id: "style-2", label: "Pixel" },
   { id: "style-3", label: "Metalheart" },
-  { id: "style-4", label: "Style 4" },
+  { id: "style-4", label: "Liquid Metal" },
 ] as const;
 type ArtStyleId = (typeof ART_STYLE_SLOTS)[number]["id"];
 
@@ -1728,14 +1749,19 @@ function drawAuraComposition(
     const artStyle = blob.artStyle ?? fallbackArtStyle;
     const formationDuration = artStyle === "style-3"
       ? METALHEART_FORMATION_DURATION
-      : BLOB_ARRIVAL_DURATION;
+      : artStyle === "style-4"
+        ? LIQUID_METAL_FORMATION_DURATION
+        : BLOB_ARRIVAL_DURATION;
     const age = replayProgress === undefined
       ? Math.max(0, now - blob.createdAt)
       : replayAge * formationDuration;
     const arrival = easeOutCubic(age / formationDuration);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
     const preserveColor =
-      artStyle === "style-2" || artStyle === "style-3" || blob.blendMode === "source-over";
+      artStyle === "style-2" ||
+      artStyle === "style-3" ||
+      artStyle === "style-4" ||
+      blob.blendMode === "source-over";
     const alpha = clamp(
       (0.4 + blob.velocity * 0.48) * Math.min(1, replayAge) * (preserveColor ? 1.12 : 1),
       0,
@@ -1743,7 +1769,9 @@ function drawAuraComposition(
     );
 
     context.globalCompositeOperation =
-      artStyle === "style-2" || artStyle === "style-3" ? "source-over" : blob.blendMode;
+      artStyle === "style-2" || artStyle === "style-3" || artStyle === "style-4"
+        ? "source-over"
+        : blob.blendMode;
     drawAuraParticle(
       context,
       blob,
@@ -1870,13 +1898,15 @@ function drawChronologicalAuraLayers(
   replayProgress?: number,
   hasEarlierArtwork = false,
   metalheartCanvas?: CanvasImageSource | null,
+  liquidMetalCanvas?: CanvasImageSource | null,
 ) {
   const replayPosition = replayProgress === undefined
     ? Number.POSITIVE_INFINITY
     : replayProgress * (blobs.length + 0.9);
   const visibleLimit = Math.min(blobs.length, Math.max(0, Math.ceil(replayPosition)));
   const renderNow = reducedMotion
-    ? (blobs[Math.max(0, visibleLimit - 1)]?.createdAt ?? now) + METALHEART_FORMATION_DURATION
+    ? (blobs[Math.max(0, visibleLimit - 1)]?.createdAt ?? now) +
+      Math.max(METALHEART_FORMATION_DURATION, LIQUID_METAL_FORMATION_DURATION)
     : now;
   let dottedWindowStart = 0;
   let dottedCount = 0;
@@ -1896,6 +1926,14 @@ function drawChronologicalAuraLayers(
       break;
     }
   }
+  let lastLiquidMetalIndex = -1;
+  if (liquidMetalCanvas) {
+    for (let index = visibleLimit - 1; index >= 0; index -= 1) {
+      if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-4") continue;
+      lastLiquidMetalIndex = index;
+      break;
+    }
+  }
 
   let runStart = 0;
   while (runStart < visibleLimit) {
@@ -1904,7 +1942,9 @@ function drawChronologicalAuraLayers(
       ? "pixel"
       : runStyle === "style-3"
         ? "metalheart"
-        : "aura";
+        : runStyle === "style-4"
+          ? "liquid-metal"
+          : "aura";
     let runEnd = runStart + 1;
     while (runEnd < visibleLimit) {
       const nextStyle = blobs[runEnd].artStyle ?? fallbackArtStyle;
@@ -1912,7 +1952,9 @@ function drawChronologicalAuraLayers(
         ? "pixel"
         : nextStyle === "style-3"
           ? "metalheart"
-          : "aura";
+          : nextStyle === "style-4"
+            ? "liquid-metal"
+            : "aura";
       if (nextKind !== runKind) break;
       runEnd += 1;
     }
@@ -2048,6 +2090,35 @@ function drawChronologicalAuraLayers(
       context.globalAlpha = 0.26;
       context.drawImage(blurredLayer, 0, 0, width, height);
       context.restore();
+      context.save();
+      context.globalCompositeOperation = "source-over";
+      context.drawImage(organicLayer, 0, 0, width, height);
+      context.restore();
+    } else if (runKind === "liquid-metal") {
+      if (liquidMetalCanvas) {
+        if (lastLiquidMetalIndex >= runStart && lastLiquidMetalIndex < runEnd) {
+          context.save();
+          context.globalCompositeOperation = "source-over";
+          context.imageSmoothingEnabled = true;
+          context.imageSmoothingQuality = "high";
+          context.drawImage(liquidMetalCanvas, 0, 0, width, height);
+          context.restore();
+        }
+        runStart = runEnd;
+        continue;
+      }
+      organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
+      drawAuraComposition(
+        organicContext,
+        blobs,
+        organicLayer.width,
+        organicLayer.height,
+        renderNow,
+        replayProgress,
+        runStart,
+        runEnd,
+        fallbackArtStyle,
+      );
       context.save();
       context.globalCompositeOperation = "source-over";
       context.drawImage(organicLayer, 0, 0, width, height);
@@ -2651,6 +2722,12 @@ export function AuraToy() {
         METALHEART_COMPOSITION_ANCHORS.length,
       )
     ];
+    const liquidMetalAnchor = LIQUID_METAL_COMPOSITION_ANCHORS[
+      modulo(
+        compositionIndex + note.pc * 2 + modeIndex,
+        LIQUID_METAL_COMPOSITION_ANCHORS.length,
+      )
+    ];
     const baseAngle =
       profile.angleBias + (identityRng() - 0.5) * Math.PI * 0.82 + (note.pc - 5.5) * 0.045;
     const trailDirection = baseAngle + (modeIndex - 2) * 0.12;
@@ -2670,11 +2747,20 @@ export function AuraToy() {
             0.12,
             0.88,
           )
-      : clamp(
-          baseX + Math.cos(trailDirection) * trailDistance + Math.cos(trailDirection + Math.PI / 2) * trailBend,
-          0.035,
-          0.965,
-        );
+        : currentArtStyle === "style-4"
+          ? clamp(
+              lerp(baseX, liquidMetalAnchor[0], 0.82) +
+                (identityRng() - 0.5) * 0.026,
+              0.12,
+              0.88,
+            )
+          : clamp(
+              baseX +
+                Math.cos(trailDirection) * trailDistance +
+                Math.cos(trailDirection + Math.PI / 2) * trailBend,
+              0.035,
+              0.965,
+            );
     const y = currentArtStyle === "style-2"
       ? clamp(
           lerp(pixelAnchor[1], pitchY, 0.08) + (identityRng() - 0.5) * 0.022,
@@ -2689,13 +2775,20 @@ export function AuraToy() {
             0.12,
             0.78,
           )
-      : clamp(
-          baseY +
-            Math.sin(trailDirection) * trailDistance * 0.74 +
-            Math.sin(trailDirection + Math.PI / 2) * trailBend * 0.74,
-          0.04,
-          0.9,
-        );
+        : currentArtStyle === "style-4"
+          ? clamp(
+              lerp(baseY, liquidMetalAnchor[1], 0.82) +
+                (identityRng() - 0.5) * 0.024,
+              0.12,
+              0.82,
+            )
+          : clamp(
+              baseY +
+                Math.sin(trailDirection) * trailDistance * 0.74 +
+                Math.sin(trailDirection + Math.PI / 2) * trailBend * 0.74,
+              0.04,
+              0.9,
+            );
     const registerBand = pitchNorm < 0.34 ? 0 : pitchNorm < 0.68 ? 1 : 2;
     const shapeBand = profile.shapeBands[registerBand];
     const shape = shapeBand[
@@ -2739,7 +2832,9 @@ export function AuraToy() {
     }
 
     const blendMode: AuraBlendMode =
-      currentArtStyle === "style-2" || currentArtStyle === "style-3"
+      currentArtStyle === "style-2" ||
+      currentArtStyle === "style-3" ||
+      currentArtStyle === "style-4"
         ? "source-over"
         : colorRebuildLayersRef.current > 0
           ? "source-over"
@@ -4207,6 +4302,7 @@ export function AuraToy() {
       metalheartPulseRef.current.startedAt = Number.NEGATIVE_INFINITY;
       metalheartPulseRef.current.strength = 0;
       metalheartRenderer?.resetMetalheartRenderer();
+      liquidMetalRenderer?.resetLiquidMetalRenderer();
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
     };
@@ -4264,7 +4360,9 @@ export function AuraToy() {
           ? DOTTED_GLOW_MATURATION_DURATION
           : blobStyle === "style-3"
             ? METALHEART_FORMATION_DURATION
-            : BLOB_ARRIVAL_DURATION;
+            : blobStyle === "style-4"
+              ? LIQUID_METAL_FORMATION_DURATION
+              : BLOB_ARRIVAL_DURATION;
         if (
           !isInvisibleDotted &&
           !reducedMotionRef.current &&
@@ -4285,7 +4383,7 @@ export function AuraToy() {
       const compactedBlobs = blobs.slice(0, compactCount);
       const compactedVisibleBlobs = compactedBlobs.filter((blob, index) => {
         const blobStyle = blob.artStyle ?? artStyleRef.current;
-        if (blobStyle === "style-3") return false;
+        if (blobStyle === "style-3" || blobStyle === "style-4") return false;
         const isDotted = blobStyle === "style-2";
         return !isDotted || index >= oldestVisibleDottedIndex;
       });
@@ -4365,9 +4463,11 @@ export function AuraToy() {
         const blobStyle = blob.artStyle ?? currentArtStyle;
         const formationDuration = blobStyle === "style-3"
           ? METALHEART_FORMATION_DURATION
-          : BLOB_ARRIVAL_DURATION;
+          : blobStyle === "style-4"
+            ? LIQUID_METAL_FORMATION_DURATION
+            : BLOB_ARRIVAL_DURATION;
         if (!reducedMotionRef.current && now - blob.createdAt < formationDuration) break;
-        if (blobStyle !== "style-2" && blobStyle !== "style-3") {
+        if (blobStyle !== "style-2" && blobStyle !== "style-3" && blobStyle !== "style-4") {
           drawAuraComposition(
             settledContext,
             blobsRef.current,
@@ -4384,6 +4484,7 @@ export function AuraToy() {
         if (
           blobStyle !== "style-2" &&
           blobStyle !== "style-3" &&
+          blobStyle !== "style-4" &&
           colorRebuildLayersRef.current === 0 &&
           settledCount - additiveLayerStartRef.current >= SATURATION_MINIMUM_LAYERS &&
           settledCount % SATURATION_CHECK_INTERVAL === 0 &&
@@ -4406,6 +4507,7 @@ export function AuraToy() {
       let newestDottedCreatedAt = Number.NEGATIVE_INFINITY;
       let hasAuraStyle = false;
       let hasMetalheartStyle = false;
+      let hasLiquidMetalStyle = false;
       for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
         const blob = blobsRef.current[index];
         const blobStyle = blob.artStyle ?? currentArtStyle;
@@ -4413,12 +4515,14 @@ export function AuraToy() {
           if (!Number.isFinite(newestDottedCreatedAt)) newestDottedCreatedAt = blob.createdAt;
         } else if (blobStyle === "style-3") {
           hasMetalheartStyle = true;
+        } else if (blobStyle === "style-4") {
+          hasLiquidMetalStyle = true;
         } else {
           hasAuraStyle = true;
         }
       }
       const hasDottedStyle = Number.isFinite(newestDottedCreatedAt);
-      const containsOrganicStyle = hasAuraStyle || hasMetalheartStyle;
+      const containsOrganicStyle = hasAuraStyle || hasMetalheartStyle || hasLiquidMetalStyle;
       const metalheartPulse = metalheartPulseRef.current;
       const metalheartPulseProgress =
         (now - metalheartPulse.startedAt) / METALHEART_PULSE_DURATION;
@@ -4444,6 +4548,15 @@ export function AuraToy() {
               : undefined,
           })
         : null;
+      const liquidMetalFrame = hasLiquidMetalStyle
+        ? liquidMetalRenderer?.renderLiquidMetalFrame({
+            particles: blobsRef.current,
+            width,
+            height,
+            now,
+            reducedMotion: reducedMotionRef.current,
+          })
+        : null;
       const dottedMotionIsActive =
         hasDottedStyle &&
         !reducedMotionRef.current &&
@@ -4456,7 +4569,7 @@ export function AuraToy() {
           : reducedMotionRef.current
             ? 0.4
             : 0.65) * blurScale;
-      if (!hasDottedStyle && !hasMetalheartStyle) {
+      if (!hasDottedStyle && !hasMetalheartStyle && !hasLiquidMetalStyle) {
         const organicLayerNeedsRefresh =
           settledCount < blobsRef.current.length ||
           blurredSettledCount !== settledCount ||
@@ -4497,6 +4610,7 @@ export function AuraToy() {
       if (
         hasCompactedHistory ||
         hasMetalheartStyle ||
+        hasLiquidMetalStyle ||
         (hasDottedStyle && containsOrganicStyle)
       ) {
         drawChronologicalAuraLayers(
@@ -4519,6 +4633,7 @@ export function AuraToy() {
           undefined,
           hasCompactedHistory,
           metalheartFrame?.canvas,
+          liquidMetalFrame?.canvas,
         );
       } else if (hasDottedStyle) {
         const pixelLayerNeedsRefresh =
@@ -4609,7 +4724,9 @@ export function AuraToy() {
       const newestFormationDuration =
         (newestBlob?.artStyle ?? currentArtStyle) === "style-3"
           ? METALHEART_FORMATION_DURATION
-          : BLOB_ARRIVAL_DURATION;
+          : (newestBlob?.artStyle ?? currentArtStyle) === "style-4"
+            ? LIQUID_METAL_FORMATION_DURATION
+            : BLOB_ARRIVAL_DURATION;
       const hasArrivingBlob =
         !reducedMotionRef.current &&
         newestBlob !== undefined &&
@@ -4632,6 +4749,7 @@ export function AuraToy() {
       if (
         hasArrivingBlob ||
         metalheartFrame?.forming ||
+        liquidMetalFrame?.forming ||
         metalheartPulseIsActive ||
         dottedMotionIsActive ||
         settledCount < blobsRef.current.length ||
@@ -4674,6 +4792,7 @@ export function AuraToy() {
       cancelScheduledWake();
       window.cancelAnimationFrame(frame);
       metalheartRenderer?.disposeMetalheartRenderer();
+      liquidMetalRenderer?.disposeLiquidMetalRenderer();
     };
   }, []);
 
@@ -4853,11 +4972,23 @@ export function AuraToy() {
     const hasMetalheartStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) === "style-3",
     );
+    const hasLiquidMetalStyle = blobsRef.current.some(
+      (blob) => (blob.artStyle ?? artStyleRef.current) === "style-4",
+    );
     const containsOrganicStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
     );
     const exportMetalheartFrame = hasMetalheartStyle
       ? metalheartRenderer?.renderMetalheartFrame({
+          particles: blobsRef.current,
+          width: output.width,
+          height: output.height,
+          now: performance.now(),
+          reducedMotion: replayProgress === undefined,
+        })
+      : null;
+    const exportLiquidMetalFrame = hasLiquidMetalStyle
+      ? liquidMetalRenderer?.renderLiquidMetalFrame({
           particles: blobsRef.current,
           width: output.width,
           height: output.height,
@@ -4875,6 +5006,7 @@ export function AuraToy() {
     if (
       hasCompactedHistory ||
       hasMetalheartStyle ||
+      hasLiquidMetalStyle ||
       (hasDottedStyle && containsOrganicStyle)
     ) {
       drawChronologicalAuraLayers(
@@ -4897,6 +5029,7 @@ export function AuraToy() {
         replayProgress,
         hasCompactedHistory,
         exportMetalheartFrame?.canvas,
+        exportLiquidMetalFrame?.canvas,
       );
     } else if (hasDottedStyle) {
       drawDottedSigilFlowLayer(
@@ -5195,6 +5328,11 @@ export function AuraToy() {
       if (nextStyle.id === "style-3") {
         void loadMetalheartRenderer().then((renderer) => {
           renderer.warmMetalheartRenderer();
+          wakeRendererRef.current?.();
+        });
+      } else if (nextStyle.id === "style-4") {
+        void loadLiquidMetalRenderer().then((renderer) => {
+          renderer.warmLiquidMetalRenderer();
           wakeRendererRef.current?.();
         });
       }

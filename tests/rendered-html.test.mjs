@@ -59,7 +59,7 @@ test("server-renders the Aura shell", async () => {
   assert.match(html, /aria-label="Aura art style, selected"/);
   assert.match(html, /aria-label="Pixel art style"/);
   assert.match(html, /aria-label="Metalheart art style"/);
-  assert.match(html, /aria-label="Style 4 art style"/);
+  assert.match(html, /aria-label="Liquid Metal art style"/);
   assert.match(html, /aria-pressed="true"/);
   assert.match(html, /filled-triangle is-up/);
   assert.match(html, /filled-triangle is-left/);
@@ -305,6 +305,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
     new URL("../app/art-styles/style-3.ts", import.meta.url),
     "utf8",
   );
+  const styleFourSource = await readFile(
+    new URL("../app/art-styles/style-4.ts", import.meta.url),
+    "utf8",
+  );
   const telemetrySource = await readFile(
     new URL("../app/art-styles/telemetry.ts", import.meta.url),
     "utf8",
@@ -399,7 +403,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /blobs\.length <= MAX_LIVE_VISUAL_PARTICLES/);
   assert.match(
     auraSource,
-    /const minimumAge = isDotted\s*\? DOTTED_GLOW_MATURATION_DURATION\s*: blobStyle === "style-3"\s*\? METALHEART_FORMATION_DURATION\s*: BLOB_ARRIVAL_DURATION/,
+    /const minimumAge = isDotted\s*\? DOTTED_GLOW_MATURATION_DURATION\s*: blobStyle === "style-3"\s*\? METALHEART_FORMATION_DURATION\s*: blobStyle === "style-4"\s*\? LIQUID_METAL_FORMATION_DURATION\s*: BLOB_ARRIVAL_DURATION/,
   );
   assert.match(auraSource, /Math\.min\(\s*VISUAL_COMPACTION_BATCH_SIZE,/);
   assert.match(auraSource, /const compactedBlobs = blobs\.slice\(0, compactCount\)/);
@@ -425,6 +429,8 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styles, /\.piano-key\s*\{[\s\S]*?transition: transform 90ms/);
   assert.match(auraSource, /\{ id: "style-3", label: "Metalheart" \}/);
   assert.match(auraSource, /metalheartRendererReady \?\?= import\("\.\/art-styles\/style-3"\)/);
+  assert.match(auraSource, /\{ id: "style-4", label: "Liquid Metal" \}/);
+  assert.match(auraSource, /liquidMetalRendererReady \?\?= import\("\.\/art-styles\/style-4"\)/);
   assert.match(auraSource, /const telemetryRendererReady = import\("\.\/art-styles\/telemetry"\)/);
   assert.match(auraSource, /const METALHEART_FORMATION_DURATION = 1900/);
   assert.match(auraSource, /const METALHEART_PULSE_DURATION = 920/);
@@ -451,4 +457,12 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /brightness\(1\.55\) saturate\(1\.28\)/);
   assert.match(auraSource, /context\.globalAlpha = 0\.62/);
   assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
+  assert.match(styleFourSource, /new ShaderMaterial/);
+  assert.match(styleFourSource, /const fragmentShader = \/\* glsl \*\//);
+  assert.match(styleFourSource, /uniform vec4 uNodes\[MAX_LIQUID_NODES\]/);
+  assert.match(styleFourSource, /float field = 0\.0/);
+  assert.match(styleFourSource, /vec3 reflected = reflect/);
+  assert.match(styleFourSource, /const MAX_LIQUID_NODES = 12/);
+  assert.match(styleFourSource, /const LIQUID_PIXEL_BUDGET = 820_000/);
+  assert.doesNotMatch(styleFourSource, /getImageData|createRadialGradient|shadowBlur/);
 });
