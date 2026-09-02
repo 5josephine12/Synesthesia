@@ -315,8 +315,9 @@ const BLOB_ARRIVAL_DURATION = 550;
 const DOTTED_VISIBLE_FORMATIONS = 4;
 const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
-const MAX_LIVE_VISUAL_PARTICLES = 96;
-const HARD_MAX_LIVE_VISUAL_PARTICLES = 192;
+const MAX_LIVE_VISUAL_PARTICLES = 48;
+const HARD_MAX_LIVE_VISUAL_PARTICLES = 72;
+const VISUAL_COMPACTION_BATCH_SIZE = 2;
 const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown";
 const DEVICE_AUDIO_CAPTURE_OPTIONS: DeviceAudioCaptureOptions = {
   video: { displaySurface: "monitor" },
@@ -4006,47 +4007,72 @@ export function AuraToy() {
       const blobs = blobsRef.current;
       if (blobs.length <= MAX_LIVE_VISUAL_PARTICLES || settledCount === 0) return;
 
+      let visibleDottedCount = 0;
+      let oldestVisibleDottedIndex = 0;
+      for (let index = blobs.length - 1; index >= 0; index -= 1) {
+        if ((blobs[index].artStyle ?? artStyleRef.current) !== "style-2") continue;
+        visibleDottedCount += 1;
+        if (visibleDottedCount === DOTTED_VISIBLE_FORMATIONS) {
+          oldestVisibleDottedIndex = index;
+          break;
+        }
+      }
+
       let compactCount = 0;
       for (let index = 0; index < settledCount; index += 1) {
         const blob = blobs[index];
         const isDotted = (blob.artStyle ?? artStyleRef.current) === "style-2";
+        const isInvisibleDotted = isDotted && index < oldestVisibleDottedIndex;
         const minimumAge = isDotted
           ? DOTTED_GLOW_MATURATION_DURATION
           : BLOB_ARRIVAL_DURATION;
-        if (!reducedMotionRef.current && now - blob.createdAt < minimumAge) break;
+        if (
+          !isInvisibleDotted &&
+          !reducedMotionRef.current &&
+          now - blob.createdAt < minimumAge
+        ) break;
         compactCount = index + 1;
       }
 
       const forcedCount = blobs.length > HARD_MAX_LIVE_VISUAL_PARTICLES
         ? Math.min(settledCount, blobs.length - MAX_LIVE_VISUAL_PARTICLES)
         : 0;
-      compactCount = Math.max(compactCount, forcedCount);
+      compactCount = Math.min(
+        VISUAL_COMPACTION_BATCH_SIZE,
+        Math.max(compactCount, forcedCount),
+      );
       if (compactCount === 0) return;
 
       const compactedBlobs = blobs.slice(0, compactCount);
-      drawChronologicalAuraLayers(
-        historyCompositeContext,
-        offscreen,
-        offscreenContext,
-        pixelLayer,
-        pixelContext,
-        pixelAccents,
-        pixelAccentContext,
-        blurred,
-        blurredContext,
-        compactedBlobs,
-        width,
-        height,
-        now,
-        true,
-        artStyleRef.current,
-        blurRadius,
-        undefined,
-        hasCompactedHistory,
-      );
+      const compactedVisibleBlobs = compactedBlobs.filter((blob, index) => {
+        const isDotted = (blob.artStyle ?? artStyleRef.current) === "style-2";
+        return !isDotted || index >= oldestVisibleDottedIndex;
+      });
+      if (compactedVisibleBlobs.length > 0) {
+        drawChronologicalAuraLayers(
+          historyCompositeContext,
+          offscreen,
+          offscreenContext,
+          pixelLayer,
+          pixelContext,
+          pixelAccents,
+          pixelAccentContext,
+          blurred,
+          blurredContext,
+          compactedVisibleBlobs,
+          width,
+          height,
+          now,
+          true,
+          artStyleRef.current,
+          blurRadius,
+          undefined,
+          hasCompactedHistory,
+        );
 
-      hasCompactedHistory = true;
-      compactedHistoryActiveRef.current = true;
+        hasCompactedHistory = true;
+        compactedHistoryActiveRef.current = true;
+      }
       blobsRef.current = blobs.slice(compactCount);
       settledContext.clearRect(0, 0, settled.width, settled.height);
       settledCount = 0;
