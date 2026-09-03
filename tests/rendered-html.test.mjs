@@ -131,6 +131,14 @@ test("exports GIFs at preview quality with a stable full palette", async () => {
   assert.match(source, /const indexedFrame = indexGifFrame\(rgba\)/);
   assert.match(source, /const rgb565Cache = new Int16Array\(65536\)/);
   assert.match(source, /palette: frame === 0 \? globalPalette : undefined/);
+  assert.match(source, /const artworkHistoryRef = useRef<BlobParticle\[\]>\(\[\]\)/);
+  assert.match(source, /const exportSnapshotRef = useRef<ArtworkExportSnapshot \| null>\(null\)/);
+  assert.match(source, /particles: artworkHistoryRef\.current\.map\(\(particle\) => \(\{ \.\.\.particle \}\)\)/);
+  assert.match(source, /const exportBlobs = exportSnapshot\?\.particles \?\? blobsRef\.current/);
+  assert.match(source, /const exportNow = exportSnapshot\?\.capturedAt \?\? performance\.now\(\)/);
+  assert.match(source, /exportSnapshot === null &&\s*compactedHistoryActiveRef\.current/);
+  assert.match(source, /artworkHistoryRef\.current\.push\(nextBlob\)/);
+  assert.match(source, /artworkHistoryRef\.current = artworkHistoryRef\.current\.map/);
 });
 
 test("exports the still image directly from its preview-quality canvas", async () => {

@@ -279,6 +279,11 @@ type ReplayRenderState = {
   blobTotal: number;
 };
 
+type ArtworkExportSnapshot = {
+  particles: BlobParticle[];
+  capturedAt: number;
+};
+
 type MicrophoneRuntime = {
   stream: MediaStream;
   context: AudioContext;
@@ -2418,6 +2423,8 @@ export function AuraToy() {
   const exportGrainPatternsRef = useRef<WeakMap<HTMLCanvasElement, CanvasPattern>>(new WeakMap());
   const replayRenderStatesRef = useRef<WeakMap<HTMLCanvasElement, ReplayRenderState>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
+  const artworkHistoryRef = useRef<BlobParticle[]>([]);
+  const exportSnapshotRef = useRef<ArtworkExportSnapshot | null>(null);
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
   const artStyleLayerCountRef = useRef<Record<ArtStyleId, number>>({
@@ -2724,6 +2731,12 @@ export function AuraToy() {
     }
     lastPreviewTriggerRef.current =
       kind === "image" ? imagePreviewButtonRef.current : gifPreviewButtonRef.current;
+    const capturedAt = performance.now();
+    exportSnapshotRef.current = {
+      particles: artworkHistoryRef.current.map((particle) => ({ ...particle })),
+      capturedAt,
+    };
+    replayRenderStatesRef.current = new WeakMap();
     setDownloadFeedback("idle");
     setPreviewClosing(false);
     setPreviewKind(kind);
@@ -2738,6 +2751,8 @@ export function AuraToy() {
       if (feedback) hapticFeedback(feedback);
       previewCloseTimerRef.current = window.setTimeout(() => {
         previewCloseTimerRef.current = null;
+        exportSnapshotRef.current = null;
+        replayRenderStatesRef.current = new WeakMap();
         setPreviewKind(null);
         setPreviewClosing(false);
         setDownloadFeedback("idle");
@@ -2996,7 +3011,7 @@ export function AuraToy() {
       if (colorRebuildLayersRef.current === 0) additiveLayerStartRef.current = layerIndex + 1;
     }
 
-    blobsRef.current.push({
+    const nextBlob: BlobParticle = {
       id,
       artStyle: currentArtStyle,
       color,
@@ -3023,7 +3038,9 @@ export function AuraToy() {
       softness: clamp(profile.softness + (identityRng() - 0.5) * 0.18, 0.24, 0.98),
       blendMode,
       createdAt: now,
-    });
+    };
+    blobsRef.current.push(nextBlob);
+    artworkHistoryRef.current.push(nextBlob);
 
     if (currentArtStyle === "style-3" && isRhythmicStrike) {
       metalheartPulseRef.current = {
@@ -4967,8 +4984,12 @@ export function AuraToy() {
   const renderArtwork = useCallback((output: HTMLCanvasElement, replayProgress?: number) => {
     const outputContext = output.getContext("2d", { alpha: false });
     if (!outputContext) return;
+    const exportSnapshot = exportSnapshotRef.current;
+    const exportBlobs = exportSnapshot?.particles ?? blobsRef.current;
+    const exportNow = exportSnapshot?.capturedAt ?? performance.now();
     const compactedHistory = compactedHistoryCanvasRef.current;
     const hasCompactedHistory =
+      exportSnapshot === null &&
       compactedHistoryActiveRef.current &&
       compactedHistory !== null &&
       compactedHistory.width > 0 &&
@@ -5018,16 +5039,16 @@ export function AuraToy() {
     pixelAccentLayerContext.clearRect(0, 0, pixelAccentLayer.width, pixelAccentLayer.height);
     if (replayProgress === undefined || hasCompactedHistory) {
       replayRenderStatesRef.current.delete(output);
-      const settledAt = (blobsRef.current.at(-1)?.createdAt ?? performance.now()) + BLOB_ARRIVAL_DURATION;
+      const settledAt = (exportBlobs.at(-1)?.createdAt ?? exportNow) + BLOB_ARRIVAL_DURATION;
       drawAuraComposition(
         layerContext,
-        blobsRef.current,
+        exportBlobs,
         layerWidth,
         layerHeight,
         settledAt,
         replayProgress,
         0,
-        blobsRef.current.length,
+        exportBlobs.length,
         artStyleRef.current,
       );
     } else {
@@ -5050,20 +5071,20 @@ export function AuraToy() {
       }
 
       if (!replayState) {
-        const settledAt = (blobsRef.current.at(-1)?.createdAt ?? performance.now()) + BLOB_ARRIVAL_DURATION;
+        const settledAt = (exportBlobs.at(-1)?.createdAt ?? exportNow) + BLOB_ARRIVAL_DURATION;
         drawAuraComposition(
           layerContext,
-          blobsRef.current,
+          exportBlobs,
           layerWidth,
           layerHeight,
           settledAt,
           replayProgress,
           0,
-          blobsRef.current.length,
+          exportBlobs.length,
           artStyleRef.current,
         );
       } else {
-        const blobTotal = blobsRef.current.length;
+        const blobTotal = exportBlobs.length;
         const needsReset =
           replayProgress < replayState.lastProgress ||
           replayState.width !== layerWidth ||
@@ -5083,10 +5104,10 @@ export function AuraToy() {
         const targetSettledCount = Math.min(blobTotal, Math.max(0, Math.floor(replayPosition)));
         while (replayState.settledCount < targetSettledCount) {
           const blobIndex = replayState.settledCount;
-          const blob = blobsRef.current[blobIndex];
+          const blob = exportBlobs[blobIndex];
           drawAuraComposition(
             replayState.settledContext,
-            blobsRef.current,
+            exportBlobs,
             layerWidth,
             layerHeight,
             blob.createdAt + BLOB_ARRIVAL_DURATION,
@@ -5102,10 +5123,10 @@ export function AuraToy() {
         if (targetSettledCount < blobTotal) {
           drawAuraComposition(
             layerContext,
-            blobsRef.current,
+            exportBlobs,
             layerWidth,
             layerHeight,
-            performance.now(),
+            exportNow,
             replayProgress,
             targetSettledCount,
             targetSettledCount + 1,
@@ -5134,16 +5155,16 @@ export function AuraToy() {
     blurredLayerContext.drawImage(auraLayer, 0, 0);
     blurredLayerContext.restore();
 
-    const hasDottedStyle = blobsRef.current.some(
+    const hasDottedStyle = exportBlobs.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) === "style-2",
     );
-    const hasMetalheartStyle = blobsRef.current.some(
+    const hasMetalheartStyle = exportBlobs.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) === "style-3",
     );
-    const hasLiquidMetalStyle = blobsRef.current.some(
+    const hasLiquidMetalStyle = exportBlobs.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) === "style-4",
     );
-    const containsOrganicStyle = blobsRef.current.some(
+    const containsOrganicStyle = exportBlobs.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
     );
     paintArtworkBackground(outputContext, output.width, output.height);
@@ -5169,10 +5190,10 @@ export function AuraToy() {
         pixelAccentLayerContext,
         blurredAuraLayer,
         blurredLayerContext,
-        blobsRef.current,
+        exportBlobs,
         output.width,
         output.height,
-        performance.now(),
+        exportNow,
         replayProgress === undefined,
         artStyleRef.current,
         outputBlurRadius * layerScale,
@@ -5183,14 +5204,14 @@ export function AuraToy() {
     } else if (hasDottedStyle) {
       drawDottedSigilFlowLayer(
         outputContext,
-        blobsRef.current,
+        exportBlobs,
         output.width,
         output.height,
-        performance.now(),
+        exportNow,
         replayProgress === undefined,
         artStyleRef.current,
         0,
-        blobsRef.current.length,
+        exportBlobs.length,
         replayProgress,
       );
     } else {
@@ -5214,7 +5235,12 @@ export function AuraToy() {
     const sourceWidth = Math.max(1, sourceBounds?.width ?? 1440);
     const sourceHeight = Math.max(1, sourceBounds?.height ?? 900);
     const maxDimension =
-      maximumDimension ?? (replayProgress === undefined ? 1920 : blobsRef.current.length > 160 ? 960 : 1280);
+      maximumDimension ??
+        (replayProgress === undefined
+          ? 1920
+          : (exportSnapshotRef.current?.particles.length ?? blobsRef.current.length) > 160
+            ? 960
+            : 1280);
     const scale = Math.min(2, maxDimension / Math.max(sourceWidth, sourceHeight));
     const output = document.createElement("canvas");
     output.width = Math.max(1, Math.round(sourceWidth * scale));
@@ -5229,7 +5255,8 @@ export function AuraToy() {
     const sourceBounds = canvasRef.current?.getBoundingClientRect();
     if (!preview || !sourceBounds) return;
 
-    const maxDimension = blobsRef.current.length > 160 ? 900 : 1200;
+    const exportParticleCount = exportSnapshotRef.current?.particles.length ?? blobsRef.current.length;
+    const maxDimension = exportParticleCount > 160 ? 900 : 1200;
     const scale = Math.min(1.5, maxDimension / Math.max(sourceBounds.width, sourceBounds.height));
     preview.width = Math.max(1, Math.round(sourceBounds.width * scale));
     preview.height = Math.max(1, Math.round(sourceBounds.height * scale));
@@ -5240,7 +5267,7 @@ export function AuraToy() {
       return;
     }
 
-    const revealDuration = clamp(1800 + blobsRef.current.length * 75, 2800, 4800);
+    const revealDuration = clamp(1800 + exportParticleCount * 75, 2800, 4800);
     const holdDuration = 1100;
     const loopDuration = revealDuration + holdDuration;
     const startedAt = performance.now();
@@ -5322,7 +5349,8 @@ export function AuraToy() {
       const outputContext = output.getContext("2d", { alpha: false });
       if (!outputContext) throw new Error("Unable to prepare GIF canvas");
       const gif = GIFEncoder();
-      const revealDuration = clamp(1800 + blobsRef.current.length * 75, 2800, 4800);
+      const exportParticleCount = exportSnapshotRef.current?.particles.length ?? blobsRef.current.length;
+      const revealDuration = clamp(1800 + exportParticleCount * 75, 2800, 4800);
       const frameCount = Math.max(2, Math.ceil(revealDuration / GIF_FRAME_DELAY) + 1);
       renderArtwork(output, 1);
       const finalFrameRgba = outputContext.getImageData(0, 0, output.width, output.height).data;
@@ -5432,6 +5460,8 @@ export function AuraToy() {
     releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     releaseTimersRef.current.clear();
     blobsRef.current = [];
+    artworkHistoryRef.current = [];
+    exportSnapshotRef.current = null;
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
     artStyleLayerCountRef.current = {
@@ -5475,6 +5505,11 @@ export function AuraToy() {
       const previousStyle = artStyleRef.current;
       const frozenAt = performance.now();
       blobsRef.current = blobsRef.current.map((blob) =>
+        blob.artStyle === previousStyle && blob.frozenAt === undefined
+          ? { ...blob, frozenAt }
+          : blob,
+      );
+      artworkHistoryRef.current = artworkHistoryRef.current.map((blob) =>
         blob.artStyle === previousStyle && blob.frozenAt === undefined
           ? { ...blob, frozenAt }
           : blob,
