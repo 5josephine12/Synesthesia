@@ -63,9 +63,15 @@ export type MetalheartPulseOptions = {
 const FORMATION_DURATION = 1900;
 const MAX_VISIBLE_GROWTHS = 6;
 const RENDER_PIXEL_BUDGET = 5_000_000;
+const MOTION_FRAME_INTERVAL = 1000 / 20;
 const TAU = Math.PI * 2;
 const COMPOSITION_FLOW_ANGLE = -0.67;
-const FLOW_DIRECTION_OFFSETS = [-0.86, -0.56, -0.34, -0.18, -0.06, 0, 0.1, 0.24, 0.43, 0.72, 1.42] as const;
+const FLOW_DIRECTION_OFFSETS = [-1.08, -0.7, -0.42, -0.2, -0.07, 0, 0.12, 0.3, 0.54, 0.9, 1.68] as const;
+const DENSITY_CORE_OFFSETS = [
+  { along: -0.12, across: 0.045 },
+  { along: 0.015, across: -0.06 },
+  { along: 0.15, across: 0.07 },
+] as const;
 
 type Point = { x: number; y: number };
 
@@ -306,56 +312,66 @@ function drawInkComposition(
   // independent of the active note count prevents established forms from
   // jumping whenever a new note joins the composition.
   const focalPoint = {
-    x: width * 0.3,
+    x: width * 0.32,
     y: height * 0.57,
   };
   const flow = { x: Math.cos(COMPOSITION_FLOW_ANGLE), y: Math.sin(COMPOSITION_FLOW_ANGLE) };
   const crossFlow = { x: -flow.y, y: flow.x };
+  const motionTime = reducedMotion ? 0 : now * 0.00016;
 
   for (const particle of active) {
     const seed = growthSeed(particle);
     const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
     const arrival = easeInOutSine(age / FORMATION_DURATION);
     if (arrival <= 0.01) continue;
-    const alongFlow = shortSide * (hash(seed, 3) - 0.5) * 0.31;
-    const acrossFlow = shortSide * (hash(seed, 5) - 0.5) * 0.17;
+    const coreIndex = Math.min(
+      DENSITY_CORE_OFFSETS.length - 1,
+      Math.floor(hash(seed, 2) * DENSITY_CORE_OFFSETS.length),
+    );
+    const core = DENSITY_CORE_OFFSETS[coreIndex];
+    const breath = Math.sin(motionTime + hash(seed, 107) * TAU);
+    const counterBreath = Math.cos(motionTime * 0.83 + hash(seed, 109) * TAU);
+    const alongFlow = shortSide * (core.along + (hash(seed, 3) - 0.5) * 0.13 + breath * 0.012);
+    const acrossFlow = shortSide * (core.across + (hash(seed, 5) - 0.5) * 0.11 + counterBreath * 0.009);
     const pocket = {
       x: focalPoint.x + flow.x * alongFlow + crossFlow.x * acrossFlow,
       y: focalPoint.y + flow.y * alongFlow + crossFlow.y * acrossFlow,
     };
-    const strandCount = 8 + Math.floor(hash(seed, 7) * 5);
+    const strandCount = 9 + Math.floor(hash(seed, 7) * 6);
     for (let strandIndex = 0; strandIndex < strandCount; strandIndex += 1) {
       const strandSeed = seed + strandIndex * 193;
       const delay = strandIndex * 0.025;
       const reveal = clamp((arrival - delay) / Math.max(0.3, 1 - delay), 0, 1);
       if (reveal <= 0.01) continue;
       const shapeRoll = hash(strandSeed, 11);
-      const isLoop = shapeRoll > 0.68 && shapeRoll < 0.82;
-      const isMedium = shapeRoll >= 0.82 && shapeRoll < 0.96;
-      const isPlate = shapeRoll >= 0.96;
+      const isLoop = shapeRoll >= 0.32 && shapeRoll < 0.64;
+      const isMedium = shapeRoll >= 0.64 && shapeRoll < 0.92;
+      const isPlate = shapeRoll >= 0.92;
       const localAlong = (hash(strandSeed, 13) - 0.5) * shortSide * 0.22;
       const localAcross = (hash(strandSeed, 17) - 0.5) * shortSide * 0.135;
+      const strandBreath = Math.sin(motionTime * 1.07 + hash(strandSeed, 97) * TAU);
       const origin = {
-        x: pocket.x + flow.x * localAlong + crossFlow.x * localAcross,
-        y: pocket.y + flow.y * localAlong + crossFlow.y * localAcross,
+        x: pocket.x + flow.x * localAlong + crossFlow.x * (localAcross + strandBreath * shortSide * 0.006),
+        y: pocket.y + flow.y * localAlong + crossFlow.y * (localAcross + strandBreath * shortSide * 0.006),
       };
       const directionIndex = Math.floor(hash(strandSeed, 23) * FLOW_DIRECTION_OFFSETS.length);
       const angle =
         COMPOSITION_FLOW_ANGLE +
         FLOW_DIRECTION_OFFSETS[Math.min(FLOW_DIRECTION_OFFSETS.length - 1, directionIndex)] +
         particle.angle * 0.045 +
-        (hash(strandSeed, 29) - 0.5) * 0.12;
+        (hash(strandSeed, 29) - 0.5) * 0.16 +
+        strandBreath * 0.055;
 
       if (isLoop) {
         shapes.push(buildLoop(
           strandSeed,
           origin,
-          shortSide * lerp(0.055, 0.14, hash(strandSeed, 31)),
-          shortSide * lerp(0.035, 0.11, hash(strandSeed, 37)),
-          COMPOSITION_FLOW_ANGLE + (hash(strandSeed, 39) - 0.5) * 0.82,
-          shortSide * lerp(0.0012, 0.0032, hash(strandSeed, 41)),
+          shortSide * lerp(0.06, 0.17, hash(strandSeed, 31)) * (1 + strandBreath * 0.025),
+          shortSide * lerp(0.04, 0.13, hash(strandSeed, 37)) * (1 - strandBreath * 0.02),
+          COMPOSITION_FLOW_ANGLE + (hash(strandSeed, 39) - 0.5) * 1.35 + strandBreath * 0.08,
+          shortSide * lerp(0.0028, 0.008, hash(strandSeed, 41)),
           angle,
-          (hash(strandSeed, 43) > 0.5 ? 1 : -1) * lerp(Math.PI * 0.78, Math.PI * 1.72, hash(strandSeed, 47)),
+          (hash(strandSeed, 43) > 0.5 ? 1 : -1) * lerp(Math.PI * 0.88, Math.PI * 2.15, hash(strandSeed, 47)),
           reveal,
         ));
         continue;
@@ -367,21 +383,21 @@ function drawInkComposition(
           ? shortSide * lerp(0.14, 0.34, hash(strandSeed, 53))
           : shortSide * lerp(0.16, 0.49, hash(strandSeed, 53));
       const halfWidth = isPlate
-        ? shortSide * lerp(0.012, 0.024, hash(strandSeed, 59))
+        ? shortSide * lerp(0.014, 0.03, hash(strandSeed, 59))
         : isMedium
-          ? shortSide * lerp(0.004, 0.009, hash(strandSeed, 59))
-          : shortSide * lerp(0.00065, 0.0025, hash(strandSeed, 59));
+          ? shortSide * lerp(0.006, 0.014, hash(strandSeed, 59))
+          : shortSide * lerp(0.0014, 0.0037, hash(strandSeed, 59));
       shapes.push(buildRibbon({
         seed: strandSeed,
         origin,
         angle,
         length,
         width: halfWidth,
-        bend: (hash(strandSeed, 61) - 0.5) * (isPlate ? 0.08 : 0.2),
+        bend: (hash(strandSeed, 61) - 0.5) * (isPlate ? 0.09 : 0.24) + strandBreath * 0.026,
         wave: isPlate ? 0.006 : lerp(0.004, 0.018, hash(strandSeed, 67)),
         reveal,
         lobe: isPlate ? lerp(0.8, 1.35, hash(strandSeed, 71)) : lerp(0.15, 0.58, hash(strandSeed, 71)),
-        hook: (hash(strandSeed, 73) > 0.5 ? 1 : -1) * (isPlate ? 0.16 : lerp(0.2, 0.92, hash(strandSeed, 79))),
+        hook: (hash(strandSeed, 73) > 0.5 ? 1 : -1) * (isPlate ? 0.18 : lerp(0.34, 1.16, hash(strandSeed, 79))) * (1 + strandBreath * 0.08),
       }));
     }
 
@@ -401,7 +417,7 @@ function drawInkComposition(
         origin: edgeOrigin,
         angle: edgeAngle,
         length: Math.hypot(width, height) * lerp(0.72, 1.02, hash(seed, 149)),
-        width: shortSide * lerp(0.00055, 0.00135, hash(seed, 151)),
+        width: shortSide * lerp(0.0011, 0.0022, hash(seed, 151)),
         bend: (hash(seed, 157) - 0.5) * 0.035,
         wave: 0.004,
         reveal: arrival,
@@ -446,6 +462,7 @@ class ContourCompositionRenderer {
   private width = 0;
   private height = 0;
   private scale = 1;
+  private lastRenderedAt = Number.NEGATIVE_INFINITY;
 
   constructor() {
     this.canvas = document.createElement("canvas");
@@ -465,6 +482,7 @@ class ContourCompositionRenderer {
       this.height = targetHeight;
       this.canvas.width = targetWidth;
       this.canvas.height = targetHeight;
+      this.lastRenderedAt = Number.NEGATIVE_INFINITY;
     }
     this.scale = scale;
   }
@@ -480,7 +498,13 @@ class ContourCompositionRenderer {
     active.reverse();
     if (active.length === 0) {
       this.context.clearRect(0, 0, this.width, this.height);
+      this.lastRenderedAt = Number.NEGATIVE_INFINITY;
       return null;
+    }
+
+    const continuouslyMoving = !reducedMotion;
+    if (continuouslyMoving && now - this.lastRenderedAt < MOTION_FRAME_INTERVAL) {
+      return { canvas: this.canvas, forming: true };
     }
 
     const pulseProgress = pulse?.progress ?? 2;
@@ -499,12 +523,14 @@ class ContourCompositionRenderer {
     this.context.clearRect(0, 0, this.width, this.height);
     this.context.setTransform(this.scale, 0, 0, this.scale, 0, 0);
     drawInkComposition(this.context, active, width, height, now, reducedMotion, pulseEnvelope);
-    return { canvas: this.canvas, forming };
+    this.lastRenderedAt = now;
+    return { canvas: this.canvas, forming: forming || continuouslyMoving };
   }
 
   reset() {
     this.context.setTransform(1, 0, 0, 1, 0, 0);
     this.context.clearRect(0, 0, this.width, this.height);
+    this.lastRenderedAt = Number.NEGATIVE_INFINITY;
   }
 
   dispose() {
