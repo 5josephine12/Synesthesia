@@ -618,11 +618,8 @@ function drawVisualizerConnection(
   pose: PanelPose,
   life: number,
   frameMix: number,
-  nodeMix: number,
-  branchVariant: number,
 ) {
-  const connectorMix = Math.max(frameMix, nodeMix);
-  if (life <= 0.001 || connectorMix <= 0.001) return;
+  if (life <= 0.001 || frameMix <= 0.001) return;
   // Derive the dock from the panel's visible rectangle on every frame. The
   // panel and cable can now move independently without their edges separating.
   const dock = rectAnchor(pose.viewport, frame.centerX, frame.centerY);
@@ -650,23 +647,75 @@ function drawVisualizerConnection(
     context.restore();
   }
 
-  const cableAlpha = 0.98 * life * connectorMix;
+  const cableAlpha = 0.98 * life * frameMix;
   drawConnectionCable(
     context,
     { x: startX, y: startY },
     { x: endX, y: endY },
     cableAlpha,
   );
+}
 
-  // Branches belong to the node language only. Frame-only scenes keep one
-  // uninterrupted cable between the large visualizer frame and data panel.
-  const hasBranch = nodeMix > 0.001 && branchVariant % 2 === 1 && distance >= 92;
+function drawPanelNodeNetwork(
+  context: CanvasRenderingContext2D,
+  first: FocusPresentation,
+  second: FocusPresentation,
+  life: number,
+  nodeMix: number,
+  branchVariant: number,
+) {
+  if (life <= 0.001 || nodeMix <= 0.001) return;
+  const firstCenter = {
+    x: first.pose.viewport.x + first.pose.viewport.width / 2,
+    y: first.pose.viewport.y + first.pose.viewport.height / 2,
+  };
+  const secondCenter = {
+    x: second.pose.viewport.x + second.pose.viewport.width / 2,
+    y: second.pose.viewport.y + second.pose.viewport.height / 2,
+  };
+  const firstDock = rectAnchor(first.pose.viewport, secondCenter.x, secondCenter.y);
+  const secondDock = rectAnchor(second.pose.viewport, firstCenter.x, firstCenter.y);
+  const deltaX = secondDock.x - firstDock.x;
+  const deltaY = secondDock.y - firstDock.y;
+  const distance = Math.max(1, Math.hypot(deltaX, deltaY));
+  const directionX = deltaX / distance;
+  const directionY = deltaY / distance;
+  const cableStart = {
+    x: firstDock.x - directionX * 2,
+    y: firstDock.y - directionY * 2,
+  };
+  const cableEnd = {
+    x: secondDock.x + directionX * 2,
+    y: secondDock.y + directionY * 2,
+  };
+  const nodeLife = life * nodeMix;
+  drawConnectionCable(context, cableStart, cableEnd, 0.98 * nodeLife);
+  drawConnectionNode(context, firstDock, nodeLife);
+  drawConnectionNode(
+    context,
+    {
+      x: lerp(firstDock.x, secondDock.x, 0.34),
+      y: lerp(firstDock.y, secondDock.y, 0.34),
+    },
+    nodeLife * 0.9,
+  );
+  drawConnectionNode(
+    context,
+    {
+      x: lerp(firstDock.x, secondDock.x, 0.68),
+      y: lerp(firstDock.y, secondDock.y, 0.68),
+    },
+    nodeLife * 0.9,
+  );
+  drawConnectionNode(context, secondDock, nodeLife);
+
+  const hasBranch = branchVariant % 2 === 1 && distance >= 120;
   if (hasBranch) {
     const branchPoint = {
-      x: lerp(edge.x, dock.x, 0.44),
-      y: lerp(edge.y, dock.y, 0.44),
+      x: lerp(firstDock.x, secondDock.x, 0.5),
+      y: lerp(firstDock.y, secondDock.y, 0.5),
     };
-    const branchDock = secondaryPanelDock(pose, dock, branchVariant);
+    const branchDock = secondaryPanelDock(second.pose, secondDock, branchVariant);
     const branchDeltaX = branchDock.x - branchPoint.x;
     const branchDeltaY = branchDock.y - branchPoint.y;
     const branchDistance = Math.max(1, Math.hypot(branchDeltaX, branchDeltaY));
@@ -676,7 +725,6 @@ function drawVisualizerConnection(
       x: branchDock.x + branchDirectionX * 2,
       y: branchDock.y + branchDirectionY * 2,
     };
-    const nodeLife = life * nodeMix;
     drawConnectionCable(context, branchPoint, branchEnd, 0.94 * nodeLife);
     drawConnectionNode(context, branchPoint, nodeLife);
     drawConnectionNode(
@@ -688,17 +736,6 @@ function drawVisualizerConnection(
       nodeLife * 0.88,
     );
     drawConnectionNode(context, branchDock, nodeLife * 0.94);
-  }
-
-  if (nodeMix > 0.001) {
-    const nodeLife = life * nodeMix;
-    drawConnectionNode(context, edge, nodeLife);
-    drawConnectionNode(
-      context,
-      { x: lerp(edge.x, dock.x, 0.48), y: lerp(edge.y, dock.y, 0.48) },
-      nodeLife * 0.86,
-    );
-    drawConnectionNode(context, dock, nodeLife);
   }
 }
 
@@ -1156,20 +1193,10 @@ function drawFrameAsset(
   life: number,
   changing: boolean,
   frameMix: number,
-  nodeMix: number,
-  panelVariant: number,
+  assetMix: number,
 ) {
-  const assetMix = Math.max(frameMix, nodeMix);
   if (life <= 0.001 || assetMix <= 0.001) return;
-  drawVisualizerConnection(
-    context,
-    current.frame,
-    current.pose,
-    life,
-    frameMix,
-    nodeMix,
-    panelVariant,
-  );
+  drawVisualizerConnection(context, current.frame, current.pose, life, frameMix);
   drawPanel(context, from, to, current, snapshots, snapshotBase, progress, life * assetMix, changing);
 }
 
@@ -1349,7 +1376,14 @@ export function drawTelemetryOverlay(
     if (!collidesWithVisiblePanel) frameItems.push(candidate);
   }
   frameItems.reverse();
-  const assetMix = Math.max(compositionMix.frames, compositionMix.nodes);
+  const hasNodePair = frameItems.length >= 2;
+  const visibleCompositionMix = hasNodePair
+    ? compositionMix
+    : {
+        frames: Math.max(compositionMix.frames, compositionMix.nodes),
+        nodes: 0,
+      };
+  const assetMix = Math.max(visibleCompositionMix.frames, visibleCompositionMix.nodes);
 
   const snapshots = assetMix > 0.001
     ? prepareSnapshotStrip(
@@ -1373,11 +1407,23 @@ export function drawTelemetryOverlay(
       item.progress,
       item.life,
       item.changing,
-      compositionMix.frames,
-      compositionMix.nodes,
-      item.state.panelVariant,
+      visibleCompositionMix.frames,
+      assetMix,
     );
   });
+
+  if (hasNodePair) {
+    const first = frameItems[0];
+    const second = frameItems[1];
+    drawPanelNodeNetwork(
+      trackedContext,
+      first.current,
+      second.current,
+      Math.min(first.life, second.life),
+      visibleCompositionMix.nodes,
+      first.state.panelVariant + second.state.panelVariant,
+    );
+  }
 
   context.restore();
 }

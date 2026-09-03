@@ -283,6 +283,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /function rectAnchor/);
   assert.match(telemetrySource, /function drawConnectionCable/);
   assert.match(telemetrySource, /function drawVisualizerConnection/);
+  assert.match(telemetrySource, /function drawPanelNodeNetwork/);
   assert.match(telemetrySource, /function drawFrameAsset/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
   assert.match(telemetrySource, /panelVariant: number/);
@@ -295,27 +296,32 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
   assert.match(telemetrySource, /const dock = rectAnchor\(pose\.viewport, frame\.centerX, frame\.centerY\)/);
   assert.match(telemetrySource, /const edge = frameAnchor\(frame, dock\.x, dock\.y\)/);
-  assert.match(telemetrySource, /const connectorMix = Math\.max\(frameMix, nodeMix\)/);
+  assert.match(telemetrySource, /if \(life <= 0\.001 \|\| frameMix <= 0\.001\) return/);
   assert.match(telemetrySource, /if \(frameMix > 0\.001\)/);
   assert.match(telemetrySource, /context\.strokeRect\(frame\.x, frame\.y, frame\.width, frame\.height\)/);
   assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
   assert.match(telemetrySource, /const endX = dock\.x \+ directionX \* 2/);
   assert.match(telemetrySource, /drawConnectionCable\([\s\S]*?\{ x: startX, y: startY \},[\s\S]*?\{ x: endX, y: endY \}/);
   assert.doesNotMatch(telemetrySource, /drawCableRelayFrame|largeRelay|LONG_CONNECTION_THRESHOLD/);
-  assert.match(telemetrySource, /nodeMix > 0\.001 && branchVariant % 2 === 1 && distance >= 92/);
-  assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(pose, dock, branchVariant\)/);
+  assert.match(telemetrySource, /const firstDock = rectAnchor\(first\.pose\.viewport, secondCenter\.x, secondCenter\.y\)/);
+  assert.match(telemetrySource, /const secondDock = rectAnchor\(second\.pose\.viewport, firstCenter\.x, firstCenter\.y\)/);
+  assert.match(telemetrySource, /drawConnectionCable\(context, cableStart, cableEnd, 0\.98 \* nodeLife\)/);
+  assert.match(telemetrySource, /branchVariant % 2 === 1 && distance >= 120/);
+  assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(second\.pose, secondDock, branchVariant\)/);
   assert.match(telemetrySource, /drawConnectionCable\(context, branchPoint, branchEnd/);
-  assert.match(telemetrySource, /drawConnectionNode\(context, edge, nodeLife\)/);
-  assert.match(telemetrySource, /lerp\(edge\.x, dock\.x, 0\.48\)/);
-  assert.match(telemetrySource, /drawConnectionNode\(context, dock, nodeLife\)/);
+  assert.match(telemetrySource, /drawConnectionNode\(context, firstDock, nodeLife\)/);
+  assert.match(telemetrySource, /drawConnectionNode\(context, secondDock, nodeLife\)/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(
     telemetrySource,
-    /drawFrameAsset\(\s*trackedContext,[\s\S]*?item\.life,\s*item\.changing,\s*compositionMix\.frames,\s*compositionMix\.nodes/,
+    /drawFrameAsset\(\s*trackedContext,[\s\S]*?item\.life,\s*item\.changing,\s*visibleCompositionMix\.frames,\s*assetMix/,
   );
-  assert.match(telemetrySource, /drawVisualizerConnection\([\s\S]*?current\.frame,[\s\S]*?current\.pose,[\s\S]*?panelVariant/);
+  assert.match(telemetrySource, /drawVisualizerConnection\(context, current\.frame, current\.pose, life, frameMix\)/);
   assert.match(telemetrySource, /drawPanel\(context, from, to, current, snapshots, snapshotBase, progress, life \* assetMix, changing\)/);
-  assert.match(telemetrySource, /const assetMix = Math\.max\(compositionMix\.frames, compositionMix\.nodes\)/);
+  assert.match(telemetrySource, /const hasNodePair = frameItems\.length >= 2/);
+  assert.match(telemetrySource, /frames: Math\.max\(compositionMix\.frames, compositionMix\.nodes\),\s*nodes: 0/);
+  assert.match(telemetrySource, /const assetMix = Math\.max\(visibleCompositionMix\.frames, visibleCompositionMix\.nodes\)/);
+  assert.match(telemetrySource, /drawPanelNodeNetwork\([\s\S]*?first\.current,[\s\S]*?second\.current,[\s\S]*?visibleCompositionMix\.nodes/);
   assert.match(telemetrySource, /const snapshots = assetMix > 0\.001/);
   assert.match(telemetrySource, /const frameItems = \[\] as typeof rendered/);
   assert.match(telemetrySource, /frameItems\.length < MAX_VISIBLE_FRAME_ASSETS/);
