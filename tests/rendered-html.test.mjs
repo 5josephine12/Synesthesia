@@ -257,13 +257,16 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /from: enteringPresentation\(presentation\)/);
   assert.match(telemetrySource, /morphStates\.splice\(replacementIndex, 1\)/);
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
-  assert.match(telemetrySource, /const MAX_VISIBLE_FRAME_ASSETS = 2/);
+  assert.match(telemetrySource, /const MAX_VISIBLE_FRAME_ASSETS = 1/);
   assert.match(
     telemetrySource,
-    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["both", "nodes", "frames", "nodes"\]/,
+    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["nodes", "frames", "both"\]/,
   );
   assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 760/);
   assert.match(telemetrySource, /function currentCompositionMix/);
+  assert.match(telemetrySource, /if \(rawProgress < 0\.5\)/);
+  assert.match(telemetrySource, /frames: compositionTransition\.from\.frames \* fadeOut/);
+  assert.match(telemetrySource, /frames: compositionTransition\.to\.frames \* fadeIn/);
   assert.match(telemetrySource, /if \(addedPanelBatch\) advanceCompositionMode\(now\)/);
   assert.match(telemetrySource, /\.slice\(-MAX_PANELS\)/);
   assert.match(telemetrySource, /const rendered = visibleStates\.map/);
@@ -271,12 +274,13 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
   assert.match(telemetrySource, /const NODE_NETWORK_ROUTES/);
   assert.match(telemetrySource, /function drawIndependentNodeNetwork/);
-  assert.match(telemetrySource, /function drawConnectionTerminal/);
-  assert.match(telemetrySource, /function drawRelayNode/);
-  assert.match(telemetrySource, /const size = kind === 0 \? 2\.8 : 4\.2/);
-  assert.match(telemetrySource, /const halfSize = kind === 0 \? 6\.2 : 7\.8/);
-  assert.match(telemetrySource, /function drawVisualizationFrameAsset/);
-  assert.match(telemetrySource, /context\.lineWidth = focused \? 1\.2 : 0\.95/);
+  assert.match(telemetrySource, /function drawConnectionNode/);
+  assert.doesNotMatch(telemetrySource, /function drawConnectionTerminal/);
+  assert.doesNotMatch(telemetrySource, /function drawRelayNode/);
+  assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.05/);
+  assert.match(telemetrySource, /context\.arc\(point\.x, point\.y, 2\.5/);
+  assert.match(telemetrySource, /function drawFrameOutlineAndLeader/);
+  assert.match(telemetrySource, /function drawFrameAsset/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
   assert.match(telemetrySource, /panelVariant: number/);
   assert.match(telemetrySource, /function pointFrame/);
@@ -292,8 +296,10 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
   assert.match(telemetrySource, /const edge = frameAnchor\(frame, pose\.dockX, pose\.dockY\)/);
   assert.match(telemetrySource, /context\.rect\(frame\.x, frame\.y, frame\.width, frame\.height\)/);
-  assert.match(telemetrySource, /context\.moveTo\(edge\.x, edge\.y\)/);
-  assert.match(telemetrySource, /context\.lineTo\(pose\.dockX, pose\.dockY\)/);
+  assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
+  assert.match(telemetrySource, /const endX = pose\.dockX \+ directionX \* 2/);
+  assert.match(telemetrySource, /context\.moveTo\(startX, startY\)/);
+  assert.match(telemetrySource, /context\.lineTo\(endX, endY\)/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(
     telemetrySource,
@@ -301,16 +307,16 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   );
   assert.match(
     telemetrySource,
-    /drawVisualizationFrameAsset\(\s*context,\s*item\.current\.frame,\s*item\.current\.pose,\s*item\.life \* compositionMix\.frames/,
+    /drawFrameAsset\(\s*trackedContext,[\s\S]*?item\.life \* compositionMix\.frames,\s*item\.changing/,
   );
+  assert.match(telemetrySource, /drawFrameOutlineAndLeader\(context, current\.frame, current\.pose, life\)/);
+  assert.match(telemetrySource, /drawPanel\(context, from, to, current, snapshots, snapshotBase, progress, life, changing\)/);
   assert.match(telemetrySource, /const frameItems = rendered\.slice\(-MAX_VISIBLE_FRAME_ASSETS\)/);
   assert.match(telemetrySource, /frameItems\.flatMap/);
   assert.match(telemetrySource, /const frameX = clamp/);
   assert.match(telemetrySource, /const frameY = clamp/);
-  assert.match(telemetrySource, /const panelLife = life \* frameMix/);
-  assert.match(telemetrySource, /if \(panelLife <= 0\.001\) return/);
-  assert.match(telemetrySource, /pointAt\(0\.38\)/);
-  assert.match(telemetrySource, /pointAt\(0\.68\)/);
+  assert.doesNotMatch(telemetrySource, /const panelLife = life \* frameMix/);
+  assert.doesNotMatch(telemetrySource, /pointAt\(/);
   assert.match(telemetrySource, /context\.strokeStyle = glowColor\(0\.74 \* life\)/);
 });
 
