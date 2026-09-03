@@ -99,8 +99,6 @@ type OverlayCompositionTransition = {
   startedAt: number;
 };
 
-type NodeNetworkPoint = readonly [x: number, y: number];
-
 /** Canvas tracking is well supported but still missing from some lib.dom builds. */
 type TrackedContext = CanvasRenderingContext2D & { letterSpacing?: string };
 
@@ -119,7 +117,6 @@ const DISTANT_MORPH_MS = 1080;
 const ENTRY_MORPH_MS = Math.min(720, MORPH_MS, DISTANT_MORPH_MS);
 const COMPOSITION_MODE_TRANSITION_MS = 860;
 const COMPOSITION_MODE_HOLD_MS = 2400;
-const NODE_NETWORK_REVEAL_MS = 620;
 
 const MAX_PANELS = 3;
 const MAX_VISIBLE_FRAME_ASSETS = 2;
@@ -135,12 +132,6 @@ const HUD_ACCENT = "232, 234, 236";
 const HUD_GLOW = "255, 255, 255";
 const HUD_CONTRAST = "50, 53, 60";
 const OVERLAY_STROKE_WIDTH = 1.05;
-const NODE_NETWORK_ROUTES: readonly (readonly NodeNetworkPoint[])[] = [
-  [[0.07, 0.2], [0.21, 0.3], [0.38, 0.37], [0.55, 0.25], [0.72, 0.19], [0.91, 0.34]],
-  [[0.08, 0.67], [0.23, 0.57], [0.4, 0.48], [0.57, 0.55], [0.72, 0.65], [0.9, 0.39]],
-  [[0.16, 0.11], [0.24, 0.29], [0.31, 0.47], [0.48, 0.53], [0.66, 0.61], [0.85, 0.72]],
-  [[0.07, 0.49], [0.22, 0.36], [0.39, 0.24], [0.55, 0.36], [0.7, 0.5], [0.92, 0.19]],
-] as const;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
 let lastSnapshotAt = Number.NEGATIVE_INFINITY;
@@ -153,9 +144,7 @@ let cachedChordLastId = -1;
 let cachedChordNodeCount = -1;
 const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames"];
 let compositionModeIndex = -1;
-let nodeNetworkRouteIndex = -1;
 let lastCompositionAdvanceAt = Number.NEGATIVE_INFINITY;
-let nodeSceneStartedAt = Number.NEGATIVE_INFINITY;
 let compositionTransition: OverlayCompositionTransition = {
   from: { frames: 1, nodes: 1 },
   to: { frames: 1, nodes: 1 },
@@ -237,10 +226,6 @@ function advanceCompositionMode(now: number) {
   const from = currentCompositionMix(now);
   compositionModeIndex = (compositionModeIndex + 1) % COMPOSITION_MODES.length;
   const nextMode = COMPOSITION_MODES[compositionModeIndex];
-  if (nextMode !== "frames") {
-    nodeNetworkRouteIndex = (nodeNetworkRouteIndex + 1) % NODE_NETWORK_ROUTES.length;
-    nodeSceneStartedAt = now;
-  }
   lastCompositionAdvanceAt = now;
   compositionTransition = {
     from,
@@ -567,124 +552,16 @@ function drawConnectionNode(
   context.restore();
 }
 
-function drawRoutedConnection(
-  context: CanvasRenderingContext2D,
-  from: VisualizationFrame,
-  to: VisualizationFrame,
-  reveal: number,
-  life: number,
-) {
-  if (life <= 0.001 || reveal <= 0.001) return;
-  const start = frameAnchor(from, to.centerX, to.centerY);
-  const end = frameAnchor(to, from.centerX, from.centerY);
-  const deltaX = end.x - start.x;
-  const deltaY = end.y - start.y;
-  const distance = Math.max(1, Math.hypot(deltaX, deltaY));
-  const normalX = -deltaY / distance;
-  const normalY = deltaX / distance;
-  // Keep every cable on the same restrained curve system. Its direction is
-  // derived from the node layout, never a random seed.
-  const curveDirection = deltaY >= 0 ? 1 : -1;
-  const curve = clamp(distance * 0.1, 10, 34) * curveDirection;
-  const controlOne = {
-    x: start.x + deltaX * 0.32 + normalX * curve,
-    y: start.y + deltaY * 0.32 + normalY * curve,
-  };
-  const controlTwo = {
-    x: start.x + deltaX * 0.68 - normalX * curve * 0.46,
-    y: start.y + deltaY * 0.68 - normalY * curve * 0.46,
-  };
-  const alpha = life * reveal;
-  const color = (opacity: number) => `rgba(255, 255, 255, ${opacity})`;
-
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.lineCap = "round";
-  context.lineJoin = "round";
-  context.beginPath();
-  context.moveTo(start.x, start.y);
-  context.bezierCurveTo(
-    controlOne.x,
-    controlOne.y,
-    controlTwo.x,
-    controlTwo.y,
-    end.x,
-    end.y,
-  );
-  context.strokeStyle = color(Math.min(1, alpha * 1.12));
-  context.shadowColor = `rgba(${HUD_CONTRAST}, ${alpha * 0.46})`;
-  context.shadowBlur = 1.4;
-  context.lineWidth = OVERLAY_STROKE_WIDTH;
-  context.stroke();
-  context.restore();
-}
-
-function pointFrame(point: { x: number; y: number }): VisualizationFrame {
-  return {
-    x: point.x,
-    y: point.y,
-    width: 0,
-    height: 0,
-    centerX: point.x,
-    centerY: point.y,
-    halfWidth: 0,
-    halfHeight: 0,
-    angle: 0,
-  };
-}
-
-function drawIndependentNodeNetwork(
-  context: CanvasRenderingContext2D,
-  rendered: readonly {
-    state: OverlayMorphState;
-    progress: number;
-    current: FocusPresentation;
-    life: number;
-  }[],
-  width: number,
-  height: number,
-  now: number,
-  nodeMix: number,
-) {
-  if (nodeMix <= 0.001) return;
-  const visible = rendered
-    .filter((item) => item.life > 0.015)
-    .sort((first, second) => first.state.to.node.createdAt - second.state.to.node.createdAt);
-  if (visible.length === 0) return;
-
-  const route = NODE_NETWORK_ROUTES[Math.max(0, nodeNetworkRouteIndex)];
-  const drift = clamp(Math.min(width, height) * 0.009, 2, 8);
-  const points = route.map(([x, y], index) => ({
-    x: x * width + Math.sin(now * 0.00016 + index * 1.7) * drift,
-    y: y * height + Math.cos(now * 0.00013 + index * 1.35) * drift,
-  }));
-  const networkLife = Math.max(...visible.map((item) => item.life)) * nodeMix;
-  const sceneProgress = smootherStep((now - nodeSceneStartedAt) / NODE_NETWORK_REVEAL_MS);
-
-  for (let index = 1; index < points.length; index += 1) {
-    const reveal = smootherStep(sceneProgress * 1.45 - (index - 1) * 0.13);
-    drawRoutedConnection(
-      context,
-      pointFrame(points[index - 1]),
-      pointFrame(points[index]),
-      reveal,
-      networkLife,
-    );
-  }
-
-  for (let index = 0; index < points.length; index += 1) {
-    const reveal = smootherStep(sceneProgress * 1.45 - Math.max(0, index - 1) * 0.13);
-    if (reveal > 0.01) drawConnectionNode(context, points[index], networkLife * reveal);
-  }
-}
-
-function drawFrameOutlineAndLeader(
+function drawVisualizerConnection(
   context: CanvasRenderingContext2D,
   frame: VisualizationFrame,
   pose: PanelPose,
   life: number,
+  frameMix: number,
+  nodeMix: number,
 ) {
-  if (life <= 0.001) return;
+  const connectorMix = Math.max(frameMix, nodeMix);
+  if (life <= 0.001 || connectorMix <= 0.001) return;
   const edge = frameAnchor(frame, pose.dockX, pose.dockY);
   const deltaX = pose.dockX - edge.x;
   const deltaY = pose.dockY - edge.y;
@@ -697,19 +574,41 @@ function drawFrameOutlineAndLeader(
   const startY = edge.y - directionY * 2;
   const endX = pose.dockX + directionX * 2;
   const endY = pose.dockY + directionY * 2;
+
+  if (frameMix > 0.001) {
+    context.save();
+    context.globalCompositeOperation = "source-over";
+    context.strokeStyle = glowColor(0.92 * life * frameMix);
+    context.shadowColor = `rgba(${HUD_CONTRAST}, ${0.42 * life * frameMix})`;
+    context.shadowBlur = 1.4;
+    context.lineWidth = OVERLAY_STROKE_WIDTH;
+    context.strokeRect(frame.x, frame.y, frame.width, frame.height);
+    context.restore();
+  }
+
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(0.92 * life);
-  context.shadowColor = `rgba(${HUD_CONTRAST}, ${0.42 * life})`;
+  context.strokeStyle = glowColor(0.92 * life * connectorMix);
+  context.shadowColor = `rgba(${HUD_CONTRAST}, ${0.42 * life * connectorMix})`;
   context.shadowBlur = 1.4;
   context.lineWidth = OVERLAY_STROKE_WIDTH;
   context.lineCap = "square";
   context.beginPath();
-  context.rect(frame.x, frame.y, frame.width, frame.height);
   context.moveTo(startX, startY);
   context.lineTo(endX, endY);
   context.stroke();
   context.restore();
+
+  if (nodeMix > 0.001) {
+    const nodeLife = life * nodeMix;
+    drawConnectionNode(context, edge, nodeLife);
+    drawConnectionNode(
+      context,
+      { x: lerp(edge.x, pose.dockX, 0.48), y: lerp(edge.y, pose.dockY, 0.48) },
+      nodeLife * 0.86,
+    );
+    drawConnectionNode(context, { x: pose.dockX, y: pose.dockY }, nodeLife);
+  }
 }
 
 function measurePanel(
@@ -1144,10 +1043,13 @@ function drawFrameAsset(
   progress: number,
   life: number,
   changing: boolean,
+  frameMix: number,
+  nodeMix: number,
 ) {
-  if (life <= 0.001) return;
-  drawFrameOutlineAndLeader(context, current.frame, current.pose, life);
-  drawPanel(context, from, to, current, snapshots, snapshotBase, progress, life, changing);
+  const assetMix = Math.max(frameMix, nodeMix);
+  if (life <= 0.001 || assetMix <= 0.001) return;
+  drawVisualizerConnection(context, current.frame, current.pose, life, frameMix, nodeMix);
+  drawPanel(context, from, to, current, snapshots, snapshotBase, progress, life * assetMix, changing);
 }
 
 /**
@@ -1156,7 +1058,6 @@ function drawFrameAsset(
  */
 export function telemetryNextFrameAt(now: number) {
   if (now - compositionTransition.startedAt < COMPOSITION_MODE_TRANSITION_MS) return now;
-  if (morphStates.length > 0 && currentCompositionMix(now).nodes > 0.001) return now;
   let nextFrameAt = Number.POSITIVE_INFINITY;
   for (const state of morphStates) {
     if (now - state.startedAt < state.duration || now - state.sessionStartedAt < ENTER_MS) {
@@ -1314,8 +1215,9 @@ export function drawTelemetryOverlay(
     };
   });
   const frameItems = rendered.slice(-MAX_VISIBLE_FRAME_ASSETS);
+  const assetMix = Math.max(compositionMix.frames, compositionMix.nodes);
 
-  const snapshots = compositionMix.frames > 0.001
+  const snapshots = assetMix > 0.001
     ? prepareSnapshotStrip(
         context,
         frameItems.flatMap(({ state }) => [state.from.frame, state.to.frame]),
@@ -1326,7 +1228,6 @@ export function drawTelemetryOverlay(
       )
     : null;
 
-  drawIndependentNodeNetwork(context, rendered, width, height, now, compositionMix.nodes);
   frameItems.forEach((item, index) => {
     drawFrameAsset(
       trackedContext,
@@ -1336,8 +1237,10 @@ export function drawTelemetryOverlay(
       snapshots,
       index * 2,
       item.progress,
-      item.life * compositionMix.frames,
+      item.life,
       item.changing,
+      compositionMix.frames,
+      compositionMix.nodes,
     );
   });
 
