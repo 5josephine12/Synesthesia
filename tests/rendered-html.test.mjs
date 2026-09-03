@@ -568,8 +568,13 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /if \(metalheartIsActive && !styleThreeBeatDetected\) return/);
   assert.match(auraSource, /function trackStyleThreeBeat\(/);
   assert.match(auraSource, /const onsetAttack =/);
+  assert.match(auraSource, /const onsetPeak =/);
+  assert.match(auraSource, /runtime\.styleThreePreviousOnsetStrength/);
   assert.match(auraSource, /const minimumSpacing = clamp\(runtime\.styleThreeBeatInterval \* 0\.34, 150, 260\)/);
   assert.match(auraSource, /runtime\.styleThreeBeatConfidence >= 1/);
+  assert.match(auraSource, /const hasLiveRhythm =/);
+  assert.match(auraSource, /now - runtime\.lastStyleThreeSignalAt/);
+  assert.doesNotMatch(auraSource, /const hasRecentAttack =/);
   assert.match(auraSource, /const visualBeatDetected = metalheartIsActive \? styleThreeBeatDetected : beatDetected/);
   assert.match(auraSource, /if \(!activeSignal && !metalheartIsActive\) return/);
   assert.match(auraSource, /const onsetPeak =/);
@@ -613,8 +618,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const MOTION_FRAME_INTERVAL = 1000 \/ 20/);
   assert.match(styleThreeSource, /const FORMATION_DURATION = 620/);
   assert.match(styleThreeSource, /function growAndRetract/);
-  assert.match(styleThreeSource, /const growthEnd = 0\.64/);
-  assert.match(styleThreeSource, /return lerp\(1, 0\.8, retraction\)/);
+  assert.match(styleThreeSource, /const growthEnd = 0\.5/);
+  assert.match(styleThreeSource, /const retractionEnd = 0\.76/);
+  assert.match(styleThreeSource, /return lerp\(1, 0\.82, retraction\)/);
+  assert.match(styleThreeSource, /return lerp\(0\.82, 1, settle\)/);
   assert.match(styleThreeSource, /const arrival = growAndRetract\(age\)/);
   assert.match(styleThreeSource, /function beatAccent/);
   assert.match(styleThreeSource, /Math\.pow\(1 - progress, 2\.6\) \* strength/);

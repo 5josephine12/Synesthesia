@@ -313,6 +313,7 @@ type MicrophoneRuntime = {
   lastBeatAt: number;
   lastStyleThreeBeatAt: number;
   lastStyleThreeAttackAt: number;
+  lastStyleThreeSignalAt: number;
   lastValidPitchAt: number;
   lastMidi: number | null;
   candidateMidi: number | null;
@@ -325,6 +326,10 @@ type MicrophoneRuntime = {
   beatConfidence: number;
   styleThreeBeatInterval: number;
   styleThreeBeatConfidence: number;
+  styleThreeOnsetBaseline: number;
+  styleThreeOnsetDeviation: number;
+  styleThreePreviousOnsetStrength: number;
+  styleThreeOnsetRising: boolean;
   nextStyleThreeBeatAt: number;
   nextBeatAt: number;
   lastOnsetAt: number;
@@ -938,7 +943,10 @@ function trackStyleThreeBeat(
     Math.max(0, bandRise - 1) * 1.6 +
     Math.max(0, energyRise - 1) * 0.78 +
     Math.max(0, fluxRise - 1) * 0.14;
-  const onsetThreshold = Math.max(0.1, runtime.onsetBaseline + runtime.onsetDeviation * 1.2);
+  const onsetThreshold = Math.max(
+    0.055,
+    runtime.styleThreeOnsetBaseline + runtime.styleThreeOnsetDeviation,
+  );
   const carriesRhythm =
     activeSignal ||
     bandRise >= 1.08 ||
@@ -946,12 +954,37 @@ function trackStyleThreeBeat(
   const onsetAttack =
     carriesRhythm &&
     onsetStrength >= onsetThreshold &&
-    (runtime.previousOnsetStrength < onsetThreshold ||
-      onsetStrength >= runtime.previousOnsetStrength * 1.1);
+    (runtime.styleThreePreviousOnsetStrength < onsetThreshold * 0.92 ||
+      onsetStrength >= runtime.styleThreePreviousOnsetStrength * 1.045);
+  const onsetPeak =
+    carriesRhythm &&
+    runtime.styleThreeOnsetRising &&
+    runtime.styleThreePreviousOnsetStrength >= onsetThreshold &&
+    onsetStrength < runtime.styleThreePreviousOnsetStrength * 0.92;
+  const baselineDifference = Math.abs(onsetStrength - runtime.styleThreeOnsetBaseline);
+  runtime.styleThreeOnsetBaseline = lerp(
+    runtime.styleThreeOnsetBaseline,
+    onsetStrength,
+    0.025,
+  );
+  runtime.styleThreeOnsetDeviation = lerp(
+    runtime.styleThreeOnsetDeviation,
+    baselineDifference,
+    0.035,
+  );
+  runtime.styleThreeOnsetRising =
+    onsetStrength > runtime.styleThreePreviousOnsetStrength + 0.004
+      ? true
+      : onsetStrength < runtime.styleThreePreviousOnsetStrength * 0.94
+        ? false
+        : runtime.styleThreeOnsetRising;
+  runtime.styleThreePreviousOnsetStrength = onsetStrength;
+  if (carriesRhythm) runtime.lastStyleThreeSignalAt = now;
+
   const minimumSpacing = clamp(runtime.styleThreeBeatInterval * 0.34, 150, 260);
   let beatDetected = false;
 
-  if (onsetAttack) {
+  if (onsetAttack || onsetPeak) {
     const sinceLastBeat = now - runtime.lastStyleThreeBeatAt;
     runtime.lastStyleThreeAttackAt = now;
     if (!Number.isFinite(runtime.lastStyleThreeBeatAt) || sinceLastBeat >= minimumSpacing) {
@@ -986,18 +1019,20 @@ function trackStyleThreeBeat(
     }
   }
 
-  const hasRecentAttack =
-    now - runtime.lastStyleThreeAttackAt <= runtime.styleThreeBeatInterval * 2.4;
+  const hasLiveRhythm =
+    now - runtime.lastStyleThreeSignalAt <=
+    Math.max(720, runtime.styleThreeBeatInterval * 1.75);
   if (
     !beatDetected &&
-    carriesRhythm &&
     runtime.styleThreeBeatConfidence >= 1 &&
-    hasRecentAttack &&
+    hasLiveRhythm &&
     now >= runtime.nextStyleThreeBeatAt
   ) {
     beatDetected = true;
     runtime.lastStyleThreeBeatAt = runtime.nextStyleThreeBeatAt;
-    runtime.nextStyleThreeBeatAt += runtime.styleThreeBeatInterval;
+    do {
+      runtime.nextStyleThreeBeatAt += runtime.styleThreeBeatInterval;
+    } while (runtime.nextStyleThreeBeatAt <= now);
   }
 
   return beatDetected;
@@ -3370,6 +3405,7 @@ export function AuraToy() {
         lastBeatAt: -Infinity,
         lastStyleThreeBeatAt: -Infinity,
         lastStyleThreeAttackAt: -Infinity,
+        lastStyleThreeSignalAt: -Infinity,
         lastValidPitchAt: -Infinity,
         lastMidi: null,
         candidateMidi: null,
@@ -3382,6 +3418,10 @@ export function AuraToy() {
         beatConfidence: 0,
         styleThreeBeatInterval: 500,
         styleThreeBeatConfidence: 0,
+        styleThreeOnsetBaseline: 0.03,
+        styleThreeOnsetDeviation: 0.025,
+        styleThreePreviousOnsetStrength: 0,
+        styleThreeOnsetRising: false,
         nextStyleThreeBeatAt: Infinity,
         nextBeatAt: Infinity,
         lastOnsetAt: -Infinity,

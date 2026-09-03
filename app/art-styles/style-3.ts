@@ -115,12 +115,19 @@ function easeInOutSine(value: number) {
 
 function growAndRetract(age: number) {
   const progress = clamp(age / FORMATION_DURATION, 0, 1);
-  const growthEnd = 0.64;
+  const growthEnd = 0.5;
+  const retractionEnd = 0.76;
   if (progress <= growthEnd) {
     return easeInOutSine(progress / growthEnd);
   }
-  const retraction = easeInOutSine((progress - growthEnd) / (1 - growthEnd));
-  return lerp(1, 0.8, retraction);
+  if (progress <= retractionEnd) {
+    const retraction = easeInOutSine(
+      (progress - growthEnd) / (retractionEnd - growthEnd),
+    );
+    return lerp(1, 0.82, retraction);
+  }
+  const settle = easeInOutSine((progress - retractionEnd) / (1 - retractionEnd));
+  return lerp(0.82, 1, settle);
 }
 
 function smoothstep(edge0: number, edge1: number, value: number) {
