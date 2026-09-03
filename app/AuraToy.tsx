@@ -439,10 +439,12 @@ const PIXEL_COMPOSITION_ANCHORS = [
 ] as const;
 
 const METALHEART_COMPOSITION_ANCHORS = [
-  [0.38, 0.34],
-  [0.64, 0.46],
-  [0.43, 0.62],
-  [0.69, 0.3],
+  [0.16, 0.24],
+  [0.77, 0.22],
+  [0.2, 0.66],
+  [0.74, 0.68],
+  [0.46, 0.38],
+  [0.53, 0.72],
 ] as const;
 
 const LIQUID_METAL_COMPOSITION_ANCHORS = [
@@ -2024,53 +2026,10 @@ function drawChronologicalAuraLayers(
     } else if (runKind === "metalheart") {
       if (metalheartCanvas) {
         if (lastMetalheartIndex >= runStart && lastMetalheartIndex < runEnd) {
-          // Bloom a single reduced-resolution copy before the crisp WebGL pass.
-          // It recreates Metalheart's luminous, overexposed rendering language
-          // without adding another WebGL render target or an accumulating layer.
-          blurredContext.clearRect(0, 0, blurredLayer.width, blurredLayer.height);
-          blurredContext.save();
-          blurredContext.filter = `blur(${Math.max(2.4, blurRadius * 1.8)}px) brightness(1.72) sepia(0.32) saturate(1.72)`;
-          blurredContext.drawImage(
-            metalheartCanvas,
-            0,
-            0,
-            blurredLayer.width,
-            blurredLayer.height,
-          );
-          blurredContext.restore();
-
-          // Screen blending disappears over the visualizer's white ground.
-          // A low-alpha normal pass preserves the warm chromatic halo there,
-          // while the following screen pass still blooms over darker layers.
-          context.save();
-          context.globalCompositeOperation = "source-over";
-          context.globalAlpha = 0.58;
-          context.imageSmoothingEnabled = true;
-          context.imageSmoothingQuality = "high";
-          context.drawImage(blurredLayer, 0, 0, width, height);
-          context.restore();
-
-          context.save();
-          context.globalCompositeOperation = "screen";
-          context.globalAlpha = 0.38;
-          context.imageSmoothingEnabled = true;
-          context.imageSmoothingQuality = "high";
-          context.drawImage(blurredLayer, 0, 0, width, height);
-          context.restore();
-
-          context.save();
-          context.globalCompositeOperation = "screen";
-          context.globalAlpha = 0.16;
-          context.imageSmoothingEnabled = true;
-          context.imageSmoothingQuality = "high";
-          context.drawImage(metalheartCanvas, 0, 0, width, height);
-          context.restore();
-
           context.save();
           context.globalCompositeOperation = "source-over";
           context.imageSmoothingEnabled = true;
           context.imageSmoothingQuality = "high";
-          context.filter = "sepia(0.28) saturate(1.48)";
           context.drawImage(metalheartCanvas, 0, 0, width, height);
           context.restore();
         }
@@ -2730,7 +2689,7 @@ export function AuraToy() {
     ];
     const metalheartAnchor = METALHEART_COMPOSITION_ANCHORS[
       modulo(
-        Math.floor(compositionIndex / 3) + modeIndex,
+        compositionIndex + note.pc * 2 + modeIndex,
         METALHEART_COMPOSITION_ANCHORS.length,
       )
     ];
@@ -2753,11 +2712,11 @@ export function AuraToy() {
         )
       : currentArtStyle === "style-3"
         ? clamp(
-            lerp(baseX, metalheartAnchor[0], 0.7) +
-              Math.cos(trailDirection) * trailDistance * 0.32 +
-              (identityRng() - 0.5) * 0.022,
-            0.12,
-            0.88,
+            lerp(baseX, metalheartAnchor[0], 0.84) +
+              Math.cos(trailDirection) * trailDistance * 0.18 +
+              (identityRng() - 0.5) * 0.018,
+            0.06,
+            0.94,
           )
         : currentArtStyle === "style-4"
           ? clamp(
@@ -2781,11 +2740,11 @@ export function AuraToy() {
         )
       : currentArtStyle === "style-3"
         ? clamp(
-            lerp(baseY, metalheartAnchor[1], 0.68) +
-              Math.sin(trailDirection) * trailDistance * 0.24 +
-              (identityRng() - 0.5) * 0.018,
-            0.12,
-            0.78,
+            lerp(baseY, metalheartAnchor[1], 0.84) +
+              Math.sin(trailDirection) * trailDistance * 0.16 +
+              (identityRng() - 0.5) * 0.016,
+            0.08,
+            0.88,
           )
         : currentArtStyle === "style-4"
           ? clamp(
