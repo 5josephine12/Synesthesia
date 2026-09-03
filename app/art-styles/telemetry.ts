@@ -76,6 +76,7 @@ type FocusPresentation = {
 
 type OverlayMorphState = {
   targetKey: string;
+  panelVariant: number;
   from: FocusPresentation;
   to: FocusPresentation;
   startedAt: number;
@@ -650,6 +651,7 @@ function measurePanel(
   node: TelemetryNode,
   chord: string | null,
   frame: VisualizationFrame,
+  panelVariant: number,
 ): PanelMetrics {
   const frequency = midiToFrequency(node.midi).toFixed(1);
   const chordText = chord?.toUpperCase() ?? "";
@@ -661,9 +663,9 @@ function measurePanel(
     { width: 142, height: 62 },
     { width: 80, height: 98 },
   ] as const;
-  // Successive panels deliberately cycle through square, landscape, portrait,
-  // wide, and compact formats instead of repeating one note-driven silhouette.
-  const format = formats[((node.id % formats.length) + formats.length) % formats.length];
+  // The first persistent slot is always a substantial square frame. The other
+  // slots cycle through contrasting proportions as they are replaced.
+  const format = formats[((panelVariant % formats.length) + formats.length) % formats.length];
   const footprintScale = 0.88 + clamp((footprint - 42) / 170, 0, 1) * 0.2;
   const velocityScale = 0.94 + node.velocity * 0.12;
   const repetitionScale = 1 + (1 - Math.exp(-node.repeat / 3.2)) * 0.76;
@@ -849,6 +851,7 @@ function createPresentation(
   context: TrackedContext,
   node: TelemetryNode,
   chord: string | null,
+  panelVariant: number,
   width: number,
   height: number,
   artStyle: string,
@@ -858,7 +861,7 @@ function createPresentation(
   const shortSide = Math.min(width, height);
   const frame =
     settledFrame ?? visualizationFrame(node, width, height, shortSide, VISUAL_ARRIVAL_MS, artStyle);
-  const metrics = measurePanel(context, node, chord, frame);
+  const metrics = measurePanel(context, node, chord, frame, panelVariant);
   const placement = panelPlacement(
     frame,
     metrics,
@@ -1161,6 +1164,18 @@ export function drawTelemetryOverlay(
     if (processedNodeKeys.has(targetKey)) continue;
     processedNodeKeys.add(targetKey);
 
+    let replacementIndex = -1;
+    if (morphStates.length >= MAX_PANELS) {
+      replacementIndex = 0;
+      for (let index = 1; index < morphStates.length; index += 1) {
+        if (morphStates[index].to.node.createdAt < morphStates[replacementIndex].to.node.createdAt) {
+          replacementIndex = index;
+        }
+      }
+    }
+    const panelVariant =
+      replacementIndex >= 0 ? morphStates[replacementIndex].panelVariant : morphStates.length;
+
     const targetFrame = visualizationFrame(
       node,
       width,
@@ -1176,6 +1191,7 @@ export function drawTelemetryOverlay(
       trackedContext,
       node,
       chords.get(node.id) ?? null,
+      panelVariant,
       width,
       height,
       artStyle,
@@ -1184,6 +1200,7 @@ export function drawTelemetryOverlay(
     );
     const nextState: OverlayMorphState = {
       targetKey,
+      panelVariant,
       from: enteringPresentation(presentation),
       to: presentation,
       startedAt: now,
@@ -1195,13 +1212,7 @@ export function drawTelemetryOverlay(
     if (morphStates.length < MAX_PANELS) {
       morphStates.push(nextState);
     } else {
-      let oldestIndex = 0;
-      for (let index = 1; index < morphStates.length; index += 1) {
-        if (morphStates[index].to.node.createdAt < morphStates[oldestIndex].to.node.createdAt) {
-          oldestIndex = index;
-        }
-      }
-      morphStates.splice(oldestIndex, 1);
+      morphStates.splice(replacementIndex, 1);
       morphStates.push(nextState);
     }
   }

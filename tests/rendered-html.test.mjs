@@ -246,13 +246,14 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /TelemetryBeatClock|telemetryBeatPulse|telemetryActivationAt/);
   assert.match(telemetrySource, /function smootherStep/);
   assert.match(telemetrySource, /from: enteringPresentation\(presentation\)/);
-  assert.match(telemetrySource, /morphStates\.splice\(oldestIndex, 1\)/);
+  assert.match(telemetrySource, /morphStates\.splice\(replacementIndex, 1\)/);
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
   assert.match(telemetrySource, /function drawRoutedConnection/);
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
   assert.match(telemetrySource, /function drawFrameNetwork/);
   assert.match(telemetrySource, /function drawConnectionTerminal/);
-  assert.match(telemetrySource, /node\.id % formats\.length/);
+  assert.match(telemetrySource, /panelVariant % formats\.length/);
+  assert.match(telemetrySource, /panelVariant: number/);
   assert.match(telemetrySource, /function viewportFrame/);
   assert.match(telemetrySource, /const color = \(opacity: number\) => `rgba\(255, 255, 255,/);
   assert.match(telemetrySource, /const curve = clamp\(distance \* 0\.1, 10, 34\)/);
