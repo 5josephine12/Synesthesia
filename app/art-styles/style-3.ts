@@ -61,7 +61,7 @@ export type MetalheartPulseOptions = {
 };
 
 const FORMATION_DURATION = 1900;
-const MAX_VISIBLE_GROWTHS = 6;
+const MAX_VISIBLE_GROWTHS = 12;
 const RENDER_PIXEL_BUDGET = 5_000_000;
 const MOTION_FRAME_INTERVAL = 1000 / 20;
 const TAU = Math.PI * 2;

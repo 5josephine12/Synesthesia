@@ -452,6 +452,8 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const telemetryRendererReady = import\("\.\/art-styles\/telemetry"\)/);
   assert.match(auraSource, /const METALHEART_FORMATION_DURATION = 1900/);
   assert.match(auraSource, /const METALHEART_PULSE_DURATION = 920/);
+  assert.match(auraSource, /const METALHEART_VISIBLE_FORMATIONS = 12/);
+  assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 12/);
   assert.match(auraSource, /const metalheartIsActive = artStyleRef\.current === "style-3"/);
   assert.match(auraSource, /const currentMetalheartPulse = metalheartPulseIsActive/);
   assert.match(styleThreeSource, /export function drawMetalheartParticle/);
@@ -495,7 +497,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.doesNotMatch(styleThreeSource, /const trunk|sampleShape|forkCount|responsiveCenter|index < 2/);
   assert.match(styleThreeSource, /context\.fillStyle = "#ffffff"/);
   assert.match(styleThreeSource, /rgba\(0, 0, 0/);
-  assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 6/);
+  assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 12/);
   assert.match(styleThreeSource, /const RENDER_PIXEL_BUDGET = 5_000_000/);
   assert.match(styleThreeSource, /desynchronized: true/);
   assert.match(styleThreeSource, /forming: forming \|\| continuouslyMoving/);

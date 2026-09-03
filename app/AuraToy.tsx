@@ -354,6 +354,7 @@ const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
 const METALHEART_FORMATION_DURATION = 1900;
 const METALHEART_PULSE_DURATION = 920;
+const METALHEART_VISIBLE_FORMATIONS = 12;
 const LIQUID_METAL_FORMATION_DURATION = 1900;
 const MAX_LIVE_VISUAL_PARTICLES = 48;
 const HARD_MAX_LIVE_VISUAL_PARTICLES = 72;
@@ -2000,7 +2001,7 @@ function drawChronologicalAuraLayers(
     blobs,
     fallbackArtStyle,
     "style-3",
-    6,
+    METALHEART_VISIBLE_FORMATIONS,
     visibleLimit,
   );
   const visibleLiquidMetalIds = visibleTailIdsAcrossLayers(
@@ -4481,7 +4482,7 @@ export function AuraToy() {
         blobs,
         artStyleRef.current,
         "style-3",
-        6,
+        METALHEART_VISIBLE_FORMATIONS,
       );
       const visibleLiquidMetalIds = visibleTailIdsAcrossLayers(
         blobs,
