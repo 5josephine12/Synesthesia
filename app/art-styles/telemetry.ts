@@ -1,7 +1,7 @@
 /**
  * Spatial focus panels drawn on top of whichever art style is live. Distant
- * visualizations keep separate layers; nearby events reuse a panel and morph
- * its image, tracking box, connector, and metadata toward the new target.
+ * every event keeps a separate layer so the overlay grows as a connected
+ * network instead of absorbing nearby notes into one continuously morphing panel.
  */
 
 import { dottedSigilBounds } from "./style-2";
@@ -94,17 +94,15 @@ const PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#",
 const CHORD_WINDOW_MS = 190;
 
 const VISUAL_ARRIVAL_MS = 550;
-const ENTER_MS = 680;
-const HOLD_MS = 4300;
-const EXIT_MS = 1000;
+const ENTER_MS = 560;
+const HOLD_MS = 6000;
+const EXIT_MS = 900;
 const LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
 const MORPH_MS = 1280;
-const ENTRY_MORPH_MS = 920;
-const DISTANT_MORPH_MS = 1560;
+const ENTRY_MORPH_MS = 720;
+const DISTANT_MORPH_MS = 1080;
 
-const MAX_PANELS = 3;
-const MORPH_PROXIMITY_MIN = 68;
-const MORPH_PROXIMITY_MAX = 124;
+const MAX_PANELS = 7;
 const DATA_GAP = 10;
 const PANEL_GAP = 62;
 const PANEL_COLLISION_GAP = 18;
@@ -530,6 +528,7 @@ function drawRoutedConnection(
   reveal: number,
   life: number,
   focused: boolean,
+  now: number,
 ) {
   if (life <= 0.001 || reveal <= 0.001) return;
   const start = frameAnchor(from, to.centerX, to.centerY);
@@ -557,7 +556,7 @@ function drawRoutedConnection(
       points[index].y - points[index - 1].y,
     );
   }
-  const alpha = life * (focused ? 0.58 : 0.34);
+  const alpha = life * (focused ? 0.82 : 0.54);
 
   context.save();
   context.globalCompositeOperation = "source-over";
@@ -565,8 +564,8 @@ function drawRoutedConnection(
   context.lineJoin = "miter";
   context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha);
   context.shadowColor = glowColor(alpha * 0.82);
-  context.shadowBlur = focused ? 5 : 3;
-  context.lineWidth = focused ? 1 : 0.78;
+  context.shadowBlur = focused ? 6 : 4;
+  context.lineWidth = focused ? 1.3 : 0.92;
   context.setLineDash([Math.max(0.01, length * reveal), length + 1]);
   context.beginPath();
   context.moveTo(points[0].x, points[0].y);
@@ -576,7 +575,7 @@ function drawRoutedConnection(
   context.stroke();
   context.setLineDash([]);
 
-  if (reveal > 0.72) {
+  if (reveal > 0.5) {
     context.shadowBlur = 3;
     context.fillStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha * 1.15);
     context.beginPath();
@@ -590,8 +589,59 @@ function drawRoutedConnection(
       context.lineWidth = 0.75;
       context.strokeRect(junction.x - 2.5, junction.y - 2.5, 5, 5);
     }
+
+    // Tiny packets keep settled connections visibly alive without moving the
+    // panels themselves or blurring the routed, right-angle network.
+    const packetCount = focused ? 2 : 1;
+    for (let packet = 0; packet < packetCount; packet += 1) {
+      const packetProgress =
+        ((now * 0.00024 + packet / packetCount + (Math.abs(seed) % 101) / 101) % 1) * reveal;
+      const packetDistance = packetProgress * length;
+      let traveled = 0;
+      for (let index = 1; index < points.length; index += 1) {
+        const segmentStart = points[index - 1];
+        const segmentEnd = points[index];
+        const segmentLength = Math.hypot(
+          segmentEnd.x - segmentStart.x,
+          segmentEnd.y - segmentStart.y,
+        );
+        if (traveled + segmentLength < packetDistance) {
+          traveled += segmentLength;
+          continue;
+        }
+        const amount = clamp(
+          (packetDistance - traveled) / Math.max(0.001, segmentLength),
+          0,
+          1,
+        );
+        const packetX = lerp(segmentStart.x, segmentEnd.x, amount);
+        const packetY = lerp(segmentStart.y, segmentEnd.y, amount);
+        const packetSize = focused ? 3.4 : 2.6;
+        context.fillStyle = glowColor(alpha);
+        context.fillRect(
+          packetX - packetSize / 2,
+          packetY - packetSize / 2,
+          packetSize,
+          packetSize,
+        );
+        break;
+      }
+    }
   }
   context.restore();
+}
+
+function viewportFrame(viewport: Rect): VisualizationFrame {
+  const halfWidth = viewport.width / 2;
+  const halfHeight = viewport.height / 2;
+  return {
+    ...viewport,
+    centerX: viewport.x + halfWidth,
+    centerY: viewport.y + halfHeight,
+    halfWidth,
+    halfHeight,
+    angle: 0,
+  };
 }
 
 function drawFrameNetwork(
@@ -602,6 +652,7 @@ function drawFrameNetwork(
     current: FocusPresentation;
     life: number;
   }[],
+  now: number,
 ) {
   const visible = rendered
     .filter((item) => item.life > 0.015)
@@ -617,7 +668,37 @@ function drawFrameNetwork(
       smootherStep(to.progress),
       Math.min(from.life, to.life),
       index === visible.length - 1,
+      now,
     );
+
+    // The preview/data frames form a second, unmistakable node graph instead
+    // of reading as unrelated floating rectangles.
+    drawRoutedConnection(
+      context,
+      viewportFrame(from.current.pose.viewport),
+      viewportFrame(to.current.pose.viewport),
+      from.state.to.node.id * 137 + to.state.to.node.id * 79,
+      smootherStep(to.progress),
+      Math.min(from.life, to.life) * 0.88,
+      index === visible.length - 1,
+      now,
+    );
+
+    // Sparse cross-links introduce network branching without filling every
+    // open area with wires.
+    if (index >= 2 && Math.abs(to.state.to.node.id) % 2 === 0) {
+      const branch = visible[index - 2];
+      drawRoutedConnection(
+        context,
+        branch.current.frame,
+        to.current.frame,
+        branch.state.to.node.id * 173 + to.state.to.node.id * 91,
+        smootherStep(to.progress),
+        Math.min(branch.life, to.life) * 0.72,
+        false,
+        now,
+      );
+    }
   }
 }
 
@@ -757,48 +838,6 @@ function panelPose(metrics: PanelMetrics, placement: PanelPlacement): PanelPose 
   };
 }
 
-function anchoredMorphPose(
-  current: PanelPose,
-  target: PanelPose,
-  targetFrame: VisualizationFrame,
-  canvasWidth: number,
-  canvasHeight: number,
-): PanelPose {
-  const centerX = current.viewport.x + current.viewport.width / 2;
-  const centerY = current.viewport.y + current.viewport.height / 2;
-  const viewport: Rect = {
-    x: clamp(
-      centerX - target.viewport.width / 2,
-      14,
-      Math.max(14, canvasWidth - target.viewport.width - 78),
-    ),
-    y: clamp(
-      centerY - target.viewport.height / 2,
-      14,
-      Math.max(14, canvasHeight - target.viewport.height - 14),
-    ),
-    width: target.viewport.width,
-    height: target.viewport.height,
-  };
-  const deltaX = targetFrame.centerX - (viewport.x + viewport.width / 2);
-  const deltaY = targetFrame.centerY - (viewport.y + viewport.height / 2);
-  let dockX = viewport.x + viewport.width / 2;
-  let dockY = viewport.y + viewport.height / 2;
-  if (Math.abs(deltaX) >= Math.abs(deltaY)) {
-    dockX = deltaX >= 0 ? viewport.x + viewport.width : viewport.x;
-  } else {
-    dockY = deltaY >= 0 ? viewport.y + viewport.height : viewport.y;
-  }
-
-  return {
-    viewport,
-    metadataX: viewport.x + viewport.width + DATA_GAP,
-    metadataY: viewport.y,
-    dockX,
-    dockY,
-  };
-}
-
 function interpolateFrame(from: VisualizationFrame, to: VisualizationFrame, amount: number): VisualizationFrame {
   const centerX = lerp(from.centerX, to.centerX, amount);
   const centerY = lerp(from.centerY, to.centerY, amount);
@@ -919,16 +958,6 @@ function presentationObstacle(presentation: FocusPresentation): Rect {
     width: Math.max(viewport.width, metadataX - viewport.x + 64),
     height: Math.max(viewport.height, presentation.chord ? 43 : 30),
   };
-}
-
-function framesAreClose(
-  first: VisualizationFrame,
-  second: VisualizationFrame,
-  shortSide: number,
-) {
-  const centerDistance = Math.hypot(first.centerX - second.centerX, first.centerY - second.centerY);
-  const threshold = clamp(shortSide * 0.145, MORPH_PROXIMITY_MIN, MORPH_PROXIMITY_MAX);
-  return centerDistance <= threshold;
 }
 
 function createPresentation(
@@ -1170,8 +1199,8 @@ function drawPanel(
 }
 
 /**
- * Returns the next time the overlay can visibly change. Static hold frames can
- * sleep until their exit begins instead of redrawing the same panel at 30fps.
+ * Returns the next time the overlay can visibly change. A single static node
+ * can sleep, while a connected graph keeps rendering its traveling packets.
  */
 export function telemetryNextFrameAt(now: number) {
   let nextFrameAt = Number.POSITIVE_INFINITY;
@@ -1184,6 +1213,7 @@ export function telemetryNextFrameAt(now: number) {
     if (now < exitStartsAt) nextFrameAt = Math.min(nextFrameAt, exitStartsAt);
     else if (now < exitEndsAt) return now;
   }
+  if (morphStates.length > 1) return now;
   return nextFrameAt;
 }
 
@@ -1253,25 +1283,8 @@ export function drawTelemetryOverlay(
       VISUAL_ARRIVAL_MS,
       artStyle,
     );
-    let closestIndex = -1;
-    let closestDistance = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < morphStates.length; index += 1) {
-      const state = morphStates[index];
-      if (!framesAreClose(state.to.frame, targetFrame, shortSide)) continue;
-      const distance = Math.hypot(
-        state.to.frame.centerX - targetFrame.centerX,
-        state.to.frame.centerY - targetFrame.centerY,
-      );
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        closestIndex = index;
-      }
-    }
-
-    const obstacles = morphStates.flatMap((state, index) =>
-      index === closestIndex
-        ? []
-        : [expandRect(state.to.frame, 12), expandRect(presentationObstacle(state.to), 8)],
+    const obstacles = morphStates.flatMap((state) =>
+      [expandRect(state.to.frame, 12), expandRect(presentationObstacle(state.to), 8)],
     );
     const presentation = createPresentation(
       trackedContext,
@@ -1283,59 +1296,38 @@ export function drawTelemetryOverlay(
       obstacles,
       targetFrame,
     );
-    if (closestIndex >= 0) {
-      const previous = morphStates[closestIndex];
+    const nextState: OverlayMorphState = {
+      targetKey,
+      from: enteringPresentation(presentation),
+      to: presentation,
+      startedAt: now,
+      duration: ENTRY_MORPH_MS,
+      sessionStartedAt: now,
+      width,
+      height,
+    };
+    if (morphStates.length < MAX_PANELS) {
+      morphStates.push(nextState);
+    } else {
+      let oldestIndex = 0;
+      for (let index = 1; index < morphStates.length; index += 1) {
+        if (morphStates[index].to.node.createdAt < morphStates[oldestIndex].to.node.createdAt) {
+          oldestIndex = index;
+        }
+      }
+      const previous = morphStates[oldestIndex];
       const current = presentationAt(previous, now);
-      const anchoredTarget: FocusPresentation = {
-        ...presentation,
-        pose: anchoredMorphPose(current.pose, presentation.pose, presentation.frame, width, height),
-      };
-      morphStates[closestIndex] = {
-        ...previous,
-        targetKey,
+      morphStates[oldestIndex] = {
+        ...nextState,
         from: {
           ...current,
           node: previous.to.node,
           chord: previous.to.chord,
         },
-        to: anchoredTarget,
         startedAt: now,
-        duration: morphDuration(current, anchoredTarget, shortSide),
+        duration: morphDuration(current, presentation, shortSide, true),
+        sessionStartedAt: previous.sessionStartedAt,
       };
-    } else {
-      const nextState: OverlayMorphState = {
-        targetKey,
-        from: enteringPresentation(presentation),
-        to: presentation,
-        startedAt: now,
-        duration: ENTRY_MORPH_MS,
-        sessionStartedAt: now,
-        width,
-        height,
-      };
-      if (morphStates.length < MAX_PANELS) {
-        morphStates.push(nextState);
-      } else {
-        let oldestIndex = 0;
-        for (let index = 1; index < morphStates.length; index += 1) {
-          if (morphStates[index].to.node.createdAt < morphStates[oldestIndex].to.node.createdAt) {
-            oldestIndex = index;
-          }
-        }
-        const previous = morphStates[oldestIndex];
-        const current = presentationAt(previous, now);
-        morphStates[oldestIndex] = {
-          ...nextState,
-          from: {
-            ...current,
-            node: previous.to.node,
-            chord: previous.to.chord,
-          },
-          startedAt: now,
-          duration: morphDuration(current, presentation, shortSide, true),
-          sessionStartedAt: previous.sessionStartedAt,
-        };
-      }
     }
   }
 
@@ -1379,7 +1371,7 @@ export function drawTelemetryOverlay(
       );
     }
   }
-  drawFrameNetwork(context, rendered);
+  drawFrameNetwork(context, rendered, now);
   for (const item of rendered) {
     drawVisualizationFrame(context, item.current.frame, item.life, item.state.to.node.id);
   }

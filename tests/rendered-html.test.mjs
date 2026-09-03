@@ -249,11 +249,13 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const current = presentationAt\(previous, now\)/);
   assert.match(telemetrySource, /duration: morphDuration\(current, presentation, shortSide, true\)/);
   assert.doesNotMatch(telemetrySource, /morphStates\[oldestIndex\] = nextState/);
-  assert.match(telemetrySource, /const MAX_PANELS = 3/);
+  assert.match(telemetrySource, /const MAX_PANELS = 7/);
   assert.match(telemetrySource, /function drawRoutedConnection/);
   assert.match(telemetrySource, /function drawFrameNetwork/);
   assert.match(telemetrySource, /function drawCornerBrackets/);
-  assert.match(telemetrySource, /drawFrameNetwork\(context, rendered\)/);
+  assert.match(telemetrySource, /function viewportFrame/);
+  assert.match(telemetrySource, /const packetCount = focused \? 2 : 1/);
+  assert.match(telemetrySource, /drawFrameNetwork\(context, rendered, now\)/);
   assert.match(
     telemetrySource,
     /drawVisualizationFrame\(context, item\.current\.frame, item\.life, item\.state\.to\.node\.id\)/,
