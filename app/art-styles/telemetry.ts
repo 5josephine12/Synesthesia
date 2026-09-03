@@ -133,7 +133,6 @@ const HUD_GLOW = "255, 255, 255";
 const HUD_CONTRAST = "50, 53, 60";
 const OVERLAY_STROKE_WIDTH = 1.05;
 const CONNECTOR_STROKE_WIDTH = 1.35;
-const LONG_CONNECTION_THRESHOLD = 170;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
 let lastSnapshotAt = Number.NEGATIVE_INFINITY;
@@ -144,7 +143,15 @@ let cachedChordLabels = new Map<number, string | null>();
 let cachedChordFirstId = -1;
 let cachedChordLastId = -1;
 let cachedChordNodeCount = -1;
-const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames"];
+// Node-led scenes intentionally dominate. The repeated node entries preserve
+// long node-only passages while still allowing both and frame-only scenes.
+const COMPOSITION_MODES: readonly OverlayCompositionMode[] = [
+  "nodes",
+  "nodes",
+  "both",
+  "nodes",
+  "frames",
+];
 let compositionModeIndex = -1;
 let lastCompositionAdvanceAt = Number.NEGATIVE_INFINITY;
 let compositionTransition: OverlayCompositionTransition = {
@@ -554,22 +561,6 @@ function drawConnectionNode(
   context.restore();
 }
 
-function drawCableRelayFrame(
-  context: CanvasRenderingContext2D,
-  point: { x: number; y: number },
-  halfSize: number,
-  alpha: number,
-) {
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(Math.min(1, alpha));
-  context.shadowColor = glowColor(Math.min(0.82, alpha * 0.78));
-  context.shadowBlur = 4.5;
-  context.lineWidth = OVERLAY_STROKE_WIDTH;
-  context.strokeRect(point.x - halfSize, point.y - halfSize, halfSize * 2, halfSize * 2);
-  context.restore();
-}
-
 function secondaryPanelDock(pose: PanelPose, branchVariant: number) {
   const { viewport } = pose;
   const distances = [
@@ -653,35 +644,24 @@ function drawVisualizerConnection(
   }
 
   const cableAlpha = 0.98 * life * connectorMix;
-  const largeRelay = {
-    x: lerp(edge.x, pose.dockX, 0.46),
-    y: lerp(edge.y, pose.dockY, 0.46),
-  };
   drawConnectionCable(
     context,
     { x: startX, y: startY },
     { x: endX, y: endY },
     cableAlpha,
   );
-  drawCableRelayFrame(context, largeRelay, 12, cableAlpha);
 
-  if (distance >= LONG_CONNECTION_THRESHOLD) {
-    drawCableRelayFrame(
-      context,
-      {
-        x: lerp(edge.x, pose.dockX, 0.73),
-        y: lerp(edge.y, pose.dockY, 0.73),
-      },
-      7,
-      cableAlpha * 0.94,
-    );
-  }
-
-  const hasBranch = branchVariant % 2 === 1 && distance >= 92;
+  // Branches belong to the node language only. Frame-only scenes keep one
+  // uninterrupted cable between the large visualizer frame and data panel.
+  const hasBranch = nodeMix > 0.001 && branchVariant % 2 === 1 && distance >= 92;
   if (hasBranch) {
+    const branchPoint = {
+      x: lerp(edge.x, pose.dockX, 0.44),
+      y: lerp(edge.y, pose.dockY, 0.44),
+    };
     const branchDock = secondaryPanelDock(pose, branchVariant);
-    const branchDeltaX = branchDock.x - largeRelay.x;
-    const branchDeltaY = branchDock.y - largeRelay.y;
+    const branchDeltaX = branchDock.x - branchPoint.x;
+    const branchDeltaY = branchDock.y - branchPoint.y;
     const branchDistance = Math.max(1, Math.hypot(branchDeltaX, branchDeltaY));
     const branchDirectionX = branchDeltaX / branchDistance;
     const branchDirectionY = branchDeltaY / branchDistance;
@@ -689,21 +669,18 @@ function drawVisualizerConnection(
       x: branchDock.x + branchDirectionX * 2,
       y: branchDock.y + branchDirectionY * 2,
     };
-    drawConnectionCable(context, largeRelay, branchEnd, cableAlpha * 0.92);
-    if (branchDistance >= LONG_CONNECTION_THRESHOLD * 0.72) {
-      drawCableRelayFrame(
-        context,
-        {
-          x: lerp(largeRelay.x, branchDock.x, 0.62),
-          y: lerp(largeRelay.y, branchDock.y, 0.62),
-        },
-        6,
-        cableAlpha * 0.86,
-      );
-    }
-    if (nodeMix > 0.001) {
-      drawConnectionNode(context, branchDock, life * nodeMix * 0.9);
-    }
+    const nodeLife = life * nodeMix;
+    drawConnectionCable(context, branchPoint, branchEnd, 0.94 * nodeLife);
+    drawConnectionNode(context, branchPoint, nodeLife);
+    drawConnectionNode(
+      context,
+      {
+        x: lerp(branchPoint.x, branchDock.x, 0.58),
+        y: lerp(branchPoint.y, branchDock.y, 0.58),
+      },
+      nodeLife * 0.88,
+    );
+    drawConnectionNode(context, branchDock, nodeLife * 0.94);
   }
 
   if (nodeMix > 0.001) {

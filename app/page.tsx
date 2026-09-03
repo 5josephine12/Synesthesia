@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AuraToy } from "./AuraToy";
 
 export const metadata: Metadata = {
-  title: "Aura",
+  title: "Synesthesia",
   description: "A synesthesia simulator that turns melody into a luminous visual composition.",
 };
 

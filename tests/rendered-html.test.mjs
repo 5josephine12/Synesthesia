@@ -37,13 +37,13 @@ async function render() {
   );
 }
 
-test("server-renders the Aura shell", async () => {
+test("server-renders the Synesthesia shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Aura<\/title>/i);
+  assert.match(html, /<title>Synesthesia<\/title>/i);
   assert.match(
     html,
     /A synesthesia simulator that turns melody into a luminous visual composition\./,
@@ -260,7 +260,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const MAX_VISIBLE_FRAME_ASSETS = 2/);
   assert.match(
     telemetrySource,
-    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["both", "nodes", "frames"\]/,
+    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \[[\s\S]*?"nodes",[\s\S]*?"nodes",[\s\S]*?"both",[\s\S]*?"nodes",[\s\S]*?"frames",[\s\S]*?\]/,
   );
   assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 860/);
   assert.match(telemetrySource, /const COMPOSITION_MODE_HOLD_MS = 2400/);
@@ -278,9 +278,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /function drawRelayNode/);
   assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.05/);
   assert.match(telemetrySource, /const CONNECTOR_STROKE_WIDTH = 1\.35/);
-  assert.match(telemetrySource, /const LONG_CONNECTION_THRESHOLD = 170/);
   assert.match(telemetrySource, /context\.arc\(point\.x, point\.y, 2\.5/);
-  assert.match(telemetrySource, /function drawCableRelayFrame/);
   assert.match(telemetrySource, /function secondaryPanelDock/);
   assert.match(telemetrySource, /function drawConnectionCable/);
   assert.match(telemetrySource, /function drawVisualizerConnection/);
@@ -301,11 +299,10 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
   assert.match(telemetrySource, /const endX = pose\.dockX \+ directionX \* 2/);
   assert.match(telemetrySource, /drawConnectionCable\([\s\S]*?\{ x: startX, y: startY \},[\s\S]*?\{ x: endX, y: endY \}/);
-  assert.match(telemetrySource, /drawCableRelayFrame\(context, largeRelay, 12, cableAlpha\)/);
-  assert.match(telemetrySource, /if \(distance >= LONG_CONNECTION_THRESHOLD\)/);
-  assert.match(telemetrySource, /branchVariant % 2 === 1 && distance >= 92/);
+  assert.doesNotMatch(telemetrySource, /drawCableRelayFrame|largeRelay|LONG_CONNECTION_THRESHOLD/);
+  assert.match(telemetrySource, /nodeMix > 0\.001 && branchVariant % 2 === 1 && distance >= 92/);
   assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(pose, branchVariant\)/);
-  assert.match(telemetrySource, /drawConnectionCable\(context, largeRelay, branchEnd/);
+  assert.match(telemetrySource, /drawConnectionCable\(context, branchPoint, branchEnd/);
   assert.match(telemetrySource, /drawConnectionNode\(context, edge, nodeLife\)/);
   assert.match(telemetrySource, /lerp\(edge\.x, pose\.dockX, 0\.48\)/);
   assert.match(telemetrySource, /drawConnectionNode\(context, \{ x: pose\.dockX, y: pose\.dockY \}, nodeLife\)/);
