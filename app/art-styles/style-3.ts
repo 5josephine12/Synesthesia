@@ -99,6 +99,11 @@ function easeOutCubic(value: number) {
   return 1 - Math.pow(1 - progress, 3);
 }
 
+function easeInOutSine(value: number) {
+  const progress = clamp(value, 0, 1);
+  return -(Math.cos(Math.PI * progress) - 1) * 0.5;
+}
+
 function smoothstep(edge0: number, edge1: number, value: number) {
   const progress = clamp((value - edge0) / Math.max(0.0001, edge1 - edge0), 0, 1);
   return progress * progress * (3 - 2 * progress);
@@ -297,27 +302,22 @@ function drawInkComposition(
   const shortSide = Math.min(width, height);
   const shapes: InkShape[] = [];
   const fragments: Path2D[] = [];
-  const responsiveCenter = active.reduce(
-    (center, particle) => ({ x: center.x + particle.x, y: center.y + particle.y }),
-    { x: 0, y: 0 },
-  );
-  const responsiveX = (responsiveCenter.x / Math.max(1, active.length)) * width;
-  const responsiveY = (responsiveCenter.y / Math.max(1, active.length)) * height;
+  // The reference has one stable visual gravity point. Keeping this anchor
+  // independent of the active note count prevents established forms from
+  // jumping whenever a new note joins the composition.
   const focalPoint = {
-    x: lerp(width * 0.3, responsiveX, 0.1),
-    y: lerp(height * 0.57, responsiveY, 0.08),
+    x: width * 0.3,
+    y: height * 0.57,
   };
   const flow = { x: Math.cos(COMPOSITION_FLOW_ANGLE), y: Math.sin(COMPOSITION_FLOW_ANGLE) };
   const crossFlow = { x: -flow.y, y: flow.x };
 
-  for (let index = 0; index < active.length; index += 1) {
-    const particle = active[index];
+  for (const particle of active) {
     const seed = growthSeed(particle);
     const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
-    const arrival = easeOutCubic(age / FORMATION_DURATION);
+    const arrival = easeInOutSine(age / FORMATION_DURATION);
     if (arrival <= 0.01) continue;
-    const order = active.length <= 1 ? 0 : index / (active.length - 1) - 0.5;
-    const alongFlow = shortSide * (order * 0.29 + (hash(seed, 3) - 0.5) * 0.055);
+    const alongFlow = shortSide * (hash(seed, 3) - 0.5) * 0.31;
     const acrossFlow = shortSide * (hash(seed, 5) - 0.5) * 0.17;
     const pocket = {
       x: focalPoint.x + flow.x * alongFlow + crossFlow.x * acrossFlow,
@@ -387,7 +387,7 @@ function drawInkComposition(
 
     // A small number of parallel hairline gestures cross the crop along the
     // composition's shared diagonal without becoming one connected trunk.
-    if (index < 2) {
+    if (hash(seed, 127) > 0.66) {
       const fromLeadingEdge = hash(seed, 131) > 0.5;
       const edgeOrigin = {
         x: fromLeadingEdge ? -width * 0.1 : focalPoint.x - flow.x * shortSide * 0.72,

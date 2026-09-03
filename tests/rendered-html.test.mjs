@@ -444,11 +444,13 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const strandCount = 8 \+ Math\.floor/);
   assert.match(styleThreeSource, /const COMPOSITION_FLOW_ANGLE = -0\.67/);
   assert.match(styleThreeSource, /const focalPoint =/);
+  assert.match(styleThreeSource, /const arrival = easeInOutSine/);
+  assert.match(styleThreeSource, /if \(hash\(seed, 127\) > 0\.66\)/);
   assert.match(styleThreeSource, /const isPlate = shapeRoll >= 0\.96/);
   assert.match(styleThreeSource, /const edgeOrigin =/);
   assert.match(styleThreeSource, /context\.fill\(shape\.fill\)/);
   assert.match(styleThreeSource, /context\.stroke\(shape\.fill\)/);
-  assert.doesNotMatch(styleThreeSource, /const trunk|sampleShape|forkCount/);
+  assert.doesNotMatch(styleThreeSource, /const trunk|sampleShape|forkCount|responsiveCenter|index < 2/);
   assert.match(styleThreeSource, /context\.fillStyle = "#ffffff"/);
   assert.match(styleThreeSource, /rgba\(0, 0, 0/);
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 6/);
