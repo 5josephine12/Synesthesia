@@ -354,7 +354,7 @@ const DOTTED_FORMATION_SETTLE_DURATION = 2200;
 const DOTTED_GLOW_MATURATION_DURATION = 7200;
 const METALHEART_FORMATION_DURATION = 1900;
 const METALHEART_PULSE_DURATION = 920;
-const LIQUID_METAL_FORMATION_DURATION = 2100;
+const LIQUID_METAL_FORMATION_DURATION = 1900;
 const MAX_LIVE_VISUAL_PARTICLES = 48;
 const HARD_MAX_LIVE_VISUAL_PARTICLES = 72;
 const VISUAL_COMPACTION_BATCH_SIZE = 2;
@@ -450,12 +450,14 @@ const METALHEART_COMPOSITION_ANCHORS = [
 ] as const;
 
 const LIQUID_METAL_COMPOSITION_ANCHORS = [
-  [0.28, 0.34],
-  [0.46, 0.42],
-  [0.66, 0.32],
-  [0.36, 0.64],
-  [0.6, 0.64],
-  [0.76, 0.5],
+  [0.12, 0.18],
+  [0.8, 0.16],
+  [0.16, 0.72],
+  [0.84, 0.7],
+  [0.5, 0.27],
+  [0.54, 0.75],
+  [0.08, 0.46],
+  [0.92, 0.43],
 ] as const;
 
 const VISUAL_MODES: Record<SoundModeId, VisualMode> = {
@@ -1130,7 +1132,7 @@ const ART_STYLE_SLOTS = [
   { id: "aura", label: "Aura" },
   { id: "style-2", label: "Pixel" },
   { id: "style-3", label: "Metalheart" },
-  { id: "style-4", label: "Liquid Metal" },
+  { id: "style-4", label: "Halftone" },
 ] as const;
 type ArtStyleId = (typeof ART_STYLE_SLOTS)[number]["id"];
 
@@ -1994,7 +1996,7 @@ function drawChronologicalAuraLayers(
     blobs,
     fallbackArtStyle,
     "style-4",
-    12,
+    8,
     visibleLimit,
   );
   let runStart = 0;
