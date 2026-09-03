@@ -311,6 +311,8 @@ type MicrophoneRuntime = {
   lastResumeAttemptAt: number;
   lastVisualAt: number;
   lastBeatAt: number;
+  lastStyleThreeBeatAt: number;
+  lastStyleThreeAttackAt: number;
   lastValidPitchAt: number;
   lastMidi: number | null;
   candidateMidi: number | null;
@@ -321,6 +323,9 @@ type MicrophoneRuntime = {
   beatBandEnergy: number;
   beatInterval: number;
   beatConfidence: number;
+  styleThreeBeatInterval: number;
+  styleThreeBeatConfidence: number;
+  nextStyleThreeBeatAt: number;
   nextBeatAt: number;
   lastOnsetAt: number;
   previousOnsetStrength: number;
@@ -907,6 +912,92 @@ function trackMicrophoneBeat(
     beatDetected = true;
     runtime.lastBeatAt = runtime.nextBeatAt;
     runtime.nextBeatAt += runtime.beatInterval;
+  }
+
+  return beatDetected;
+}
+
+function normalizeStyleThreeBeatInterval(interval: number) {
+  let normalized = interval;
+  while (normalized < 240) normalized *= 2;
+  while (normalized > 900) normalized /= 2;
+  return clamp(normalized, 240, 900);
+}
+
+function trackStyleThreeBeat(
+  runtime: MicrophoneRuntime,
+  now: number,
+  activeSignal: boolean,
+  energyRise: number,
+  spectralFlux: number,
+  beatBandEnergy: number,
+) {
+  const bandRise = beatBandEnergy / Math.max(0.000001, runtime.beatBandEnergy);
+  const fluxRise = spectralFlux / Math.max(0.00001, runtime.smoothedFlux);
+  const onsetStrength =
+    Math.max(0, bandRise - 1) * 1.6 +
+    Math.max(0, energyRise - 1) * 0.78 +
+    Math.max(0, fluxRise - 1) * 0.14;
+  const onsetThreshold = Math.max(0.1, runtime.onsetBaseline + runtime.onsetDeviation * 1.2);
+  const carriesRhythm =
+    activeSignal ||
+    bandRise >= 1.08 ||
+    energyRise >= 1.08;
+  const onsetAttack =
+    carriesRhythm &&
+    onsetStrength >= onsetThreshold &&
+    (runtime.previousOnsetStrength < onsetThreshold ||
+      onsetStrength >= runtime.previousOnsetStrength * 1.1);
+  const minimumSpacing = clamp(runtime.styleThreeBeatInterval * 0.34, 150, 260);
+  let beatDetected = false;
+
+  if (onsetAttack) {
+    const sinceLastBeat = now - runtime.lastStyleThreeBeatAt;
+    runtime.lastStyleThreeAttackAt = now;
+    if (!Number.isFinite(runtime.lastStyleThreeBeatAt) || sinceLastBeat >= minimumSpacing) {
+      if (Number.isFinite(runtime.lastStyleThreeBeatAt) && sinceLastBeat <= 1800) {
+        const candidateInterval = normalizeStyleThreeBeatInterval(sinceLastBeat);
+        const intervalDifference =
+          Math.abs(candidateInterval - runtime.styleThreeBeatInterval) /
+          runtime.styleThreeBeatInterval;
+        if (runtime.styleThreeBeatConfidence === 0) {
+          runtime.styleThreeBeatInterval = candidateInterval;
+          runtime.styleThreeBeatConfidence = 1;
+        } else if (intervalDifference <= 0.42) {
+          runtime.styleThreeBeatInterval = lerp(
+            runtime.styleThreeBeatInterval,
+            candidateInterval,
+            0.24,
+          );
+          runtime.styleThreeBeatConfidence = Math.min(
+            5,
+            runtime.styleThreeBeatConfidence + 0.8,
+          );
+        } else {
+          runtime.styleThreeBeatConfidence = Math.max(
+            0,
+            runtime.styleThreeBeatConfidence - 0.35,
+          );
+        }
+      }
+      beatDetected = true;
+      runtime.lastStyleThreeBeatAt = now;
+      runtime.nextStyleThreeBeatAt = now + runtime.styleThreeBeatInterval;
+    }
+  }
+
+  const hasRecentAttack =
+    now - runtime.lastStyleThreeAttackAt <= runtime.styleThreeBeatInterval * 2.4;
+  if (
+    !beatDetected &&
+    carriesRhythm &&
+    runtime.styleThreeBeatConfidence >= 1 &&
+    hasRecentAttack &&
+    now >= runtime.nextStyleThreeBeatAt
+  ) {
+    beatDetected = true;
+    runtime.lastStyleThreeBeatAt = runtime.nextStyleThreeBeatAt;
+    runtime.nextStyleThreeBeatAt += runtime.styleThreeBeatInterval;
   }
 
   return beatDetected;
@@ -3272,6 +3363,8 @@ export function AuraToy() {
         lastResumeAttemptAt: -Infinity,
         lastVisualAt: -Infinity,
         lastBeatAt: -Infinity,
+        lastStyleThreeBeatAt: -Infinity,
+        lastStyleThreeAttackAt: -Infinity,
         lastValidPitchAt: -Infinity,
         lastMidi: null,
         candidateMidi: null,
@@ -3282,6 +3375,9 @@ export function AuraToy() {
         beatBandEnergy: 0.0002,
         beatInterval: 500,
         beatConfidence: 0,
+        styleThreeBeatInterval: 500,
+        styleThreeBeatConfidence: 0,
+        nextStyleThreeBeatAt: Infinity,
         nextBeatAt: Infinity,
         lastOnsetAt: -Infinity,
         previousOnsetStrength: 0,
@@ -3428,6 +3524,17 @@ export function AuraToy() {
           45,
           240,
         );
+        const metalheartIsActive = artStyleRef.current === "style-3";
+        const styleThreeBeatDetected = metalheartIsActive
+          ? trackStyleThreeBeat(
+              runtime,
+              now,
+              activeSignal,
+              energyRise,
+              spectralFlux,
+              beatBandEnergy,
+            )
+          : false;
         const beatDetected = trackMicrophoneBeat(
           runtime,
           now,
@@ -3436,8 +3543,8 @@ export function AuraToy() {
           spectralFlux,
           beatBandEnergy,
         );
-        const metalheartIsActive = artStyleRef.current === "style-3";
-        if (beatDetected && metalheartIsActive) {
+        const visualBeatDetected = metalheartIsActive ? styleThreeBeatDetected : beatDetected;
+        if (styleThreeBeatDetected) {
           let latestMetal: BlobParticle | undefined;
           for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
             const candidate = blobsRef.current[index];
@@ -3782,17 +3889,17 @@ export function AuraToy() {
           }, 105);
         }
 
-        if (!activeSignal) return;
-        if (metalheartIsActive && !beatDetected) return;
+        if (!activeSignal && !metalheartIsActive) return;
+        if (metalheartIsActive && !styleThreeBeatDetected) return;
         const primaryVisualMidi = detectedMidi ??
           (metalheartIsActive ? runtime.lastMidi ?? dominantMidi ?? bassMidi ?? 60 : null);
         if (primaryVisualMidi === null) return;
-        const visualInterval = beatDetected ? 60 : lerp(165, 72, level);
+        const visualInterval = visualBeatDetected ? 60 : lerp(165, 72, level);
         if (!metalheartIsActive && now - runtime.lastVisualAt < visualInterval) return;
-        if (!clearPitch && !beatDetected && recentStableMidi === null && level < 0.1) return;
+        if (!clearPitch && !visualBeatDetected && recentStableMidi === null && level < 0.1) return;
 
         const harmonicContext = isolatesVoice ? null : detectHarmonicContext(runtime.chroma);
-        const velocity = clamp(0.26 + level * 0.64 + (beatDetected ? 0.1 : 0), 0.26, 1);
+        const velocity = clamp(0.26 + level * 0.64 + (visualBeatDetected ? 0.1 : 0), 0.26, 1);
         const beatCompanion =
           !metalheartIsActive &&
           !isolatesVoice &&
@@ -3807,7 +3914,7 @@ export function AuraToy() {
           primaryVisualNote,
           microphoneColor(primaryVisualColor, harmonicContext),
           velocity,
-          beatDetected,
+          visualBeatDetected,
         );
         let visualCount = 1;
         if (beatCompanion !== null && beatCompanion !== primaryVisualMidi) {

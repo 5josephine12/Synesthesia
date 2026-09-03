@@ -560,7 +560,15 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 12/);
   assert.match(auraSource, /const metalheartIsActive = artStyleRef\.current === "style-3"/);
   assert.match(auraSource, /const currentMetalheartPulse = metalheartPulseIsActive/);
-  assert.match(auraSource, /if \(metalheartIsActive && !beatDetected\) return/);
+  assert.match(auraSource, /if \(metalheartIsActive && !styleThreeBeatDetected\) return/);
+  assert.match(auraSource, /function trackStyleThreeBeat\(/);
+  assert.match(auraSource, /const onsetAttack =/);
+  assert.match(auraSource, /const minimumSpacing = clamp\(runtime\.styleThreeBeatInterval \* 0\.34, 150, 260\)/);
+  assert.match(auraSource, /runtime\.styleThreeBeatConfidence >= 1/);
+  assert.match(auraSource, /const visualBeatDetected = metalheartIsActive \? styleThreeBeatDetected : beatDetected/);
+  assert.match(auraSource, /if \(!activeSignal && !metalheartIsActive\) return/);
+  assert.match(auraSource, /const onsetPeak =/);
+  assert.match(auraSource, /const isOnGrid = phaseError <= phaseWindow/);
   assert.match(auraSource, /const primaryVisualMidi = detectedMidi \?\?/);
   assert.match(auraSource, /metalheartIsActive \? runtime\.lastMidi \?\? dominantMidi \?\? bassMidi \?\? 60 : null/);
   assert.match(auraSource, /if \(primaryVisualMidi === null\) return/);
@@ -569,7 +577,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /isRhythmicStrike = false/);
   assert.match(auraSource, /currentArtStyle === "style-3" && isRhythmicStrike/);
   assert.match(auraSource, /spawnBlob\(note, color, velocity, true\)/);
-  assert.match(auraSource, /microphoneColor\(primaryVisualColor, harmonicContext\),\s*velocity,\s*beatDetected/);
+  assert.match(auraSource, /microphoneColor\(primaryVisualColor, harmonicContext\),\s*velocity,\s*visualBeatDetected/);
   assert.match(styleThreeSource, /export function drawMetalheartParticle/);
   assert.match(styleThreeSource, /export function drawMetalheartPulse/);
   assert.match(styleThreeSource, /export function drawMetalheartLayer/);
