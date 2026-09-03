@@ -132,6 +132,8 @@ const HUD_ACCENT = "232, 234, 236";
 const HUD_GLOW = "255, 255, 255";
 const HUD_CONTRAST = "50, 53, 60";
 const OVERLAY_STROKE_WIDTH = 1.05;
+const CONNECTOR_STROKE_WIDTH = 1.35;
+const LONG_CONNECTION_THRESHOLD = 170;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
 let lastSnapshotAt = Number.NEGATIVE_INFINITY;
@@ -552,6 +554,69 @@ function drawConnectionNode(
   context.restore();
 }
 
+function drawCableRelayFrame(
+  context: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  halfSize: number,
+  alpha: number,
+) {
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.strokeStyle = glowColor(Math.min(1, alpha));
+  context.shadowColor = glowColor(Math.min(0.82, alpha * 0.78));
+  context.shadowBlur = 4.5;
+  context.lineWidth = OVERLAY_STROKE_WIDTH;
+  context.strokeRect(point.x - halfSize, point.y - halfSize, halfSize * 2, halfSize * 2);
+  context.restore();
+}
+
+function secondaryPanelDock(pose: PanelPose, branchVariant: number) {
+  const { viewport } = pose;
+  const distances = [
+    Math.abs(pose.dockX - viewport.x),
+    Math.abs(pose.dockX - (viewport.x + viewport.width)),
+    Math.abs(pose.dockY - viewport.y),
+    Math.abs(pose.dockY - (viewport.y + viewport.height)),
+  ];
+  const closestEdge = distances.indexOf(Math.min(...distances));
+  const direction = branchVariant % 4 < 2 ? -1 : 1;
+
+  if (closestEdge < 2) {
+    const offset = Math.min(30, viewport.height * 0.3) * direction;
+    return {
+      x: pose.dockX,
+      y: clamp(pose.dockY + offset, viewport.y + 8, viewport.y + viewport.height - 8),
+    };
+  }
+
+  const offset = Math.min(36, viewport.width * 0.3) * direction;
+  return {
+    x: clamp(pose.dockX + offset, viewport.x + 8, viewport.x + viewport.width - 8),
+    y: pose.dockY,
+  };
+}
+
+function drawConnectionCable(
+  context: CanvasRenderingContext2D,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  alpha: number,
+) {
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.strokeStyle = glowColor(Math.min(1, alpha));
+  context.shadowColor = glowColor(Math.min(0.78, alpha * 0.72));
+  context.shadowBlur = 4.5;
+  context.lineWidth = CONNECTOR_STROKE_WIDTH;
+  context.lineCap = "square";
+  context.lineJoin = "round";
+  context.beginPath();
+  context.moveTo(from.x, from.y);
+  context.lineTo(to.x, to.y);
+  context.stroke();
+  context.restore();
+}
+
 function drawVisualizerConnection(
   context: CanvasRenderingContext2D,
   frame: VisualizationFrame,
@@ -559,6 +624,7 @@ function drawVisualizerConnection(
   life: number,
   frameMix: number,
   nodeMix: number,
+  branchVariant: number,
 ) {
   const connectorMix = Math.max(frameMix, nodeMix);
   if (life <= 0.001 || connectorMix <= 0.001) return;
@@ -586,18 +652,59 @@ function drawVisualizerConnection(
     context.restore();
   }
 
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(0.92 * life * connectorMix);
-  context.shadowColor = `rgba(${HUD_CONTRAST}, ${0.42 * life * connectorMix})`;
-  context.shadowBlur = 1.4;
-  context.lineWidth = OVERLAY_STROKE_WIDTH;
-  context.lineCap = "square";
-  context.beginPath();
-  context.moveTo(startX, startY);
-  context.lineTo(endX, endY);
-  context.stroke();
-  context.restore();
+  const cableAlpha = 0.98 * life * connectorMix;
+  const largeRelay = {
+    x: lerp(edge.x, pose.dockX, 0.46),
+    y: lerp(edge.y, pose.dockY, 0.46),
+  };
+  drawConnectionCable(
+    context,
+    { x: startX, y: startY },
+    { x: endX, y: endY },
+    cableAlpha,
+  );
+  drawCableRelayFrame(context, largeRelay, 12, cableAlpha);
+
+  if (distance >= LONG_CONNECTION_THRESHOLD) {
+    drawCableRelayFrame(
+      context,
+      {
+        x: lerp(edge.x, pose.dockX, 0.73),
+        y: lerp(edge.y, pose.dockY, 0.73),
+      },
+      7,
+      cableAlpha * 0.94,
+    );
+  }
+
+  const hasBranch = branchVariant % 2 === 1 && distance >= 92;
+  if (hasBranch) {
+    const branchDock = secondaryPanelDock(pose, branchVariant);
+    const branchDeltaX = branchDock.x - largeRelay.x;
+    const branchDeltaY = branchDock.y - largeRelay.y;
+    const branchDistance = Math.max(1, Math.hypot(branchDeltaX, branchDeltaY));
+    const branchDirectionX = branchDeltaX / branchDistance;
+    const branchDirectionY = branchDeltaY / branchDistance;
+    const branchEnd = {
+      x: branchDock.x + branchDirectionX * 2,
+      y: branchDock.y + branchDirectionY * 2,
+    };
+    drawConnectionCable(context, largeRelay, branchEnd, cableAlpha * 0.92);
+    if (branchDistance >= LONG_CONNECTION_THRESHOLD * 0.72) {
+      drawCableRelayFrame(
+        context,
+        {
+          x: lerp(largeRelay.x, branchDock.x, 0.62),
+          y: lerp(largeRelay.y, branchDock.y, 0.62),
+        },
+        6,
+        cableAlpha * 0.86,
+      );
+    }
+    if (nodeMix > 0.001) {
+      drawConnectionNode(context, branchDock, life * nodeMix * 0.9);
+    }
+  }
 
   if (nodeMix > 0.001) {
     const nodeLife = life * nodeMix;
@@ -1045,10 +1152,19 @@ function drawFrameAsset(
   changing: boolean,
   frameMix: number,
   nodeMix: number,
+  panelVariant: number,
 ) {
   const assetMix = Math.max(frameMix, nodeMix);
   if (life <= 0.001 || assetMix <= 0.001) return;
-  drawVisualizerConnection(context, current.frame, current.pose, life, frameMix, nodeMix);
+  drawVisualizerConnection(
+    context,
+    current.frame,
+    current.pose,
+    life,
+    frameMix,
+    nodeMix,
+    panelVariant,
+  );
   drawPanel(context, from, to, current, snapshots, snapshotBase, progress, life * assetMix, changing);
 }
 
@@ -1214,7 +1330,20 @@ export function drawTelemetryOverlay(
       changing: state.targetKey !== nodeKey(state.from.node) && rawProgress < 1,
     };
   });
-  const frameItems = rendered.slice(-MAX_VISIBLE_FRAME_ASSETS);
+  const frameItems = [] as typeof rendered;
+  for (
+    let index = rendered.length - 1;
+    index >= 0 && frameItems.length < MAX_VISIBLE_FRAME_ASSETS;
+    index -= 1
+  ) {
+    const candidate = rendered[index];
+    const candidatePanel = presentationObstacle(candidate.current);
+    const collidesWithVisiblePanel = frameItems.some((item) =>
+      overlaps(candidatePanel, [presentationObstacle(item.current)], 10),
+    );
+    if (!collidesWithVisiblePanel) frameItems.push(candidate);
+  }
+  frameItems.reverse();
   const assetMix = Math.max(compositionMix.frames, compositionMix.nodes);
 
   const snapshots = assetMix > 0.001
@@ -1241,6 +1370,7 @@ export function drawTelemetryOverlay(
       item.changing,
       compositionMix.frames,
       compositionMix.nodes,
+      item.state.panelVariant,
     );
   });
 

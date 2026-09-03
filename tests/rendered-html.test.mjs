@@ -277,7 +277,12 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /function drawConnectionTerminal/);
   assert.doesNotMatch(telemetrySource, /function drawRelayNode/);
   assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.05/);
+  assert.match(telemetrySource, /const CONNECTOR_STROKE_WIDTH = 1\.35/);
+  assert.match(telemetrySource, /const LONG_CONNECTION_THRESHOLD = 170/);
   assert.match(telemetrySource, /context\.arc\(point\.x, point\.y, 2\.5/);
+  assert.match(telemetrySource, /function drawCableRelayFrame/);
+  assert.match(telemetrySource, /function secondaryPanelDock/);
+  assert.match(telemetrySource, /function drawConnectionCable/);
   assert.match(telemetrySource, /function drawVisualizerConnection/);
   assert.match(telemetrySource, /function drawFrameAsset/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
@@ -295,8 +300,12 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /context\.strokeRect\(frame\.x, frame\.y, frame\.width, frame\.height\)/);
   assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
   assert.match(telemetrySource, /const endX = pose\.dockX \+ directionX \* 2/);
-  assert.match(telemetrySource, /context\.moveTo\(startX, startY\)/);
-  assert.match(telemetrySource, /context\.lineTo\(endX, endY\)/);
+  assert.match(telemetrySource, /drawConnectionCable\([\s\S]*?\{ x: startX, y: startY \},[\s\S]*?\{ x: endX, y: endY \}/);
+  assert.match(telemetrySource, /drawCableRelayFrame\(context, largeRelay, 12, cableAlpha\)/);
+  assert.match(telemetrySource, /if \(distance >= LONG_CONNECTION_THRESHOLD\)/);
+  assert.match(telemetrySource, /branchVariant % 2 === 1 && distance >= 92/);
+  assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(pose, branchVariant\)/);
+  assert.match(telemetrySource, /drawConnectionCable\(context, largeRelay, branchEnd/);
   assert.match(telemetrySource, /drawConnectionNode\(context, edge, nodeLife\)/);
   assert.match(telemetrySource, /lerp\(edge\.x, pose\.dockX, 0\.48\)/);
   assert.match(telemetrySource, /drawConnectionNode\(context, \{ x: pose\.dockX, y: pose\.dockY \}, nodeLife\)/);
@@ -305,11 +314,13 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
     telemetrySource,
     /drawFrameAsset\(\s*trackedContext,[\s\S]*?item\.life,\s*item\.changing,\s*compositionMix\.frames,\s*compositionMix\.nodes/,
   );
-  assert.match(telemetrySource, /drawVisualizerConnection\(context, current\.frame, current\.pose, life, frameMix, nodeMix\)/);
+  assert.match(telemetrySource, /drawVisualizerConnection\([\s\S]*?current\.frame,[\s\S]*?current\.pose,[\s\S]*?panelVariant/);
   assert.match(telemetrySource, /drawPanel\(context, from, to, current, snapshots, snapshotBase, progress, life \* assetMix, changing\)/);
   assert.match(telemetrySource, /const assetMix = Math\.max\(compositionMix\.frames, compositionMix\.nodes\)/);
   assert.match(telemetrySource, /const snapshots = assetMix > 0\.001/);
-  assert.match(telemetrySource, /const frameItems = rendered\.slice\(-MAX_VISIBLE_FRAME_ASSETS\)/);
+  assert.match(telemetrySource, /const frameItems = \[\] as typeof rendered/);
+  assert.match(telemetrySource, /frameItems\.length < MAX_VISIBLE_FRAME_ASSETS/);
+  assert.match(telemetrySource, /const collidesWithVisiblePanel = frameItems\.some/);
   assert.match(telemetrySource, /frameItems\.flatMap/);
   assert.match(telemetrySource, /const frameX = clamp/);
   assert.match(telemetrySource, /const frameY = clamp/);
