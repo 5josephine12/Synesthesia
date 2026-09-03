@@ -1234,7 +1234,13 @@ export function drawTelemetryOverlay(
     }
   }
 
-  const rendered = morphStates.map((state) => {
+  // Enforce the cap at the final visible-state boundary as well as insertion.
+  // This prevents transitions or retained state from ever drawing a fourth
+  // panel, even for one animation frame.
+  const visibleStates = [...morphStates]
+    .sort((first, second) => first.to.node.createdAt - second.to.node.createdAt)
+    .slice(-MAX_PANELS);
+  const rendered = visibleStates.map((state) => {
     const rawProgress = clamp((now - state.startedAt) / state.duration, 0, 1);
     const progress = smootherStep(rawProgress);
     const current = interpolatePresentation(state.from, state.to, progress);

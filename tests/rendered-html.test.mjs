@@ -248,6 +248,8 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /from: enteringPresentation\(presentation\)/);
   assert.match(telemetrySource, /morphStates\.splice\(replacementIndex, 1\)/);
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
+  assert.match(telemetrySource, /\.slice\(-MAX_PANELS\)/);
+  assert.match(telemetrySource, /const rendered = visibleStates\.map/);
   assert.match(telemetrySource, /function drawRoutedConnection/);
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
   assert.match(telemetrySource, /function drawFrameNetwork/);
