@@ -22,6 +22,7 @@ export type LiquidMetalParticleState = {
   radius: number;
   velocity: number;
   createdAt: number;
+  frozenAt?: number;
   color?: { h: number; s: number; l: number };
   accent?: { h: number; s: number; l: number };
 };
@@ -273,11 +274,12 @@ class LiquidMetalRenderer {
         this.nodes[index].set(0, 0, 0, 0);
         continue;
       }
-      const age = reducedMotion
+      const effectiveNow = particle.frozenAt ?? now;
+      const age = reducedMotion && particle.frozenAt === undefined
         ? LIQUID_FORMATION_DURATION
-        : Math.max(0, now - particle.createdAt);
+        : Math.max(0, effectiveNow - particle.createdAt);
       const arrival = easeOutCubic(age / LIQUID_FORMATION_DURATION);
-      if (arrival < 0.999) forming = true;
+      if (arrival < 0.999 && particle.frozenAt === undefined) forming = true;
       const radius = clamp(
         (0.105 + particle.radius * 0.42 + particle.velocity * 0.018) * arrival,
         0.001,
@@ -302,8 +304,13 @@ class LiquidMetalRenderer {
     this.material.uniforms.uCount.value = active.length;
     this.material.uniforms.uEnergy.value = clamp(energy / Math.max(1, active.length), 0, 1);
     const newest = active[active.length - 1];
-    const settledNow = Math.min(now, newest.createdAt + LIQUID_FORMATION_DURATION);
-    this.material.uniforms.uTime.value = (reducedMotion ? newest.createdAt + LIQUID_FORMATION_DURATION : settledNow) * 0.001;
+    const newestNow = newest.frozenAt ?? now;
+    const settledNow = Math.min(newestNow, newest.createdAt + LIQUID_FORMATION_DURATION);
+    this.material.uniforms.uTime.value = (
+      reducedMotion && newest.frozenAt === undefined
+        ? newest.createdAt + LIQUID_FORMATION_DURATION
+        : settledNow
+    ) * 0.001;
     this.renderer.render(this.scene, this.camera);
     return { canvas: this.canvas, forming };
   }

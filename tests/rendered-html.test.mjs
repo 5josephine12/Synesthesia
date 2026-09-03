@@ -326,7 +326,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const DOTTED_FORMATION_SETTLE_DURATION = 2200/);
   assert.match(auraSource, /const DOTTED_RENDER_INTERVAL = 1000 \/ 20/);
   assert.match(auraSource, /const DOTTED_GLOW_MATURATION_DURATION = 7200/);
-  assert.match(auraSource, /now - newestDottedCreatedAt < DOTTED_FORMATION_SETTLE_DURATION/);
+  assert.match(
+    auraSource,
+    /blob\.artStyle === "style-2" &&\s*blob\.frozenAt === undefined &&\s*now - blob\.createdAt < DOTTED_FORMATION_SETTLE_DURATION/,
+  );
   assert.match(auraSource, /drawDottedSigilFlowLayer\(\s*pixelContext/);
   assert.match(auraSource, /context\.drawImage\(pixelLayer, 0, 0, width, height\)/);
   assert.match(auraSource, /const displayedPixelSize = displayWidth < 500 \? 2 : 3/);
@@ -384,7 +387,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /alpha: clamp\(\(0\.94 \+ blob\.velocity \* 0\.06\) \* arrival \* layerEmphasis, 0, 1\)/);
   assert.match(auraSource, /lerp\(0\.74, 0\.92, recency \* recency\)/);
   assert.match(auraSource, /const blendsWithEarlierArtwork = runStart > 0 \|\| hasEarlierArtwork/);
-  assert.match(auraSource, /if \(runEnd <= dottedWindowStart\)/);
+  assert.match(auraSource, /visibleDottedIndices\(blobs, fallbackArtStyle, runStart, runEnd\)/);
   assert.match(auraSource, /context\.globalCompositeOperation = "screen"/);
   assert.match(auraSource, /context\.filter = `blur\(\$\{clamp\(Math\.min\(width, height\) \* 0\.009, 4, 9\)\}px\)`/);
   assert.match(auraSource, /context\.globalCompositeOperation = "color"/);
@@ -413,8 +416,9 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /Math\.min\(\s*VISUAL_COMPACTION_BATCH_SIZE,/);
   assert.match(auraSource, /const compactedBlobs = blobs\.slice\(0, compactCount\)/);
   assert.match(auraSource, /const compactedVisibleBlobs = compactedBlobs\.filter/);
-  assert.match(auraSource, /const isInvisibleDotted = isDotted && index < oldestVisibleDottedIndex/);
-  assert.match(auraSource, /index >= oldestVisibleDottedIndex/);
+  assert.match(auraSource, /function visibleDottedIdsAcrossLayers/);
+  assert.match(auraSource, /const isInvisibleDotted = isDotted && !visibleDottedIds\.has\(blob\.id\)/);
+  assert.match(auraSource, /!isDotted \|\| visibleDottedIds\.has\(blob\.id\)/);
   assert.match(auraSource, /drawChronologicalAuraLayers\(\s*historyCompositeContext/);
   assert.match(auraSource, /blobsRef\.current = blobs\.slice\(compactCount\)/);
   assert.match(auraSource, /compactedHistoryActiveRef\.current = true/);
@@ -445,13 +449,20 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /export function drawMetalheartPulse/);
   assert.match(styleThreeSource, /export function drawMetalheartLayer/);
   assert.match(styleThreeSource, /export function renderMetalheartFrame/);
-  assert.match(auraSource, /const visibleMetalheartIds = new Set<number>\(\)/);
+  assert.match(auraSource, /const visibleMetalheartIds = visibleTailIdsAcrossLayers/);
+  assert.match(auraSource, /const visibleLiquidMetalIds = visibleTailIdsAcrossLayers/);
   assert.match(auraSource, /metalheartRenderer\.drawMetalheartLayer\(context/);
   assert.match(auraSource, /styleEpoch: styleLayerEpochRef\.current/);
-  assert.match(auraSource, /\{ \.\.\.blob, metalheartFrozenAt: frozenAt \}/);
+  assert.match(auraSource, /blob\.artStyle === previousStyle && blob\.frozenAt === undefined/);
+  assert.match(auraSource, /\? \{ \.\.\.blob, frozenAt \}/);
   assert.match(auraSource, /const layerIsLive = layerParticles\.some/);
   assert.match(auraSource, /pulse: layerIsLive \? metalheartPulse/);
-  assert.match(auraSource, /if \(blobStyle === "style-3"\) return blob\.metalheartFrozenAt !== undefined/);
+  assert.match(auraSource, /\(blobStyle === "style-3" \|\| blobStyle === "style-4"\)/);
+  assert.match(auraSource, /return blob\.frozenAt !== undefined/);
+  assert.match(auraSource, /const activeStyleEpoch = styleLayerEpochRef\.current/);
+  assert.match(auraSource, /blob\.styleEpoch === activeStyleEpoch/);
+  assert.match(auraSource, /particles: layerParticles/);
+  assert.match(styleFourSource, /const effectiveNow = particle\.frozenAt \?\? now/);
   assert.doesNotMatch(auraSource, /lastMetalheartIndex|metalheartCanvas/);
   assert.match(styleThreeSource, /function buildRibbon/);
   assert.match(styleThreeSource, /function buildLoop/);

@@ -146,7 +146,7 @@ type BlobParticle = {
   repeat: number;
   compositionIndex: number;
   styleEpoch: number;
-  metalheartFrozenAt?: number;
+  frozenAt?: number;
   x: number;
   y: number;
   radius: number;
@@ -1756,8 +1756,9 @@ function drawAuraComposition(
       : artStyle === "style-4"
         ? LIQUID_METAL_FORMATION_DURATION
         : BLOB_ARRIVAL_DURATION;
+    const effectiveNow = blob.frozenAt ?? now;
     const age = replayProgress === undefined
-      ? Math.max(0, now - blob.createdAt)
+      ? Math.max(0, effectiveNow - blob.createdAt)
       : replayAge * formationDuration;
     const arrival = easeOutCubic(age / formationDuration);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
@@ -1792,6 +1793,82 @@ function drawAuraComposition(
   context.restore();
 }
 
+function visibleDottedIndices(
+  blobs: readonly BlobParticle[],
+  fallbackArtStyle: ArtStyleId,
+  startIndex: number,
+  endIndex: number,
+) {
+  const dottedIndices: number[] = [];
+  const limit = Math.min(endIndex, blobs.length);
+  for (let index = limit - 1; index >= startIndex; index -= 1) {
+    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") continue;
+    const candidate = blobs[index];
+    const overlapsNewerFormation = dottedIndices.some((selectedIndex) => {
+      const selected = blobs[selectedIndex];
+      return Math.hypot(candidate.x - selected.x, candidate.y - selected.y) < 0.16;
+    });
+    if (overlapsNewerFormation) continue;
+    dottedIndices.unshift(index);
+    if (dottedIndices.length === DOTTED_VISIBLE_FORMATIONS) break;
+  }
+  return dottedIndices;
+}
+
+function visibleDottedIdsAcrossLayers(
+  blobs: readonly BlobParticle[],
+  fallbackArtStyle: ArtStyleId,
+) {
+  const visibleIds = new Set<number>();
+  let runStart = 0;
+  while (runStart < blobs.length) {
+    const runStyle = blobs[runStart].artStyle ?? fallbackArtStyle;
+    const runEpoch = blobs[runStart].styleEpoch ?? 0;
+    let runEnd = runStart + 1;
+    while (
+      runEnd < blobs.length &&
+      (blobs[runEnd].artStyle ?? fallbackArtStyle) === runStyle &&
+      (blobs[runEnd].styleEpoch ?? 0) === runEpoch
+    ) runEnd += 1;
+    if (runStyle === "style-2") {
+      for (const index of visibleDottedIndices(blobs, fallbackArtStyle, runStart, runEnd)) {
+        visibleIds.add(blobs[index].id);
+      }
+    }
+    runStart = runEnd;
+  }
+  return visibleIds;
+}
+
+function visibleTailIdsAcrossLayers(
+  blobs: readonly BlobParticle[],
+  fallbackArtStyle: ArtStyleId,
+  targetStyle: ArtStyleId,
+  maximumPerLayer: number,
+  endIndex = blobs.length,
+) {
+  const visibleIds = new Set<number>();
+  const limit = Math.min(blobs.length, endIndex);
+  let runStart = 0;
+  while (runStart < limit) {
+    const runStyle = blobs[runStart].artStyle ?? fallbackArtStyle;
+    const runEpoch = blobs[runStart].styleEpoch ?? 0;
+    let runEnd = runStart + 1;
+    while (
+      runEnd < limit &&
+      (blobs[runEnd].artStyle ?? fallbackArtStyle) === runStyle &&
+      (blobs[runEnd].styleEpoch ?? 0) === runEpoch
+    ) runEnd += 1;
+    if (runStyle === targetStyle) {
+      for (let index = Math.max(runStart, runEnd - maximumPerLayer); index < runEnd; index += 1) {
+        visibleIds.add(blobs[index].id);
+      }
+    }
+    runStart = runEnd;
+  }
+  return visibleIds;
+}
+
 function drawDottedSigilFlowLayer(
   context: CanvasRenderingContext2D,
   blobs: readonly BlobParticle[],
@@ -1814,24 +1891,18 @@ function drawDottedSigilFlowLayer(
     ? Number.POSITIVE_INFINITY
     : replayProgress * (blobs.length + 0.9);
   const limit = Math.min(endIndex, blobs.length, Math.ceil(replayPosition));
-  const dottedIndices: number[] = [];
+  const dottedIndices = visibleDottedIndices(
+    blobs,
+    fallbackArtStyle,
+    startIndex,
+    limit,
+  );
   let layeredWithOtherStyles = false;
   for (let index = 0; index < limit; index += 1) {
     if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") {
       layeredWithOtherStyles = true;
       break;
     }
-  }
-  for (let index = limit - 1; index >= startIndex; index -= 1) {
-    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") continue;
-    const candidate = blobs[index];
-    const overlapsNewerFormation = dottedIndices.some((selectedIndex) => {
-      const selected = blobs[selectedIndex];
-      return Math.hypot(candidate.x - selected.x, candidate.y - selected.y) < 0.16;
-    });
-    if (overlapsNewerFormation) continue;
-    dottedIndices.unshift(index);
-    if (dottedIndices.length === DOTTED_VISIBLE_FORMATIONS) break;
   }
 
   context.save();
@@ -1841,8 +1912,9 @@ function drawDottedSigilFlowLayer(
     const index = dottedIndices[position];
     const blob = blobs[index];
     const replayAge = replayPosition - index;
+    const effectiveNow = blob.frozenAt ?? now;
     const age = replayProgress === undefined
-      ? Math.max(0, now - blob.createdAt)
+      ? Math.max(0, effectiveNow - blob.createdAt)
       : Math.max(0, replayAge) * BLOB_ARRIVAL_DURATION;
     const arrival = easeOutCubic(age / BLOB_ARRIVAL_DURATION);
     const radius = blob.radius * shortSide * (0.46 + arrival * 0.54);
@@ -1861,13 +1933,13 @@ function drawDottedSigilFlowLayer(
       gridStep,
       radius,
       alpha: clamp((0.94 + blob.velocity * 0.06) * arrival * layerEmphasis, 0, 1),
-      time: reducedMotion
+      time: reducedMotion && blob.frozenAt === undefined
         ? DOTTED_FORMATION_SETTLE_DURATION
         : Math.min(age, DOTTED_FORMATION_SETTLE_DURATION),
       arrival,
       emphasis: layerEmphasis,
       layered: layeredWithOtherStyles,
-      maturation: reducedMotion
+      maturation: reducedMotion && blob.frozenAt === undefined
         ? 1
         : clamp(age / DOTTED_GLOW_MATURATION_DURATION, 0, 1),
       velocity: blob.velocity,
@@ -1902,7 +1974,6 @@ function drawChronologicalAuraLayers(
   replayProgress?: number,
   hasEarlierArtwork = false,
   metalheartPulse?: { progress: number; strength: number; x: number; y: number } | null,
-  liquidMetalCanvas?: CanvasImageSource | null,
 ) {
   const replayPosition = replayProgress === undefined
     ? Number.POSITIVE_INFINITY
@@ -1912,36 +1983,20 @@ function drawChronologicalAuraLayers(
     ? (blobs[Math.max(0, visibleLimit - 1)]?.createdAt ?? now) +
       Math.max(METALHEART_FORMATION_DURATION, LIQUID_METAL_FORMATION_DURATION)
     : now;
-  let dottedWindowStart = 0;
-  let dottedCount = 0;
-  for (let index = visibleLimit - 1; index >= 0; index -= 1) {
-    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-2") continue;
-    dottedCount += 1;
-    if (dottedCount === DOTTED_VISIBLE_FORMATIONS) {
-      dottedWindowStart = index;
-      break;
-    }
-  }
-  const visibleMetalheartIds = new Set<number>();
-  let liveMetalheartCount = 0;
-  for (let index = visibleLimit - 1; index >= 0; index -= 1) {
-    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-3") continue;
-    if (blobs[index].metalheartFrozenAt !== undefined) {
-      visibleMetalheartIds.add(blobs[index].id);
-    } else if (liveMetalheartCount < 6) {
-      visibleMetalheartIds.add(blobs[index].id);
-      liveMetalheartCount += 1;
-    }
-  }
-  let lastLiquidMetalIndex = -1;
-  if (liquidMetalCanvas) {
-    for (let index = visibleLimit - 1; index >= 0; index -= 1) {
-      if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-4") continue;
-      lastLiquidMetalIndex = index;
-      break;
-    }
-  }
-
+  const visibleMetalheartIds = visibleTailIdsAcrossLayers(
+    blobs,
+    fallbackArtStyle,
+    "style-3",
+    6,
+    visibleLimit,
+  );
+  const visibleLiquidMetalIds = visibleTailIdsAcrossLayers(
+    blobs,
+    fallbackArtStyle,
+    "style-4",
+    12,
+    visibleLimit,
+  );
   let runStart = 0;
   while (runStart < visibleLimit) {
     const runStyle = blobs[runStart].artStyle ?? fallbackArtStyle;
@@ -1968,14 +2023,6 @@ function drawChronologicalAuraLayers(
     }
 
     if (runKind === "pixel") {
-      // Pixel formations older than the visible window contribute no pixels.
-      // Skip the full-canvas clear, blur, and composite passes for those runs;
-      // repeated style switching can otherwise accumulate a large amount of
-      // invisible work even though the live composition looks unchanged.
-      if (runEnd <= dottedWindowStart) {
-        runStart = runEnd;
-        continue;
-      }
       pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
       pixelAccentContext.clearRect(0, 0, pixelAccentLayer.width, pixelAccentLayer.height);
       drawDottedSigilFlowLayer(
@@ -1986,7 +2033,7 @@ function drawChronologicalAuraLayers(
         renderNow,
         reducedMotion,
         fallbackArtStyle,
-        Math.max(runStart, dottedWindowStart),
+        runStart,
         runEnd,
         replayProgress,
         width,
@@ -2035,10 +2082,10 @@ function drawChronologicalAuraLayers(
           .slice(runStart, runEnd)
           .filter((blob) => visibleMetalheartIds.has(blob.id));
         if (layerParticles.length > 0) {
-          const layerIsLive = layerParticles.some((blob) => blob.metalheartFrozenAt === undefined);
+          const layerIsLive = layerParticles.some((blob) => blob.frozenAt === undefined);
           const layerNow = layerIsLive
             ? renderNow
-            : layerParticles[0].metalheartFrozenAt ?? renderNow;
+            : layerParticles[0].frozenAt ?? renderNow;
           context.save();
           context.globalCompositeOperation = "source-over";
           metalheartRenderer.drawMetalheartLayer(context, {
@@ -2046,7 +2093,7 @@ function drawChronologicalAuraLayers(
             width,
             height,
             now: layerNow,
-            reducedMotion,
+            reducedMotion: reducedMotion && layerIsLive,
             pulse: layerIsLive ? metalheartPulse ?? undefined : undefined,
           });
           context.restore();
@@ -2084,14 +2131,30 @@ function drawChronologicalAuraLayers(
       context.drawImage(organicLayer, 0, 0, width, height);
       context.restore();
     } else if (runKind === "liquid-metal") {
-      if (liquidMetalCanvas) {
-        if (lastLiquidMetalIndex >= runStart && lastLiquidMetalIndex < runEnd) {
-          context.save();
-          context.globalCompositeOperation = "source-over";
-          context.imageSmoothingEnabled = true;
-          context.imageSmoothingQuality = "high";
-          context.drawImage(liquidMetalCanvas, 0, 0, width, height);
-          context.restore();
+      if (liquidMetalRenderer) {
+        const layerParticles = blobs
+          .slice(runStart, runEnd)
+          .filter((blob) => visibleLiquidMetalIds.has(blob.id));
+        if (layerParticles.length > 0) {
+          const layerIsLive = layerParticles.some((blob) => blob.frozenAt === undefined);
+          const layerNow = layerIsLive
+            ? renderNow
+            : layerParticles[0].frozenAt ?? renderNow;
+          const liquidMetalFrame = liquidMetalRenderer.renderLiquidMetalFrame({
+            particles: layerParticles,
+            width,
+            height,
+            now: layerNow,
+            reducedMotion: reducedMotion && layerIsLive,
+          });
+          if (liquidMetalFrame) {
+            context.save();
+            context.globalCompositeOperation = "source-over";
+            context.imageSmoothingEnabled = true;
+            context.imageSmoothingQuality = "high";
+            context.drawImage(liquidMetalFrame.canvas, 0, 0, width, height);
+            context.restore();
+          }
         }
         runStart = runEnd;
         continue;
@@ -3236,7 +3299,7 @@ export function AuraToy() {
           let latestMetal: BlobParticle | undefined;
           for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
             const candidate = blobsRef.current[index];
-            if (candidate.artStyle !== "style-3" || candidate.metalheartFrozenAt !== undefined) continue;
+            if (candidate.artStyle !== "style-3" || candidate.frozenAt !== undefined) continue;
             latestMetal = candidate;
             break;
           }
@@ -4331,25 +4394,30 @@ export function AuraToy() {
     const compactVisualHistory = (now: number, blurRadius: number) => {
       const blobs = blobsRef.current;
       if (blobs.length <= MAX_LIVE_VISUAL_PARTICLES || settledCount === 0) return;
-
-      let visibleDottedCount = 0;
-      let oldestVisibleDottedIndex = 0;
-      for (let index = blobs.length - 1; index >= 0; index -= 1) {
-        if ((blobs[index].artStyle ?? artStyleRef.current) !== "style-2") continue;
-        visibleDottedCount += 1;
-        if (visibleDottedCount === DOTTED_VISIBLE_FORMATIONS) {
-          oldestVisibleDottedIndex = index;
-          break;
-        }
-      }
+      const visibleDottedIds = visibleDottedIdsAcrossLayers(blobs, artStyleRef.current);
+      const visibleMetalheartIds = visibleTailIdsAcrossLayers(
+        blobs,
+        artStyleRef.current,
+        "style-3",
+        6,
+      );
+      const visibleLiquidMetalIds = visibleTailIdsAcrossLayers(
+        blobs,
+        artStyleRef.current,
+        "style-4",
+        12,
+      );
 
       let compactCount = 0;
       for (let index = 0; index < settledCount; index += 1) {
         const blob = blobs[index];
         const blobStyle = blob.artStyle ?? artStyleRef.current;
         const isDotted = blobStyle === "style-2";
-        const isInvisibleDotted = isDotted && index < oldestVisibleDottedIndex;
-        if (blobStyle === "style-3" && blob.metalheartFrozenAt === undefined) break;
+        const isInvisibleDotted = isDotted && !visibleDottedIds.has(blob.id);
+        if (
+          (blobStyle === "style-3" || blobStyle === "style-4") &&
+          blob.frozenAt === undefined
+        ) break;
         const minimumAge = isDotted
           ? DOTTED_GLOW_MATURATION_DURATION
           : blobStyle === "style-3"
@@ -4359,6 +4427,7 @@ export function AuraToy() {
               : BLOB_ARRIVAL_DURATION;
         if (
           !isInvisibleDotted &&
+          blob.frozenAt === undefined &&
           !reducedMotionRef.current &&
           now - blob.createdAt < minimumAge
         ) break;
@@ -4375,12 +4444,16 @@ export function AuraToy() {
       if (compactCount === 0) return;
 
       const compactedBlobs = blobs.slice(0, compactCount);
-      const compactedVisibleBlobs = compactedBlobs.filter((blob, index) => {
+      const compactedVisibleBlobs = compactedBlobs.filter((blob) => {
         const blobStyle = blob.artStyle ?? artStyleRef.current;
-        if (blobStyle === "style-4") return false;
-        if (blobStyle === "style-3") return blob.metalheartFrozenAt !== undefined;
+        if (blobStyle === "style-3") {
+          return blob.frozenAt !== undefined && visibleMetalheartIds.has(blob.id);
+        }
+        if (blobStyle === "style-4") {
+          return blob.frozenAt !== undefined && visibleLiquidMetalIds.has(blob.id);
+        }
         const isDotted = blobStyle === "style-2";
-        return !isDotted || index >= oldestVisibleDottedIndex;
+        return !isDotted || visibleDottedIds.has(blob.id);
       });
       if (compactedVisibleBlobs.length > 0) {
         drawChronologicalAuraLayers(
@@ -4504,6 +4577,7 @@ export function AuraToy() {
       let hasMetalheartStyle = false;
       let hasMovingMetalheartStyle = false;
       let hasLiquidMetalStyle = false;
+      let hasMovingLiquidMetalStyle = false;
       for (let index = blobsRef.current.length - 1; index >= 0; index -= 1) {
         const blob = blobsRef.current[index];
         const blobStyle = blob.artStyle ?? currentArtStyle;
@@ -4511,9 +4585,13 @@ export function AuraToy() {
           if (!Number.isFinite(newestDottedCreatedAt)) newestDottedCreatedAt = blob.createdAt;
         } else if (blobStyle === "style-3") {
           hasMetalheartStyle = true;
-          if (blob.metalheartFrozenAt === undefined) hasMovingMetalheartStyle = true;
+          if (blob.frozenAt === undefined) hasMovingMetalheartStyle = true;
         } else if (blobStyle === "style-4") {
           hasLiquidMetalStyle = true;
+          if (
+            blob.frozenAt === undefined &&
+            now - blob.createdAt < LIQUID_METAL_FORMATION_DURATION
+          ) hasMovingLiquidMetalStyle = true;
         } else {
           hasAuraStyle = true;
         }
@@ -4536,19 +4614,15 @@ export function AuraToy() {
             y: metalheartPulse.y,
           }
         : undefined;
-      const liquidMetalFrame = hasLiquidMetalStyle
-        ? liquidMetalRenderer?.renderLiquidMetalFrame({
-            particles: blobsRef.current,
-            width,
-            height,
-            now,
-            reducedMotion: reducedMotionRef.current,
-          })
-        : null;
       const dottedMotionIsActive =
         hasDottedStyle &&
         !reducedMotionRef.current &&
-        now - newestDottedCreatedAt < DOTTED_FORMATION_SETTLE_DURATION;
+        blobsRef.current.some(
+          (blob) =>
+            blob.artStyle === "style-2" &&
+            blob.frozenAt === undefined &&
+            now - blob.createdAt < DOTTED_FORMATION_SETTLE_DURATION,
+        );
       const blurRadius =
         (containsOrganicStyle || hasCompactedHistory
           ? reducedMotionRef.current
@@ -4621,7 +4695,6 @@ export function AuraToy() {
           undefined,
           hasCompactedHistory,
           currentMetalheartPulse,
-          liquidMetalFrame?.canvas,
         );
       } else if (hasDottedStyle) {
         const pixelLayerNeedsRefresh =
@@ -4683,9 +4756,16 @@ export function AuraToy() {
 
       // Screen-only: exports render from drawAuraComposition without this pass.
       if (telemetryOpacity > 0.001 && telemetryRenderer) {
+        const activeStyleEpoch = styleLayerEpochRef.current;
+        const activeStyleNodes = blobsRef.current.filter(
+          (blob) =>
+            blob.artStyle === currentArtStyle &&
+            blob.styleEpoch === activeStyleEpoch &&
+            blob.frozenAt === undefined,
+        );
         telemetryRenderer.drawTelemetryOverlay(
           context,
-          blobsRef.current,
+          activeStyleNodes,
           width,
           height,
           now,
@@ -4707,6 +4787,7 @@ export function AuraToy() {
       const hasArrivingBlob =
         !reducedMotionRef.current &&
         newestBlob !== undefined &&
+        newestBlob.frozenAt === undefined &&
         now - newestBlob.createdAt < newestFormationDuration;
       const renderDuration = performance.now() - renderStartedAt;
       if (renderDuration > AURA_RENDER_BUDGET_MS) {
@@ -4726,7 +4807,7 @@ export function AuraToy() {
       if (
         hasArrivingBlob ||
         (hasMovingMetalheartStyle && !reducedMotionRef.current) ||
-        liquidMetalFrame?.forming ||
+        (hasMovingLiquidMetalStyle && !reducedMotionRef.current) ||
         metalheartPulseIsActive ||
         dottedMotionIsActive ||
         settledCount < blobsRef.current.length ||
@@ -4955,15 +5036,6 @@ export function AuraToy() {
     const containsOrganicStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
     );
-    const exportLiquidMetalFrame = hasLiquidMetalStyle
-      ? liquidMetalRenderer?.renderLiquidMetalFrame({
-          particles: blobsRef.current,
-          width: output.width,
-          height: output.height,
-          now: performance.now(),
-          reducedMotion: replayProgress === undefined,
-        })
-      : null;
     paintArtworkBackground(outputContext, output.width, output.height);
     if (hasCompactedHistory && compactedHistory) {
       outputContext.save();
@@ -4997,7 +5069,6 @@ export function AuraToy() {
         replayProgress,
         hasCompactedHistory,
         undefined,
-        exportLiquidMetalFrame?.canvas,
       );
     } else if (hasDottedStyle) {
       drawDottedSigilFlowLayer(
@@ -5292,13 +5363,13 @@ export function AuraToy() {
       const nextStyle = ART_STYLE_SLOTS[nextIndex];
       if (!nextStyle || nextStyle.id === artStyleRef.current) return;
       const previousStyle = artStyleRef.current;
+      const frozenAt = performance.now();
+      blobsRef.current = blobsRef.current.map((blob) =>
+        blob.artStyle === previousStyle && blob.frozenAt === undefined
+          ? { ...blob, frozenAt }
+          : blob,
+      );
       if (previousStyle === "style-3") {
-        const frozenAt = performance.now();
-        blobsRef.current = blobsRef.current.map((blob) =>
-          blob.artStyle === "style-3" && blob.metalheartFrozenAt === undefined
-            ? { ...blob, metalheartFrozenAt: frozenAt }
-            : blob,
-        );
         metalheartPulseRef.current.startedAt = Number.NEGATIVE_INFINITY;
       }
       styleLayerEpochRef.current += 1;
