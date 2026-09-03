@@ -263,6 +263,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /function drawOperatorChrome/);
   assert.doesNotMatch(telemetrySource, /function drawMorphConnector/);
   assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
+  assert.doesNotMatch(telemetrySource, /const edge = frameAnchor\(frame, pose\.dockX, pose\.dockY\)/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(telemetrySource, /drawFrameNetwork\(context, rendered, now\)/);
 });

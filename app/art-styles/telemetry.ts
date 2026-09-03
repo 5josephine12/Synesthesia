@@ -1027,24 +1027,9 @@ function drawPanel(
   progress: number,
   life: number,
   changing: boolean,
-  terminalVariant: number,
 ) {
-  const { pose, frame } = current;
+  const { pose } = current;
   const viewport = pose.viewport;
-  const edge = frameAnchor(frame, pose.dockX, pose.dockY);
-
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(0.62 * life);
-  context.shadowColor = glowColor(0.8 * life);
-  context.shadowBlur = 6;
-  context.lineWidth = 1.1;
-  context.beginPath();
-  context.moveTo(edge.x, edge.y);
-  context.lineTo(pose.dockX, pose.dockY);
-  context.stroke();
-  context.restore();
-  drawConnectionTerminal(context, edge, terminalVariant, 0.82 * life);
 
   context.save();
   context.globalCompositeOperation = "source-over";
@@ -1079,12 +1064,6 @@ function drawPanel(
     drawMetadata(context, to, pose, life, 0);
   }
 
-  drawConnectionTerminal(
-    context,
-    { x: pose.dockX, y: pose.dockY },
-    terminalVariant + 1,
-    0.82 * life,
-  );
 }
 
 /**
@@ -1258,7 +1237,6 @@ export function drawTelemetryOverlay(
       item.progress,
       item.life,
       item.changing,
-      index,
     );
   });
 
