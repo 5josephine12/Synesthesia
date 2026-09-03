@@ -99,10 +99,10 @@ const HOLD_MS = 6000;
 const EXIT_MS = 900;
 const LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
 const MORPH_MS = 1280;
-const ENTRY_MORPH_MS = 720;
+const ENTRY_MORPH_MS = Math.min(720, MORPH_MS, DISTANT_MORPH_MS);
 const DISTANT_MORPH_MS = 1080;
 
-const MAX_PANELS = 7;
+const MAX_PANELS = 3;
 const DATA_GAP = 10;
 const PANEL_GAP = 62;
 const PANEL_COLLISION_GAP = 18;
@@ -529,104 +529,125 @@ function drawRoutedConnection(
   life: number,
   focused: boolean,
   now: number,
+  dotted = false,
 ) {
   if (life <= 0.001 || reveal <= 0.001) return;
   const start = frameAnchor(from, to.centerX, to.centerY);
   const end = frameAnchor(to, from.centerX, from.centerY);
   const deltaX = end.x - start.x;
   const deltaY = end.y - start.y;
-  const direct = Math.abs(seed) % 4 === 0;
-  const points = [{ x: start.x, y: start.y }];
-  if (!direct) {
-    const bendBias = 0.42 + ((Math.abs(seed) % 5) - 2) * 0.035;
-    if (Math.abs(deltaX) >= Math.abs(deltaY)) {
-      const bendX = start.x + deltaX * bendBias;
-      points.push({ x: bendX, y: start.y }, { x: bendX, y: end.y });
-    } else {
-      const bendY = start.y + deltaY * bendBias;
-      points.push({ x: start.x, y: bendY }, { x: end.x, y: bendY });
-    }
-  }
-  points.push({ x: end.x, y: end.y });
+  const distance = Math.max(1, Math.hypot(deltaX, deltaY));
+  const normalX = -deltaY / distance;
+  const normalY = deltaX / distance;
+  const curveDirection = Math.abs(seed) % 2 === 0 ? 1 : -1;
+  const curve = distance * (0.12 + (Math.abs(seed) % 7) * 0.018) * curveDirection;
+  const controlOne = {
+    x: start.x + deltaX * 0.32 + normalX * curve,
+    y: start.y + deltaY * 0.32 + normalY * curve,
+  };
+  const controlTwo = {
+    x: start.x + deltaX * 0.68 - normalX * curve * 0.46,
+    y: start.y + deltaY * 0.68 - normalY * curve * 0.46,
+  };
+  const approximateLength = distance * (1.08 + Math.abs(curve) / distance * 0.34);
+  const alpha = life * reveal * (focused ? 0.78 : 0.52);
+  const palettes = [
+    [126, 98, 255],
+    [79, 190, 255],
+    [255, 132, 204],
+    [103, 222, 190],
+  ] as const;
+  const wire = palettes[Math.abs(seed) % palettes.length];
+  const color = (opacity: number) => `rgba(${wire[0]}, ${wire[1]}, ${wire[2]}, ${opacity})`;
 
-  let length = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    length += Math.hypot(
-      points[index].x - points[index - 1].x,
-      points[index].y - points[index - 1].y,
-    );
-  }
-  const alpha = life * (focused ? 0.82 : 0.54);
+  const pointAt = (amount: number) => {
+    const inverse = 1 - amount;
+    return {
+      x:
+        inverse * inverse * inverse * start.x +
+        3 * inverse * inverse * amount * controlOne.x +
+        3 * inverse * amount * amount * controlTwo.x +
+        amount * amount * amount * end.x,
+      y:
+        inverse * inverse * inverse * start.y +
+        3 * inverse * inverse * amount * controlOne.y +
+        3 * inverse * amount * amount * controlTwo.y +
+        amount * amount * amount * end.y,
+    };
+  };
+  const tangentAt = (amount: number) => {
+    const inverse = 1 - amount;
+    return {
+      x:
+        3 * inverse * inverse * (controlOne.x - start.x) +
+        6 * inverse * amount * (controlTwo.x - controlOne.x) +
+        3 * amount * amount * (end.x - controlTwo.x),
+      y:
+        3 * inverse * inverse * (controlOne.y - start.y) +
+        6 * inverse * amount * (controlTwo.y - controlOne.y) +
+        3 * amount * amount * (end.y - controlTwo.y),
+    };
+  };
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.lineCap = "square";
-  context.lineJoin = "miter";
-  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha);
-  context.shadowColor = glowColor(alpha * 0.82);
-  context.shadowBlur = focused ? 6 : 4;
-  context.lineWidth = focused ? 1.3 : 0.92;
-  context.setLineDash([Math.max(0.01, length * reveal), length + 1]);
-  context.beginPath();
-  context.moveTo(points[0].x, points[0].y);
-  for (let index = 1; index < points.length; index += 1) {
-    context.lineTo(points[index].x, points[index].y);
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  if (dotted) {
+    context.setLineDash([2.4, 6.2]);
+    context.lineDashOffset = -now * 0.018;
+  } else {
+    context.setLineDash([Math.max(0.01, approximateLength * reveal), approximateLength + 1]);
   }
+  context.beginPath();
+  context.moveTo(start.x, start.y);
+  context.bezierCurveTo(
+    controlOne.x,
+    controlOne.y,
+    controlTwo.x,
+    controlTwo.y,
+    end.x,
+    end.y,
+  );
+  context.strokeStyle = color(alpha * 0.22);
+  context.shadowColor = color(alpha * 0.6);
+  context.shadowBlur = focused ? 8 : 5;
+  context.lineWidth = focused ? 3.4 : 2.6;
+  context.stroke();
+  context.shadowBlur = focused ? 4 : 2;
+  context.strokeStyle = color(alpha);
+  context.lineWidth = focused ? 1.18 : 0.84;
   context.stroke();
   context.setLineDash([]);
 
-  if (reveal > 0.5) {
-    context.shadowBlur = 3;
-    context.fillStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha * 1.15);
+  if (reveal > 0.35) {
+    context.shadowBlur = 0;
+    context.fillStyle = color(alpha * 0.9);
     context.beginPath();
-    context.arc(start.x, start.y, focused ? 2.1 : 1.6, 0, Math.PI * 2);
-    context.moveTo(end.x + (focused ? 2.1 : 1.6), end.y);
-    context.arc(end.x, end.y, focused ? 2.1 : 1.6, 0, Math.PI * 2);
+    context.arc(start.x, start.y, focused ? 2.5 : 2, 0, Math.PI * 2);
+    context.moveTo(end.x + (focused ? 2.5 : 2), end.y);
+    context.arc(end.x, end.y, focused ? 2.5 : 2, 0, Math.PI * 2);
     context.fill();
-    if (points.length > 2) {
-      const junction = points[Math.floor(points.length / 2)];
-      context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha * 0.9);
-      context.lineWidth = 0.75;
-      context.strokeRect(junction.x - 2.5, junction.y - 2.5, 5, 5);
-    }
 
-    // Tiny packets keep settled connections visibly alive without moving the
-    // panels themselves or blurring the routed, right-angle network.
-    const packetCount = focused ? 2 : 1;
-    for (let packet = 0; packet < packetCount; packet += 1) {
-      const packetProgress =
-        ((now * 0.00024 + packet / packetCount + (Math.abs(seed) % 101) / 101) % 1) * reveal;
-      const packetDistance = packetProgress * length;
-      let traveled = 0;
-      for (let index = 1; index < points.length; index += 1) {
-        const segmentStart = points[index - 1];
-        const segmentEnd = points[index];
-        const segmentLength = Math.hypot(
-          segmentEnd.x - segmentStart.x,
-          segmentEnd.y - segmentStart.y,
-        );
-        if (traveled + segmentLength < packetDistance) {
-          traveled += segmentLength;
-          continue;
-        }
-        const amount = clamp(
-          (packetDistance - traveled) / Math.max(0.001, segmentLength),
-          0,
-          1,
-        );
-        const packetX = lerp(segmentStart.x, segmentEnd.x, amount);
-        const packetY = lerp(segmentStart.y, segmentEnd.y, amount);
-        const packetSize = focused ? 3.4 : 2.6;
-        context.fillStyle = glowColor(alpha);
-        context.fillRect(
-          packetX - packetSize / 2,
-          packetY - packetSize / 2,
-          packetSize,
-          packetSize,
-        );
-        break;
-      }
-    }
+    const packetProgress =
+      ((now * 0.0002 + (Math.abs(seed) % 97) / 97) % 1) * clamp(reveal, 0, 1);
+    const packet = pointAt(packetProgress);
+    const tangent = tangentAt(packetProgress);
+    const packetAngle = Math.atan2(tangent.y, tangent.x);
+    const packetSize = focused ? 4.4 : 3.5;
+    context.save();
+    context.translate(packet.x, packet.y);
+    context.rotate(packetAngle);
+    context.fillStyle = color(alpha);
+    context.shadowColor = color(alpha);
+    context.shadowBlur = 5;
+    context.beginPath();
+    context.moveTo(packetSize, 0);
+    context.lineTo(-packetSize * 0.7, packetSize * 0.62);
+    context.lineTo(-packetSize * 0.7, -packetSize * 0.62);
+    context.closePath();
+    context.fill();
+    context.restore();
   }
   context.restore();
 }
@@ -660,19 +681,8 @@ function drawFrameNetwork(
   for (let index = 1; index < visible.length; index += 1) {
     const from = visible[index - 1];
     const to = visible[index];
-    drawRoutedConnection(
-      context,
-      from.current.frame,
-      to.current.frame,
-      from.state.to.node.id * 31 + to.state.to.node.id,
-      smootherStep(to.progress),
-      Math.min(from.life, to.life),
-      index === visible.length - 1,
-      now,
-    );
-
-    // The preview/data frames form a second, unmistakable node graph instead
-    // of reading as unrelated floating rectangles.
+    // Solid, colored family wires carry the primary operator data flow.
+    // Their curves follow the actual angle between each pair of nodes.
     drawRoutedConnection(
       context,
       viewportFrame(from.current.pose.viewport),
@@ -684,21 +694,24 @@ function drawFrameNetwork(
       now,
     );
 
-    // Sparse cross-links introduce network branching without filling every
-    // open area with wires.
-    if (index >= 2 && Math.abs(to.state.to.node.id) % 2 === 0) {
-      const branch = visible[index - 2];
-      drawRoutedConnection(
-        context,
-        branch.current.frame,
-        to.current.frame,
-        branch.state.to.node.id * 173 + to.state.to.node.id * 91,
-        smootherStep(to.progress),
-        Math.min(branch.life, to.life) * 0.72,
-        false,
-        now,
-      );
-    }
+  }
+
+  // Dotted parameter links use the other canonical TouchDesigner connection
+  // language and carry a moving arrowhead while the network is cooking.
+  if (visible.length === MAX_PANELS) {
+    const first = visible[0];
+    const last = visible[visible.length - 1];
+    drawRoutedConnection(
+      context,
+      viewportFrame(first.current.pose.viewport),
+      viewportFrame(last.current.pose.viewport),
+      first.state.to.node.id * 173 + last.state.to.node.id * 91,
+      smootherStep(last.progress),
+      Math.min(first.life, last.life) * 0.58,
+      false,
+      now,
+      true,
+    );
   }
 }
 
@@ -926,26 +939,6 @@ function enteringPresentation(target: FocusPresentation): FocusPresentation {
   };
 }
 
-function presentationAt(state: OverlayMorphState, now: number) {
-  const progress = smootherStep((now - state.startedAt) / state.duration);
-  return interpolatePresentation(state.from, state.to, progress);
-}
-
-function morphDuration(
-  from: FocusPresentation,
-  to: FocusPresentation,
-  shortSide: number,
-  distant = false,
-) {
-  const distance = Math.hypot(
-    from.frame.centerX - to.frame.centerX,
-    from.frame.centerY - to.frame.centerY,
-  );
-  const travel = clamp(distance / Math.max(1, shortSide), 0, 1);
-  const ceiling = distant ? DISTANT_MORPH_MS : MORPH_MS;
-  return lerp(MORPH_MS * 0.78, ceiling, smootherStep(travel));
-}
-
 function nodeKey(node: TelemetryNode) {
   return `${node.id}:${node.createdAt}`;
 }
@@ -1129,6 +1122,57 @@ function drawMetadata(
   context.restore();
 }
 
+const OPERATOR_NAMES = ["noise", "level", "feedback", "composite", "transform", "null"] as const;
+
+function drawOperatorChrome(
+  context: TrackedContext,
+  presentation: FocusPresentation,
+  viewport: Rect,
+  alpha: number,
+) {
+  if (alpha <= 0.001) return;
+  const name = OPERATOR_NAMES[Math.abs(presentation.node.id) % OPERATOR_NAMES.length];
+  const suffix = Math.abs(presentation.node.midi + presentation.node.repeat) % 17 + 1;
+  const headerHeight = clamp(viewport.height * 0.16, 10, 15);
+  const portRadius = clamp(headerHeight * 0.18, 1.7, 2.4);
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = alpha;
+  context.fillStyle = "rgba(245, 246, 250, 0.9)";
+  context.fillRect(viewport.x, viewport.y, viewport.width, headerHeight);
+  context.fillStyle = "rgba(22, 23, 28, 0.88)";
+  context.font = "600 7px ui-monospace, SFMono-Regular, Menlo, monospace";
+  context.textBaseline = "middle";
+  context.textAlign = "left";
+  context.letterSpacing = "0.2px";
+  context.fillText(`${name}${suffix}`, viewport.x + 5, viewport.y + headerHeight * 0.53);
+
+  // TouchDesigner operators expose compact input/output ports and state flags.
+  context.fillStyle = "rgba(116, 92, 255, 0.95)";
+  context.beginPath();
+  context.arc(viewport.x, viewport.y + viewport.height * 0.48, portRadius, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "rgba(75, 190, 255, 0.95)";
+  context.beginPath();
+  context.arc(
+    viewport.x + viewport.width,
+    viewport.y + viewport.height * 0.52,
+    portRadius,
+    0,
+    Math.PI * 2,
+  );
+  context.fill();
+
+  const flagSize = clamp(headerHeight * 0.28, 2.8, 4.2);
+  const flagY = viewport.y + viewport.height - flagSize - 2;
+  context.fillStyle = "rgba(88, 199, 255, 0.9)";
+  context.fillRect(viewport.x + 3, flagY, flagSize, flagSize);
+  context.fillStyle = "rgba(245, 145, 198, 0.9)";
+  context.fillRect(viewport.x + 3 + flagSize + 2, flagY, flagSize, flagSize);
+  context.restore();
+}
+
 function drawPanel(
   context: TrackedContext,
   from: FocusPresentation,
@@ -1179,6 +1223,8 @@ function drawPanel(
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.stroke();
   context.restore();
+
+  drawOperatorChrome(context, to, viewport, life);
 
   if (changing) {
     const oldAlpha = 1 - easeOutCubic(progress / 0.52);
@@ -1315,19 +1361,8 @@ export function drawTelemetryOverlay(
           oldestIndex = index;
         }
       }
-      const previous = morphStates[oldestIndex];
-      const current = presentationAt(previous, now);
-      morphStates[oldestIndex] = {
-        ...nextState,
-        from: {
-          ...current,
-          node: previous.to.node,
-          chord: previous.to.chord,
-        },
-        startedAt: now,
-        duration: morphDuration(current, presentation, shortSide, true),
-        sessionStartedAt: previous.sessionStartedAt,
-      };
+      morphStates.splice(oldestIndex, 1);
+      morphStates.push(nextState);
     }
   }
 
