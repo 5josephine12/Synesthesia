@@ -3783,14 +3783,12 @@ export function AuraToy() {
         }
 
         if (!activeSignal) return;
-        if (detectedMidi === null) return;
         if (metalheartIsActive && !beatDetected) return;
-        const visualInterval = metalheartIsActive
-          ? 300
-          : beatDetected
-            ? 60
-            : lerp(165, 72, level);
-        if (now - runtime.lastVisualAt < visualInterval) return;
+        const primaryVisualMidi = detectedMidi ??
+          (metalheartIsActive ? runtime.lastMidi ?? dominantMidi ?? bassMidi ?? 60 : null);
+        if (primaryVisualMidi === null) return;
+        const visualInterval = beatDetected ? 60 : lerp(165, 72, level);
+        if (!metalheartIsActive && now - runtime.lastVisualAt < visualInterval) return;
         if (!clearPitch && !beatDetected && recentStableMidi === null && level < 0.1) return;
 
         const harmonicContext = isolatesVoice ? null : detectHarmonicContext(runtime.chroma);
@@ -3803,7 +3801,7 @@ export function AuraToy() {
           noteCandidates.length > 1
             ? noteCandidates[(runtime.visualCursor + 1) % noteCandidates.length]
             : null;
-        const primaryVisualNote = midiToNote(clamp(detectedMidi, MIN_MIDI, MAX_MIDI));
+        const primaryVisualNote = midiToNote(clamp(primaryVisualMidi, MIN_MIDI, MAX_MIDI));
         const primaryVisualColor = AURA_MAPPING.pitches[primaryVisualNote.pc];
         spawnBlob(
           primaryVisualNote,
@@ -3812,7 +3810,7 @@ export function AuraToy() {
           beatDetected,
         );
         let visualCount = 1;
-        if (beatCompanion !== null && beatCompanion !== detectedMidi) {
+        if (beatCompanion !== null && beatCompanion !== primaryVisualMidi) {
           const companionNote = midiToNote(clamp(beatCompanion, MIN_MIDI, MAX_MIDI));
           const companionColor = AURA_MAPPING.pitches[companionNote.pc];
           spawnBlob(

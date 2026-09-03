@@ -117,6 +117,16 @@ function easeInOutSine(value: number) {
   return -(Math.cos(Math.PI * progress) - 1) * 0.5;
 }
 
+function growAndRetract(age: number) {
+  const progress = clamp(age / FORMATION_DURATION, 0, 1);
+  const growthEnd = 0.64;
+  if (progress <= growthEnd) {
+    return easeInOutSine(progress / growthEnd);
+  }
+  const retraction = easeInOutSine((progress - growthEnd) / (1 - growthEnd));
+  return lerp(1, 0.8, retraction);
+}
+
 function smoothstep(edge0: number, edge1: number, value: number) {
   const progress = clamp((value - edge0) / Math.max(0.0001, edge1 - edge0), 0, 1);
   return progress * progress * (3 - 2 * progress);
@@ -320,7 +330,7 @@ function drawInkComposition(
   for (const particle of active) {
     const seed = growthSeed(particle);
     const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
-    const arrival = easeInOutSine(age / FORMATION_DURATION);
+    const arrival = growAndRetract(age);
     if (arrival <= 0.01) continue;
     // Each note deterministically selects a different stage position. Older
     // formations retain their own anchor, so the visual can jump around the

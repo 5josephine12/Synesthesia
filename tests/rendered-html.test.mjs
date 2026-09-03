@@ -561,6 +561,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const metalheartIsActive = artStyleRef\.current === "style-3"/);
   assert.match(auraSource, /const currentMetalheartPulse = metalheartPulseIsActive/);
   assert.match(auraSource, /if \(metalheartIsActive && !beatDetected\) return/);
+  assert.match(auraSource, /const primaryVisualMidi = detectedMidi \?\?/);
+  assert.match(auraSource, /metalheartIsActive \? runtime\.lastMidi \?\? dominantMidi \?\? bassMidi \?\? 60 : null/);
+  assert.match(auraSource, /if \(primaryVisualMidi === null\) return/);
+  assert.match(auraSource, /if \(!metalheartIsActive && now - runtime\.lastVisualAt < visualInterval\) return/);
+  assert.doesNotMatch(auraSource, /metalheartIsActive\s*\? 300/);
   assert.match(auraSource, /isRhythmicStrike = false/);
   assert.match(auraSource, /currentArtStyle === "style-3" && isRhythmicStrike/);
   assert.match(auraSource, /spawnBlob\(note, color, velocity, true\)/);
@@ -593,11 +598,14 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const DENSITY_CORE_OFFSETS =/);
   assert.match(styleThreeSource, /const MOTION_FRAME_INTERVAL = 1000 \/ 20/);
   assert.match(styleThreeSource, /const FORMATION_DURATION = 620/);
+  assert.match(styleThreeSource, /function growAndRetract/);
+  assert.match(styleThreeSource, /const growthEnd = 0\.64/);
+  assert.match(styleThreeSource, /return lerp\(1, 0\.8, retraction\)/);
+  assert.match(styleThreeSource, /const arrival = growAndRetract\(age\)/);
   assert.match(styleThreeSource, /function beatAccent/);
   assert.match(styleThreeSource, /Math\.pow\(1 - progress, 2\.6\) \* strength/);
   assert.doesNotMatch(styleThreeSource, /beatScale|context\.scale\(beat/);
   assert.match(styleThreeSource, /const focalPoint =/);
-  assert.match(styleThreeSource, /const arrival = easeInOutSine/);
   assert.match(styleThreeSource, /if \(hash\(seed, 127\) > 0\.66\)/);
   assert.match(styleThreeSource, /const isLoop = shapeRoll >= 0\.32/);
   assert.match(styleThreeSource, /const isPlate = shapeRoll >= 0\.92/);
