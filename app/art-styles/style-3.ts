@@ -99,6 +99,12 @@ type InkShape = {
   fill: Path2D;
 };
 
+type BeatMotion = {
+  amount: number;
+  centerX: number;
+  centerY: number;
+};
+
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -310,7 +316,7 @@ function drawInkComposition(
   height: number,
   now: number,
   reducedMotion: boolean,
-  pulse: number,
+  beat: BeatMotion,
 ) {
   const shortSide = Math.min(width, height);
   const shapes: InkShape[] = [];
@@ -441,10 +447,16 @@ function drawInkComposition(
   }
 
   context.save();
+  if (!reducedMotion && beat.amount > 0.001) {
+    const beatScale = 1 + beat.amount * 0.085;
+    context.translate(beat.centerX, beat.centerY);
+    context.scale(beatScale, beatScale);
+    context.translate(-beat.centerX, -beat.centerY);
+  }
   context.lineCap = "butt";
   context.lineJoin = "miter";
   context.miterLimit = 3;
-  const outlineAlpha = clamp(0.66 + pulse * 0.12, 0.66, 0.82);
+  const outlineAlpha = clamp(0.66 + beat.amount * 0.16, 0.66, 0.84);
   context.strokeStyle = `rgba(0, 0, 0, ${outlineAlpha})`;
   context.lineWidth = clamp(shortSide * 0.00078, 0.72, 1.08);
   context.fillStyle = "#ffffff";
@@ -458,6 +470,23 @@ function drawInkComposition(
   for (const fragment of fragments) context.fill(fragment);
 
   context.restore();
+}
+
+function beatMotion(
+  pulse: MetalheartPulseState | undefined,
+  width: number,
+  height: number,
+): BeatMotion {
+  const progress = pulse?.progress ?? 2;
+  const strength = clamp(pulse?.strength ?? 0, 0, 1);
+  const amount = progress >= 0 && progress < 1
+    ? Math.pow(1 - progress, 2.6) * strength
+    : 0;
+  return {
+    amount,
+    centerX: clamp(pulse?.x ?? 0.5, 0, 1) * width,
+    centerY: clamp(pulse?.y ?? 0.5, 0, 1) * height,
+  };
 }
 
 class ContourCompositionRenderer {
@@ -511,10 +540,7 @@ class ContourCompositionRenderer {
       return { canvas: this.canvas, forming: true };
     }
 
-    const pulseProgress = pulse?.progress ?? 2;
-    const pulseEnvelope = pulseProgress >= 0 && pulseProgress < 1
-      ? Math.sin(pulseProgress * Math.PI) * Math.pow(1 - pulseProgress, 0.72) * clamp(pulse?.strength ?? 0, 0, 1)
-      : 0;
+    const beat = beatMotion(pulse, width, height);
     let forming = false;
     for (const particle of active) {
       if (!reducedMotion && now - particle.createdAt < FORMATION_DURATION) {
@@ -526,7 +552,7 @@ class ContourCompositionRenderer {
     this.context.setTransform(1, 0, 0, 1, 0, 0);
     this.context.clearRect(0, 0, this.width, this.height);
     this.context.setTransform(this.scale, 0, 0, this.scale, 0, 0);
-    drawInkComposition(this.context, active, width, height, now, reducedMotion, pulseEnvelope);
+    drawInkComposition(this.context, active, width, height, now, reducedMotion, beat);
     this.lastRenderedAt = now;
     return { canvas: this.canvas, forming: forming || continuouslyMoving };
   }
@@ -577,10 +603,7 @@ export function drawMetalheartLayer(
   active.reverse();
   if (active.length === 0 || options.width <= 0 || options.height <= 0) return false;
 
-  const pulseProgress = options.pulse?.progress ?? 2;
-  const pulseEnvelope = pulseProgress >= 0 && pulseProgress < 1
-    ? Math.sin(pulseProgress * Math.PI) * Math.pow(1 - pulseProgress, 0.72) * clamp(options.pulse?.strength ?? 0, 0, 1)
-    : 0;
+  const beat = beatMotion(options.pulse, options.width, options.height);
   drawInkComposition(
     context,
     active,
@@ -588,7 +611,7 @@ export function drawMetalheartLayer(
     options.height,
     options.now,
     options.reducedMotion,
-    pulseEnvelope,
+    beat,
   );
   return true;
 }

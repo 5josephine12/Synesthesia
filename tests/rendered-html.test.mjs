@@ -552,6 +552,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 12/);
   assert.match(auraSource, /const metalheartIsActive = artStyleRef\.current === "style-3"/);
   assert.match(auraSource, /const currentMetalheartPulse = metalheartPulseIsActive/);
+  assert.match(auraSource, /if \(metalheartIsActive && !beatDetected\) return/);
+  assert.match(auraSource, /isRhythmicStrike = false/);
+  assert.match(auraSource, /currentArtStyle === "style-3" && isRhythmicStrike/);
+  assert.match(auraSource, /spawnBlob\(note, color, velocity, true\)/);
+  assert.match(auraSource, /microphoneColor\(primaryVisualColor, harmonicContext\),\s*velocity,\s*beatDetected/);
   assert.match(styleThreeSource, /export function drawMetalheartParticle/);
   assert.match(styleThreeSource, /export function drawMetalheartPulse/);
   assert.match(styleThreeSource, /export function drawMetalheartLayer/);
@@ -579,6 +584,9 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /particle\.id \+ particle\.midi \* 2 \+ particle\.repeat \* 3/);
   assert.match(styleThreeSource, /const DENSITY_CORE_OFFSETS =/);
   assert.match(styleThreeSource, /const MOTION_FRAME_INTERVAL = 1000 \/ 20/);
+  assert.match(styleThreeSource, /function beatMotion/);
+  assert.match(styleThreeSource, /Math\.pow\(1 - progress, 2\.6\) \* strength/);
+  assert.match(styleThreeSource, /const beatScale = 1 \+ beat\.amount \* 0\.085/);
   assert.match(styleThreeSource, /const focalPoint =/);
   assert.match(styleThreeSource, /const arrival = easeInOutSine/);
   assert.match(styleThreeSource, /if \(hash\(seed, 127\) > 0\.66\)/);

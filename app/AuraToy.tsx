@@ -2833,7 +2833,12 @@ export function AuraToy() {
     activeToneNotesRef.current.clear();
   }, []);
 
-  const spawnBlob = useCallback((note: NoteChoice, color: Color, velocity: number) => {
+  const spawnBlob = useCallback((
+    note: NoteChoice,
+    color: Color,
+    velocity: number,
+    isRhythmicStrike = false,
+  ) => {
     const now = performance.now();
     const id = blobIdRef.current;
     blobIdRef.current += 1;
@@ -3019,6 +3024,15 @@ export function AuraToy() {
       blendMode,
       createdAt: now,
     });
+
+    if (currentArtStyle === "style-3" && isRhythmicStrike) {
+      metalheartPulseRef.current = {
+        startedAt: now,
+        strength: clamp(0.68 + velocity * 0.3, 0.68, 0.98),
+        x,
+        y,
+      };
+    }
 
     if (blobsRef.current.length === 1) setLayerCount(1);
     wakeRendererRef.current?.();
@@ -3753,8 +3767,9 @@ export function AuraToy() {
 
         if (!activeSignal) return;
         if (detectedMidi === null) return;
+        if (metalheartIsActive && !beatDetected) return;
         const visualInterval = metalheartIsActive
-          ? lerp(210, 108, level)
+          ? 300
           : beatDetected
             ? 60
             : lerp(165, 72, level);
@@ -3777,6 +3792,7 @@ export function AuraToy() {
           primaryVisualNote,
           microphoneColor(primaryVisualColor, harmonicContext),
           velocity,
+          beatDetected,
         );
         let visualCount = 1;
         if (beatCompanion !== null && beatCompanion !== detectedMidi) {
@@ -3902,7 +3918,7 @@ export function AuraToy() {
             const velocity = clamp(noteVelocity / 127, 0.18, 1);
             externalMidiNotesRef.current.add(noteNumber);
             triggerAttack(keyId, note.name, velocity);
-            spawnBlob(note, AURA_MAPPING.pitches[note.pc], velocity);
+            spawnBlob(note, AURA_MAPPING.pitches[note.pc], velocity, true);
             setMicrophoneReading(`${inputName}: ${note.name}`);
             if (microphoneBeatTimerRef.current !== null) {
               window.clearTimeout(microphoneBeatTimerRef.current);
@@ -4157,7 +4173,7 @@ export function AuraToy() {
 
       const note = shiftedNote(key);
       const color = AURA_MAPPING.pitches[note.pc];
-      spawnBlob(note, color, velocity);
+      spawnBlob(note, color, velocity, true);
       setActiveKeys((current) => {
         const next = new Set(current);
         next.add(key.id);
