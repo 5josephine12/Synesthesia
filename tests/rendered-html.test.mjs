@@ -260,13 +260,15 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const MAX_VISIBLE_FRAME_ASSETS = 1/);
   assert.match(
     telemetrySource,
-    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["nodes", "frames", "both"\]/,
+    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["both", "nodes", "frames"\]/,
   );
   assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 760/);
   assert.match(telemetrySource, /function currentCompositionMix/);
   assert.match(telemetrySource, /if \(rawProgress < 0\.5\)/);
-  assert.match(telemetrySource, /frames: compositionTransition\.from\.frames \* fadeOut/);
-  assert.match(telemetrySource, /frames: compositionTransition\.to\.frames \* fadeIn/);
+  assert.match(telemetrySource, /const fadeOut = lerp\(1, 0\.62/);
+  assert.match(telemetrySource, /const fadeIn = lerp\(0\.62, 1/);
+  assert.match(telemetrySource, /from: \{ frames: 1, nodes: 1 \}/);
+  assert.match(telemetrySource, /to: \{ frames: 1, nodes: 1 \}/);
   assert.match(telemetrySource, /if \(addedPanelBatch\) advanceCompositionMode\(now\)/);
   assert.match(telemetrySource, /\.slice\(-MAX_PANELS\)/);
   assert.match(telemetrySource, /const rendered = visibleStates\.map/);
@@ -317,7 +319,8 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const frameY = clamp/);
   assert.doesNotMatch(telemetrySource, /const panelLife = life \* frameMix/);
   assert.doesNotMatch(telemetrySource, /pointAt\(/);
-  assert.match(telemetrySource, /context\.strokeStyle = glowColor\(0\.74 \* life\)/);
+  assert.match(telemetrySource, /context\.strokeStyle = glowColor\(0\.92 \* life\)/);
+  assert.match(telemetrySource, /const HUD_CONTRAST = "50, 53, 60"/);
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {

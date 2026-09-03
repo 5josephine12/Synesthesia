@@ -131,6 +131,7 @@ const SNAPSHOT_FRAME_INTERVAL = 1000 / 15;
 
 const HUD_ACCENT = "232, 234, 236";
 const HUD_GLOW = "255, 255, 255";
+const HUD_CONTRAST = "50, 53, 60";
 const OVERLAY_STROKE_WIDTH = 1.05;
 const NODE_NETWORK_ROUTES: readonly (readonly NodeNetworkPoint[])[] = [
   [[0.07, 0.2], [0.21, 0.3], [0.38, 0.37], [0.55, 0.25], [0.72, 0.19], [0.91, 0.34]],
@@ -148,12 +149,12 @@ let cachedChordLabels = new Map<number, string | null>();
 let cachedChordFirstId = -1;
 let cachedChordLastId = -1;
 let cachedChordNodeCount = -1;
-const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["nodes", "frames", "both"];
+const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames"];
 let compositionModeIndex = -1;
 let nodeNetworkRouteIndex = -1;
 let compositionTransition: OverlayCompositionTransition = {
-  from: { frames: 0, nodes: 1 },
-  to: { frames: 0, nodes: 1 },
+  from: { frames: 1, nodes: 1 },
+  to: { frames: 1, nodes: 1 },
   startedAt: Number.NEGATIVE_INFINITY,
 };
 
@@ -220,17 +221,16 @@ function currentCompositionMix(now: number): OverlayCompositionMix {
   );
   if (rawProgress >= 1) return compositionTransition.to;
 
-  // Fade the current scene away before revealing the next one. This keeps
-  // nodes-only and frames-only genuinely exclusive instead of crossfading
-  // remnants of both systems together.
+  // Hand off at the midpoint without ever showing both exclusive scenes or
+  // fading the complete overlay to zero.
   if (rawProgress < 0.5) {
-    const fadeOut = 1 - smootherStep(rawProgress * 2);
+    const fadeOut = lerp(1, 0.62, smootherStep(rawProgress * 2));
     return {
       frames: compositionTransition.from.frames * fadeOut,
       nodes: compositionTransition.from.nodes * fadeOut,
     };
   }
-  const fadeIn = smootherStep((rawProgress - 0.5) * 2);
+  const fadeIn = lerp(0.62, 1, smootherStep((rawProgress - 0.5) * 2));
   return {
     frames: compositionTransition.to.frames * fadeIn,
     nodes: compositionTransition.to.nodes * fadeIn,
@@ -559,9 +559,9 @@ function drawConnectionNode(
 ) {
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(alpha);
-  context.shadowColor = glowColor(alpha * 0.5);
-  context.shadowBlur = 3;
+  context.strokeStyle = glowColor(Math.min(1, alpha * 1.12));
+  context.shadowColor = `rgba(${HUD_CONTRAST}, ${alpha * 0.46})`;
+  context.shadowBlur = 1.4;
   context.lineWidth = OVERLAY_STROKE_WIDTH;
   context.beginPath();
   context.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
@@ -613,9 +613,9 @@ function drawRoutedConnection(
     end.x,
     end.y,
   );
-  context.strokeStyle = color(alpha);
-  context.shadowColor = color(alpha * 0.5);
-  context.shadowBlur = 3;
+  context.strokeStyle = color(Math.min(1, alpha * 1.12));
+  context.shadowColor = `rgba(${HUD_CONTRAST}, ${alpha * 0.46})`;
+  context.shadowBlur = 1.4;
   context.lineWidth = OVERLAY_STROKE_WIDTH;
   context.stroke();
   context.restore();
@@ -670,7 +670,7 @@ function drawIndependentNodeNetwork(
       pointFrame(points[index - 1]),
       pointFrame(points[index]),
       reveal,
-      networkLife * 0.9,
+      networkLife,
     );
   }
 
@@ -701,9 +701,9 @@ function drawFrameOutlineAndLeader(
   const endY = pose.dockY + directionY * 2;
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(0.74 * life);
-  context.shadowColor = glowColor(0.5 * life);
-  context.shadowBlur = 3;
+  context.strokeStyle = glowColor(0.92 * life);
+  context.shadowColor = `rgba(${HUD_CONTRAST}, ${0.42 * life})`;
+  context.shadowBlur = 1.4;
   context.lineWidth = OVERLAY_STROKE_WIDTH;
   context.lineCap = "square";
   context.beginPath();
