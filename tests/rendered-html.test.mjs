@@ -443,6 +443,8 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /function buildLoop/);
   assert.match(styleThreeSource, /const strandCount = 9 \+ Math\.floor/);
   assert.match(styleThreeSource, /const COMPOSITION_FLOW_ANGLE = -0\.67/);
+  assert.match(styleThreeSource, /const COMPOSITION_ANCHORS =/);
+  assert.match(styleThreeSource, /particle\.id \+ particle\.midi \* 2 \+ particle\.repeat \* 3/);
   assert.match(styleThreeSource, /const DENSITY_CORE_OFFSETS =/);
   assert.match(styleThreeSource, /const MOTION_FRAME_INTERVAL = 1000 \/ 20/);
   assert.match(styleThreeSource, /const focalPoint =/);

@@ -67,6 +67,13 @@ const MOTION_FRAME_INTERVAL = 1000 / 20;
 const TAU = Math.PI * 2;
 const COMPOSITION_FLOW_ANGLE = -0.67;
 const FLOW_DIRECTION_OFFSETS = [-1.08, -0.7, -0.42, -0.2, -0.07, 0, 0.12, 0.3, 0.54, 0.9, 1.68] as const;
+const COMPOSITION_ANCHORS = [
+  { x: 0.28, y: 0.59, angle: COMPOSITION_FLOW_ANGLE },
+  { x: 0.52, y: 0.31, angle: 0.2 },
+  { x: 0.72, y: 0.49, angle: -2.48 },
+  { x: 0.5, y: 0.72, angle: -1.18 },
+  { x: 0.24, y: 0.31, angle: 0.46 },
+] as const;
 const DENSITY_CORE_OFFSETS = [
   { along: -0.12, across: 0.045 },
   { along: 0.015, across: -0.06 },
@@ -308,15 +315,6 @@ function drawInkComposition(
   const shortSide = Math.min(width, height);
   const shapes: InkShape[] = [];
   const fragments: Path2D[] = [];
-  // The reference has one stable visual gravity point. Keeping this anchor
-  // independent of the active note count prevents established forms from
-  // jumping whenever a new note joins the composition.
-  const focalPoint = {
-    x: width * 0.32,
-    y: height * 0.57,
-  };
-  const flow = { x: Math.cos(COMPOSITION_FLOW_ANGLE), y: Math.sin(COMPOSITION_FLOW_ANGLE) };
-  const crossFlow = { x: -flow.y, y: flow.x };
   const motionTime = reducedMotion ? 0 : now * 0.00016;
 
   for (const particle of active) {
@@ -324,6 +322,14 @@ function drawInkComposition(
     const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
     const arrival = easeInOutSine(age / FORMATION_DURATION);
     if (arrival <= 0.01) continue;
+    // Each note deterministically selects a different stage position. Older
+    // formations retain their own anchor, so the visual can jump around the
+    // frame without pulling established geometry out of place.
+    const anchorIndex = ((particle.id + particle.midi * 2 + particle.repeat * 3) % COMPOSITION_ANCHORS.length + COMPOSITION_ANCHORS.length) % COMPOSITION_ANCHORS.length;
+    const anchor = COMPOSITION_ANCHORS[anchorIndex];
+    const focalPoint = { x: width * anchor.x, y: height * anchor.y };
+    const flow = { x: Math.cos(anchor.angle), y: Math.sin(anchor.angle) };
+    const crossFlow = { x: -flow.y, y: flow.x };
     const coreIndex = Math.min(
       DENSITY_CORE_OFFSETS.length - 1,
       Math.floor(hash(seed, 2) * DENSITY_CORE_OFFSETS.length),
@@ -356,7 +362,7 @@ function drawInkComposition(
       };
       const directionIndex = Math.floor(hash(strandSeed, 23) * FLOW_DIRECTION_OFFSETS.length);
       const angle =
-        COMPOSITION_FLOW_ANGLE +
+        anchor.angle +
         FLOW_DIRECTION_OFFSETS[Math.min(FLOW_DIRECTION_OFFSETS.length - 1, directionIndex)] +
         particle.angle * 0.045 +
         (hash(strandSeed, 29) - 0.5) * 0.16 +
@@ -368,7 +374,7 @@ function drawInkComposition(
           origin,
           shortSide * lerp(0.06, 0.17, hash(strandSeed, 31)) * (1 + strandBreath * 0.025),
           shortSide * lerp(0.04, 0.13, hash(strandSeed, 37)) * (1 - strandBreath * 0.02),
-          COMPOSITION_FLOW_ANGLE + (hash(strandSeed, 39) - 0.5) * 1.35 + strandBreath * 0.08,
+          anchor.angle + (hash(strandSeed, 39) - 0.5) * 1.35 + strandBreath * 0.08,
           shortSide * lerp(0.0028, 0.008, hash(strandSeed, 41)),
           angle,
           (hash(strandSeed, 43) > 0.5 ? 1 : -1) * lerp(Math.PI * 0.88, Math.PI * 2.15, hash(strandSeed, 47)),
@@ -404,14 +410,12 @@ function drawInkComposition(
     // A small number of parallel hairline gestures cross the crop along the
     // composition's shared diagonal without becoming one connected trunk.
     if (hash(seed, 127) > 0.66) {
-      const fromLeadingEdge = hash(seed, 131) > 0.5;
+      const edgeOffset = (hash(seed, 131) - 0.5) * shortSide * 0.32;
       const edgeOrigin = {
-        x: fromLeadingEdge ? -width * 0.1 : focalPoint.x - flow.x * shortSide * 0.72,
-        y: fromLeadingEdge
-          ? clamp(focalPoint.y + shortSide * lerp(0.18, 0.5, hash(seed, 137)), -height * 0.08, height * 1.08)
-          : focalPoint.y - flow.y * shortSide * 0.72,
+        x: focalPoint.x - flow.x * shortSide * 0.78 + crossFlow.x * edgeOffset,
+        y: focalPoint.y - flow.y * shortSide * 0.78 + crossFlow.y * edgeOffset,
       };
-      const edgeAngle = COMPOSITION_FLOW_ANGLE + (hash(seed, 139) - 0.5) * 0.16;
+      const edgeAngle = anchor.angle + (hash(seed, 139) - 0.5) * 0.16;
       shapes.push(buildRibbon({
         seed: seed + 1709,
         origin: edgeOrigin,
