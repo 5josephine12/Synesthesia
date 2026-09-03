@@ -1265,8 +1265,8 @@ button {
 
 .microphone-permission-copy {
   display: grid;
-  width: min(100%, 250px);
-  gap: 10px;
+  width: min(100%, 310px);
+  gap: 9px;
   text-align: center;
 }
 
@@ -1281,6 +1281,7 @@ button {
   font-size: 12px;
   font-weight: 400;
   line-height: 1.5;
+  text-wrap: balance;
 }
 
 .microphone-permission-action {

@@ -242,6 +242,7 @@ test("reuses approved device audio and provides a cohesive permission dialog", a
   assert.match(styles, /\.microphone-permission\.is-system-audio/);
   assert.match(styles, /\.microphone-permission-copy section/);
   assert.match(styles, /\.microphone-permission-copy \{[\s\S]*?text-align: center/);
+  assert.match(styles, /\.microphone-permission-copy p \{[\s\S]*?text-wrap: balance/);
 });
 
 test("keeps the TouchDesigner overlay independent from beat timing", async () => {
