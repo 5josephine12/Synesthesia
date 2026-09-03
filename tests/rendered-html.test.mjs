@@ -257,16 +257,19 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /from: enteringPresentation\(presentation\)/);
   assert.match(telemetrySource, /morphStates\.splice\(replacementIndex, 1\)/);
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
-  assert.match(telemetrySource, /const MAX_VISIBLE_FRAME_ASSETS = 1/);
+  assert.match(telemetrySource, /const MAX_VISIBLE_FRAME_ASSETS = 2/);
   assert.match(
     telemetrySource,
     /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["both", "nodes", "frames"\]/,
   );
-  assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 760/);
+  assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 860/);
+  assert.match(telemetrySource, /const COMPOSITION_MODE_HOLD_MS = 2400/);
+  assert.match(telemetrySource, /const NODE_NETWORK_REVEAL_MS = 620/);
   assert.match(telemetrySource, /function currentCompositionMix/);
-  assert.match(telemetrySource, /if \(rawProgress < 0\.5\)/);
-  assert.match(telemetrySource, /const fadeOut = lerp\(1, 0\.62/);
-  assert.match(telemetrySource, /const fadeIn = lerp\(0\.62, 1/);
+  assert.match(telemetrySource, /now - lastCompositionAdvanceAt < COMPOSITION_MODE_HOLD_MS/);
+  assert.match(telemetrySource, /nodeSceneStartedAt = now/);
+  assert.match(telemetrySource, /const sceneProgress = smootherStep\(\(now - nodeSceneStartedAt\) \/ NODE_NETWORK_REVEAL_MS\)/);
+  assert.doesNotMatch(telemetrySource, /latest\.progress \* 1\.45/);
   assert.match(telemetrySource, /from: \{ frames: 1, nodes: 1 \}/);
   assert.match(telemetrySource, /to: \{ frames: 1, nodes: 1 \}/);
   assert.match(telemetrySource, /if \(addedPanelBatch\) advanceCompositionMode\(now\)/);

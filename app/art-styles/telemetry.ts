@@ -117,10 +117,12 @@ const LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
 const MORPH_MS = 1280;
 const DISTANT_MORPH_MS = 1080;
 const ENTRY_MORPH_MS = Math.min(720, MORPH_MS, DISTANT_MORPH_MS);
-const COMPOSITION_MODE_TRANSITION_MS = 760;
+const COMPOSITION_MODE_TRANSITION_MS = 860;
+const COMPOSITION_MODE_HOLD_MS = 2400;
+const NODE_NETWORK_REVEAL_MS = 620;
 
 const MAX_PANELS = 3;
-const MAX_VISIBLE_FRAME_ASSETS = 1;
+const MAX_VISIBLE_FRAME_ASSETS = 2;
 const DATA_GAP = 10;
 const PANEL_GAP = 62;
 const PANEL_COLLISION_GAP = 18;
@@ -152,6 +154,8 @@ let cachedChordNodeCount = -1;
 const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames"];
 let compositionModeIndex = -1;
 let nodeNetworkRouteIndex = -1;
+let lastCompositionAdvanceAt = Number.NEGATIVE_INFINITY;
+let nodeSceneStartedAt = Number.NEGATIVE_INFINITY;
 let compositionTransition: OverlayCompositionTransition = {
   from: { frames: 1, nodes: 1 },
   to: { frames: 1, nodes: 1 },
@@ -214,36 +218,30 @@ function compositionMixFor(mode: OverlayCompositionMode): OverlayCompositionMix 
 }
 
 function currentCompositionMix(now: number): OverlayCompositionMix {
-  const rawProgress = clamp(
+  const progress = smootherStep(
     (now - compositionTransition.startedAt) / COMPOSITION_MODE_TRANSITION_MS,
-    0,
-    1,
   );
-  if (rawProgress >= 1) return compositionTransition.to;
-
-  // Hand off at the midpoint without ever showing both exclusive scenes or
-  // fading the complete overlay to zero.
-  if (rawProgress < 0.5) {
-    const fadeOut = lerp(1, 0.62, smootherStep(rawProgress * 2));
-    return {
-      frames: compositionTransition.from.frames * fadeOut,
-      nodes: compositionTransition.from.nodes * fadeOut,
-    };
-  }
-  const fadeIn = lerp(0.62, 1, smootherStep((rawProgress - 0.5) * 2));
   return {
-    frames: compositionTransition.to.frames * fadeIn,
-    nodes: compositionTransition.to.nodes * fadeIn,
+    frames: lerp(compositionTransition.from.frames, compositionTransition.to.frames, progress),
+    nodes: lerp(compositionTransition.from.nodes, compositionTransition.to.nodes, progress),
   };
 }
 
 function advanceCompositionMode(now: number) {
+  if (
+    compositionModeIndex >= 0 &&
+    now - lastCompositionAdvanceAt < COMPOSITION_MODE_HOLD_MS
+  ) {
+    return;
+  }
   const from = currentCompositionMix(now);
   compositionModeIndex = (compositionModeIndex + 1) % COMPOSITION_MODES.length;
   const nextMode = COMPOSITION_MODES[compositionModeIndex];
   if (nextMode !== "frames") {
     nodeNetworkRouteIndex = (nodeNetworkRouteIndex + 1) % NODE_NETWORK_ROUTES.length;
+    nodeSceneStartedAt = now;
   }
+  lastCompositionAdvanceAt = now;
   compositionTransition = {
     from,
     to: compositionMixFor(nextMode),
@@ -654,7 +652,6 @@ function drawIndependentNodeNetwork(
     .sort((first, second) => first.state.to.node.createdAt - second.state.to.node.createdAt);
   if (visible.length === 0) return;
 
-  const latest = visible[visible.length - 1];
   const route = NODE_NETWORK_ROUTES[Math.max(0, nodeNetworkRouteIndex)];
   const drift = clamp(Math.min(width, height) * 0.009, 2, 8);
   const points = route.map(([x, y], index) => ({
@@ -662,9 +659,10 @@ function drawIndependentNodeNetwork(
     y: y * height + Math.cos(now * 0.00013 + index * 1.35) * drift,
   }));
   const networkLife = Math.max(...visible.map((item) => item.life)) * nodeMix;
+  const sceneProgress = smootherStep((now - nodeSceneStartedAt) / NODE_NETWORK_REVEAL_MS);
 
   for (let index = 1; index < points.length; index += 1) {
-    const reveal = smootherStep(latest.progress * 1.45 - (index - 1) * 0.13);
+    const reveal = smootherStep(sceneProgress * 1.45 - (index - 1) * 0.13);
     drawRoutedConnection(
       context,
       pointFrame(points[index - 1]),
@@ -675,7 +673,7 @@ function drawIndependentNodeNetwork(
   }
 
   for (let index = 0; index < points.length; index += 1) {
-    const reveal = smootherStep(latest.progress * 1.45 - Math.max(0, index - 1) * 0.13);
+    const reveal = smootherStep(sceneProgress * 1.45 - Math.max(0, index - 1) * 0.13);
     if (reveal > 0.01) drawConnectionNode(context, points[index], networkLife * reveal);
   }
 }
