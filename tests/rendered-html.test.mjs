@@ -276,8 +276,9 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /function drawConnectionNode/);
   assert.doesNotMatch(telemetrySource, /function drawConnectionTerminal/);
   assert.doesNotMatch(telemetrySource, /function drawRelayNode/);
-  assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.05/);
-  assert.match(telemetrySource, /const CONNECTOR_STROKE_WIDTH = 1\.35/);
+  assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.25/);
+  assert.match(telemetrySource, /const OVERLAY_GLOW_BLUR = 4\.5/);
+  assert.match(telemetrySource, /function applyOverlayStroke/);
   assert.match(telemetrySource, /context\.arc\(point\.x, point\.y, 2\.5/);
   assert.match(telemetrySource, /function secondaryPanelDock/);
   assert.match(telemetrySource, /function rectAnchor/);
@@ -305,7 +306,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /drawCableRelayFrame|largeRelay|LONG_CONNECTION_THRESHOLD/);
   assert.match(telemetrySource, /const firstDock = rectAnchor\(first\.pose\.viewport, secondCenter\.x, secondCenter\.y\)/);
   assert.match(telemetrySource, /const secondDock = rectAnchor\(second\.pose\.viewport, firstCenter\.x, firstCenter\.y\)/);
-  assert.match(telemetrySource, /drawConnectionCable\(context, cableStart, cableEnd, 0\.98 \* nodeLife\)/);
+  assert.match(telemetrySource, /drawConnectionCable\(context, cableStart, cableEnd, nodeLife\)/);
   assert.match(telemetrySource, /branchVariant % 2 === 1 && distance >= 120/);
   assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(second\.pose, secondDock, branchVariant\)/);
   assert.match(telemetrySource, /drawConnectionCable\(context, branchPoint, branchEnd/);
@@ -330,8 +331,9 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const frameX = clamp/);
   assert.match(telemetrySource, /const frameY = clamp/);
   assert.doesNotMatch(telemetrySource, /const panelLife = life \* frameMix/);
-  assert.match(telemetrySource, /context\.strokeStyle = glowColor\(0\.92 \* life \* frameMix\)/);
-  assert.match(telemetrySource, /const HUD_CONTRAST = "50, 53, 60"/);
+  assert.match(telemetrySource, /applyOverlayStroke\(context, life \* frameMix\)/);
+  assert.match(telemetrySource, /applyOverlayStroke\(context, life\)/);
+  assert.doesNotMatch(telemetrySource, /CONNECTOR_STROKE_WIDTH|HUD_CONTRAST|accentColor/);
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {

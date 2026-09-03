@@ -128,11 +128,9 @@ const SNAPSHOT_WIDTH = 192;
 const SNAPSHOT_HEIGHT = 192;
 const SNAPSHOT_FRAME_INTERVAL = 1000 / 15;
 
-const HUD_ACCENT = "232, 234, 236";
 const HUD_GLOW = "255, 255, 255";
-const HUD_CONTRAST = "50, 53, 60";
-const OVERLAY_STROKE_WIDTH = 1.05;
-const CONNECTOR_STROKE_WIDTH = 1.35;
+const OVERLAY_STROKE_WIDTH = 1.25;
+const OVERLAY_GLOW_BLUR = 4.5;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
 let lastSnapshotAt = Number.NEGATIVE_INFINITY;
@@ -320,12 +318,16 @@ function chordLabelsForActiveNodes(nodes: readonly TelemetryNode[]) {
   return cachedChordLabels;
 }
 
-function accentColor(_color: TelemetryColor, alpha: number) {
-  return `rgba(${HUD_ACCENT}, ${alpha})`;
-}
-
 function glowColor(alpha: number) {
   return `rgba(${HUD_GLOW}, ${alpha})`;
+}
+
+function applyOverlayStroke(context: CanvasRenderingContext2D, alpha: number) {
+  const visibleAlpha = clamp(alpha, 0, 1);
+  context.strokeStyle = glowColor(visibleAlpha);
+  context.shadowColor = glowColor(visibleAlpha * 0.72);
+  context.shadowBlur = OVERLAY_GLOW_BLUR;
+  context.lineWidth = OVERLAY_STROKE_WIDTH;
 }
 
 function visualArrival(age: number) {
@@ -551,10 +553,7 @@ function drawConnectionNode(
 ) {
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(Math.min(1, alpha * 1.12));
-  context.shadowColor = `rgba(${HUD_CONTRAST}, ${alpha * 0.46})`;
-  context.shadowBlur = 1.4;
-  context.lineWidth = OVERLAY_STROKE_WIDTH;
+  applyOverlayStroke(context, alpha);
   context.beginPath();
   context.arc(point.x, point.y, 2.5, 0, Math.PI * 2);
   context.stroke();
@@ -599,10 +598,7 @@ function drawConnectionCable(
 ) {
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(Math.min(1, alpha));
-  context.shadowColor = glowColor(Math.min(0.78, alpha * 0.72));
-  context.shadowBlur = 4.5;
-  context.lineWidth = CONNECTOR_STROKE_WIDTH;
+  applyOverlayStroke(context, alpha);
   context.lineCap = "square";
   context.lineJoin = "round";
   context.beginPath();
@@ -639,15 +635,12 @@ function drawVisualizerConnection(
   if (frameMix > 0.001) {
     context.save();
     context.globalCompositeOperation = "source-over";
-    context.strokeStyle = glowColor(0.92 * life * frameMix);
-    context.shadowColor = `rgba(${HUD_CONTRAST}, ${0.42 * life * frameMix})`;
-    context.shadowBlur = 1.4;
-    context.lineWidth = OVERLAY_STROKE_WIDTH;
+    applyOverlayStroke(context, life * frameMix);
     context.strokeRect(frame.x, frame.y, frame.width, frame.height);
     context.restore();
   }
 
-  const cableAlpha = 0.98 * life * frameMix;
+  const cableAlpha = life * frameMix;
   drawConnectionCable(
     context,
     { x: startX, y: startY },
@@ -689,7 +682,7 @@ function drawPanelNodeNetwork(
     y: secondDock.y + directionY * 2,
   };
   const nodeLife = life * nodeMix;
-  drawConnectionCable(context, cableStart, cableEnd, 0.98 * nodeLife);
+  drawConnectionCable(context, cableStart, cableEnd, nodeLife);
   drawConnectionNode(context, firstDock, nodeLife);
   drawConnectionNode(
     context,
@@ -697,7 +690,7 @@ function drawPanelNodeNetwork(
       x: lerp(firstDock.x, secondDock.x, 0.34),
       y: lerp(firstDock.y, secondDock.y, 0.34),
     },
-    nodeLife * 0.9,
+    nodeLife,
   );
   drawConnectionNode(
     context,
@@ -705,7 +698,7 @@ function drawPanelNodeNetwork(
       x: lerp(firstDock.x, secondDock.x, 0.68),
       y: lerp(firstDock.y, secondDock.y, 0.68),
     },
-    nodeLife * 0.9,
+    nodeLife,
   );
   drawConnectionNode(context, secondDock, nodeLife);
 
@@ -725,7 +718,7 @@ function drawPanelNodeNetwork(
       x: branchDock.x + branchDirectionX * 2,
       y: branchDock.y + branchDirectionY * 2,
     };
-    drawConnectionCable(context, branchPoint, branchEnd, 0.94 * nodeLife);
+    drawConnectionCable(context, branchPoint, branchEnd, nodeLife);
     drawConnectionNode(context, branchPoint, nodeLife);
     drawConnectionNode(
       context,
@@ -733,9 +726,9 @@ function drawPanelNodeNetwork(
         x: lerp(branchPoint.x, branchDock.x, 0.58),
         y: lerp(branchPoint.y, branchDock.y, 0.58),
       },
-      nodeLife * 0.88,
+      nodeLife,
     );
-    drawConnectionNode(context, branchDock, nodeLife * 0.94);
+    drawConnectionNode(context, branchDock, nodeLife);
   }
 }
 
@@ -1164,9 +1157,7 @@ function drawPanel(
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = accentColor(to.node.color, 0.9 * life);
-  context.shadowColor = glowColor(life);
-  context.shadowBlur = 9;
+  applyOverlayStroke(context, life);
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.stroke();
   context.restore();
