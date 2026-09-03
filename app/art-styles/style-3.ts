@@ -63,8 +63,8 @@ export type MetalheartPulseOptions = {
 const FORMATION_DURATION = 1900;
 const MAX_VISIBLE_GROWTHS = 6;
 const RENDER_PIXEL_BUDGET = 3_200_000;
-const COMPOSITION_SEED = 0x6f726761;
 const TAU = Math.PI * 2;
+const DIRECTION_SET = [-1.52, -1.16, -0.78, -0.38, -0.08, 0.34, 0.7, 1.08, 1.46, 2.18, 2.72] as const;
 
 type Point = { x: number; y: number };
 
@@ -83,9 +83,6 @@ type RibbonSpec = {
 
 type InkShape = {
   fill: Path2D;
-  centers: Point[];
-  widths: number[];
-  tangentAngles: number[];
 };
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -213,16 +210,49 @@ function buildRibbon(spec: RibbonSpec): InkShape {
   for (let index = right.length - 2; index >= 0; index -= 1) fill.lineTo(right[index].x, right[index].y);
   fill.closePath();
 
-  return { fill, centers, widths, tangentAngles };
+  return { fill };
 }
 
-function sampleShape(shape: InkShape, progress: number) {
-  const index = Math.round(clamp(progress, 0, 1) * (shape.centers.length - 1));
-  return {
-    point: shape.centers[index],
-    width: shape.widths[index],
-    angle: shape.tangentAngles[index],
-  };
+function buildLoop(
+  seed: number,
+  center: Point,
+  radiusX: number,
+  radiusY: number,
+  width: number,
+  startAngle: number,
+  sweep: number,
+  reveal: number,
+): InkShape {
+  const visibleSweep = sweep * clamp(reveal, 0.025, 1);
+  const samples = Math.max(9, Math.ceil(Math.abs(visibleSweep) * 8));
+  const left: Point[] = [];
+  const right: Point[] = [];
+  for (let index = 0; index <= samples; index += 1) {
+    const progress = index / samples;
+    const angle = startAngle + visibleSweep * progress;
+    const tangentX = -Math.sin(angle) * radiusX * Math.sign(visibleSweep);
+    const tangentY = Math.cos(angle) * radiusY * Math.sign(visibleSweep);
+    const tangentLength = Math.max(0.0001, Math.hypot(tangentX, tangentY));
+    const normalX = -tangentY / tangentLength;
+    const normalY = tangentX / tangentLength;
+    const endTaper = Math.pow(Math.max(0.025, Math.sin(progress * Math.PI)), 0.32);
+    const mechanicalStep = progress < 0.28 ? 0.72 : progress < 0.64 ? 1.08 : 0.62;
+    const variation = 1 + Math.sin(progress * TAU * 3 + hash(seed, 11) * TAU) * 0.025;
+    const halfWidth = Math.max(0.22, width * endTaper * mechanicalStep * variation);
+    const point = {
+      x: center.x + Math.cos(angle) * radiusX,
+      y: center.y + Math.sin(angle) * radiusY,
+    };
+    left.push({ x: point.x + normalX * halfWidth, y: point.y + normalY * halfWidth });
+    right.push({ x: point.x - normalX * halfWidth, y: point.y - normalY * halfWidth });
+  }
+  const fill = new Path2D();
+  traceBoundary(left, fill);
+  for (let index = right.length - 1; index >= 0; index -= 1) {
+    fill.lineTo(right[index].x, right[index].y);
+  }
+  fill.closePath();
+  return { fill };
 }
 
 function makeFragment(seed: number, center: Point, scale: number) {
@@ -260,32 +290,6 @@ function drawInkComposition(
   const shortSide = Math.min(width, height);
   const shapes: InkShape[] = [];
   const fragments: Path2D[] = [];
-  const direction = hash(COMPOSITION_SEED, 2) > 0.5 ? 1 : -1;
-  const start = {
-    x: direction > 0 ? -width * 0.08 : width * 1.08,
-    y: height * lerp(0.24, 0.4, hash(COMPOSITION_SEED, 7)),
-  };
-  const endY = height * lerp(0.58, 0.76, hash(COMPOSITION_SEED, 11));
-  const endX = direction > 0 ? width * 1.08 : -width * 0.08;
-  const trunkLength = Math.hypot(endX - start.x, endY - start.y);
-  const trunkAngle = Math.atan2(endY - start.y, endX - start.x);
-  const strongestArrival = active.reduce((maximum, particle) => {
-    const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
-    return Math.max(maximum, easeOutCubic(age / FORMATION_DURATION));
-  }, 0);
-  const trunk = buildRibbon({
-    seed: COMPOSITION_SEED,
-    origin: start,
-    angle: trunkAngle,
-    length: trunkLength,
-    width: shortSide * 0.086,
-    bend: -0.025,
-    wave: 0.012,
-    reveal: strongestArrival,
-    lobe: 0.68,
-    hook: 0.08,
-  });
-  shapes.push(trunk);
 
   for (let index = 0; index < active.length; index += 1) {
     const particle = active[index];
@@ -293,61 +297,100 @@ function drawInkComposition(
     const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
     const arrival = easeOutCubic(age / FORMATION_DURATION);
     if (arrival <= 0.01) continue;
-    const stableSlot = ((particle.id * 5 + particle.midi * 3) % 13 + 13) % 13;
-    const attachProgress = clamp(0.08 + (stableSlot / 12) * 0.84 + (hash(seed, 3) - 0.5) * 0.035, 0.06, 0.94);
-    const attachment = sampleShape(trunk, attachProgress);
-    const side = hash(seed, 7) > 0.5 ? 1 : -1;
-    const departure = side * lerp(0.42, 1.16, hash(seed, 13));
-    const primaryAngle = attachment.angle + departure;
-    const primaryLength =
-      shortSide *
-      lerp(0.24, 0.48, hash(seed, 17)) *
-      lerp(0.92, 1.08, particle.velocity);
-    const primary = buildRibbon({
-      seed,
-      origin: attachment.point,
-      angle: primaryAngle,
-      length: primaryLength,
-      width: shortSide * lerp(0.028, 0.062, hash(seed, 19)) * (0.9 + particle.thickness * 0.22),
-      bend: particle.curvature * 0.05 + side * lerp(0.015, 0.075, hash(seed, 23)),
-      wave: lerp(0.006, 0.02, hash(seed, 29)),
-      reveal: arrival,
-      lobe: lerp(0.48, 1.08, hash(seed, 31)),
-      hook: side * lerp(0.18, 0.62, hash(seed, 37)),
-    });
-    shapes.push(primary);
+    const pocket = {
+      x: particle.x * width + (hash(seed, 3) - 0.5) * shortSide * 0.14,
+      y: particle.y * height + (hash(seed, 5) - 0.5) * shortSide * 0.12,
+    };
+    const strandCount = 6 + Math.floor(hash(seed, 7) * 5);
+    for (let strandIndex = 0; strandIndex < strandCount; strandIndex += 1) {
+      const strandSeed = seed + strandIndex * 193;
+      const delay = strandIndex * 0.025;
+      const reveal = clamp((arrival - delay) / Math.max(0.3, 1 - delay), 0, 1);
+      if (reveal <= 0.01) continue;
+      const shapeRoll = hash(strandSeed, 11);
+      const isLoop = shapeRoll > 0.68 && shapeRoll < 0.82;
+      const isMedium = shapeRoll >= 0.82 && shapeRoll < 0.96;
+      const isPlate = shapeRoll >= 0.96;
+      const offsetAngle = hash(strandSeed, 13) * TAU;
+      const offsetRadius = shortSide * Math.pow(hash(strandSeed, 17), 1.7) * 0.17;
+      const origin = {
+        x: pocket.x + Math.cos(offsetAngle) * offsetRadius * lerp(0.6, 1.45, hash(strandSeed, 19)),
+        y: pocket.y + Math.sin(offsetAngle) * offsetRadius,
+      };
+      const directionIndex = Math.floor(hash(strandSeed, 23) * DIRECTION_SET.length);
+      const angle =
+        DIRECTION_SET[Math.min(DIRECTION_SET.length - 1, directionIndex)] +
+        particle.angle * 0.18 +
+        (hash(strandSeed, 29) - 0.5) * 0.2;
 
-    const forkCount = 1 + Math.floor(hash(seed, 41) * 2);
-    for (let forkIndex = 0; forkIndex < forkCount; forkIndex += 1) {
-      const forkProgress = lerp(0.34, 0.76, (forkIndex + 1) / (forkCount + 1)) + (hash(seed, 43 + forkIndex) - 0.5) * 0.08;
-      const forkAttachment = sampleShape(primary, forkProgress);
-      const forkSide = forkIndex % 2 === 0 ? -side : side;
-      const forkReveal = clamp((arrival - 0.12 - forkIndex * 0.07) / 0.8, 0, 1);
-      if (forkReveal <= 0.01) continue;
-      const fork = buildRibbon({
-        seed: seed + 101 + forkIndex * 47,
-        origin: forkAttachment.point,
-        angle: forkAttachment.angle + forkSide * lerp(0.28, 0.66, hash(seed, 53 + forkIndex)),
-        length: primaryLength * lerp(0.3, 0.52, hash(seed, 59 + forkIndex)),
-        width: Math.max(2.4, forkAttachment.width * lerp(0.5, 0.74, hash(seed, 61 + forkIndex))),
-        bend: forkSide * lerp(0.025, 0.11, hash(seed, 67 + forkIndex)),
-        wave: lerp(0.004, 0.016, hash(seed, 71 + forkIndex)),
-        reveal: forkReveal,
-        lobe: lerp(0.3, 0.82, hash(seed, 73 + forkIndex)),
-        hook: forkSide * lerp(0.12, 0.5, hash(seed, 79 + forkIndex)),
-      });
-      shapes.push(fork);
+      if (isLoop) {
+        shapes.push(buildLoop(
+          strandSeed,
+          origin,
+          shortSide * lerp(0.055, 0.14, hash(strandSeed, 31)),
+          shortSide * lerp(0.035, 0.11, hash(strandSeed, 37)),
+          shortSide * lerp(0.0012, 0.0032, hash(strandSeed, 41)),
+          angle,
+          (hash(strandSeed, 43) > 0.5 ? 1 : -1) * lerp(Math.PI * 0.78, Math.PI * 1.72, hash(strandSeed, 47)),
+          reveal,
+        ));
+        continue;
+      }
+
+      const length = isPlate
+        ? shortSide * lerp(0.11, 0.24, hash(strandSeed, 53))
+        : isMedium
+          ? shortSide * lerp(0.14, 0.34, hash(strandSeed, 53))
+          : shortSide * lerp(0.16, 0.49, hash(strandSeed, 53));
+      const halfWidth = isPlate
+        ? shortSide * lerp(0.012, 0.024, hash(strandSeed, 59))
+        : isMedium
+          ? shortSide * lerp(0.004, 0.009, hash(strandSeed, 59))
+          : shortSide * lerp(0.00065, 0.0025, hash(strandSeed, 59));
+      shapes.push(buildRibbon({
+        seed: strandSeed,
+        origin,
+        angle,
+        length,
+        width: halfWidth,
+        bend: (hash(strandSeed, 61) - 0.5) * (isPlate ? 0.08 : 0.2),
+        wave: isPlate ? 0.006 : lerp(0.004, 0.018, hash(strandSeed, 67)),
+        reveal,
+        lobe: isPlate ? lerp(0.8, 1.35, hash(strandSeed, 71)) : lerp(0.15, 0.58, hash(strandSeed, 71)),
+        hook: (hash(strandSeed, 73) > 0.5 ? 1 : -1) * (isPlate ? 0.16 : lerp(0.2, 0.92, hash(strandSeed, 79))),
+      }));
     }
 
-    const fragmentCount = 1 + Math.floor(hash(seed, 83) * 3);
-    for (let fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex += 1) {
-      const fragmentAnchor = sampleShape(primary, lerp(0.36, 0.88, hash(seed, 89 + fragmentIndex)));
-      const offset = primaryLength * lerp(0.018, 0.065, hash(seed, 97 + fragmentIndex));
-      const fragmentCenter = {
-        x: fragmentAnchor.point.x + Math.cos(fragmentAnchor.angle + side * Math.PI * 0.5) * offset,
-        y: fragmentAnchor.point.y + Math.sin(fragmentAnchor.angle + side * Math.PI * 0.5) * offset,
+    // A small number of hairline gestures enter from beyond the crop. They
+    // aim toward a density pocket but continue independently through it.
+    if (index < 2) {
+      const fromLeft = hash(seed, 131) > 0.5;
+      const edgeOrigin = {
+        x: fromLeft ? -width * 0.09 : width * 1.09,
+        y: clamp(pocket.y + (hash(seed, 137) - 0.5) * height * 0.42, -height * 0.08, height * 1.08),
       };
-      fragments.push(makeFragment(seed + 401 + fragmentIndex * 23, fragmentCenter, shortSide * lerp(0.003, 0.009, hash(seed, 103 + fragmentIndex))));
+      const edgeAngle = Math.atan2(pocket.y - edgeOrigin.y, pocket.x - edgeOrigin.x) + (hash(seed, 139) - 0.5) * 0.24;
+      shapes.push(buildRibbon({
+        seed: seed + 1709,
+        origin: edgeOrigin,
+        angle: edgeAngle,
+        length: Math.hypot(pocket.x - edgeOrigin.x, pocket.y - edgeOrigin.y) + shortSide * lerp(0.22, 0.46, hash(seed, 149)),
+        width: shortSide * lerp(0.00055, 0.00135, hash(seed, 151)),
+        bend: (hash(seed, 157) - 0.5) * 0.06,
+        wave: 0.004,
+        reveal: arrival,
+        lobe: 0.18,
+        hook: (hash(seed, 163) - 0.5) * 0.24,
+      }));
+    }
+
+    const fragmentCount = 2 + Math.floor(hash(seed, 83) * 4);
+    for (let fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex += 1) {
+      const fragmentCenter = {
+        x: pocket.x + (hash(seed, 89 + fragmentIndex) - 0.5) * shortSide * 0.32,
+        y: pocket.y + (hash(seed, 97 + fragmentIndex) - 0.5) * shortSide * 0.28,
+      };
+      fragments.push(makeFragment(seed + 401 + fragmentIndex * 23, fragmentCenter, shortSide * lerp(0.0018, 0.006, hash(seed, 103 + fragmentIndex))));
     }
   }
 
@@ -355,17 +398,18 @@ function drawInkComposition(
   context.lineCap = "round";
   context.lineJoin = "miter";
   context.miterLimit = 3;
-  const outlineAlpha = clamp(0.88 + pulse * 0.1, 0.88, 0.98);
+  const outlineAlpha = clamp(0.72 + pulse * 0.12, 0.72, 0.88);
   context.strokeStyle = `rgba(0, 0, 0, ${outlineAlpha})`;
-  context.lineWidth = clamp(shortSide * 0.0023, 1.8, 2.9);
-  for (const shape of shapes) context.stroke(shape.fill);
-  for (const fragment of fragments) context.stroke(fragment);
-
-  // Filling every connected plate after every stroke hides all seams inside
-  // the union, leaving one clean exterior contour and no interior linework.
+  context.lineWidth = clamp(shortSide * 0.00125, 1, 1.65);
   context.fillStyle = "#ffffff";
-  for (const shape of shapes) context.fill(shape.fill);
-  for (const fragment of fragments) context.fill(fragment);
+  for (const shape of shapes) {
+    context.stroke(shape.fill);
+    context.fill(shape.fill);
+  }
+  for (const fragment of fragments) {
+    context.stroke(fragment);
+    context.fill(fragment);
+  }
 
   context.restore();
 }

@@ -440,10 +440,13 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /export function drawMetalheartPulse/);
   assert.match(styleThreeSource, /export function renderMetalheartFrame/);
   assert.match(styleThreeSource, /function buildRibbon/);
-  assert.match(styleThreeSource, /const trunk = buildRibbon/);
-  assert.match(styleThreeSource, /const forkCount = 1 \+ Math\.floor/);
+  assert.match(styleThreeSource, /function buildLoop/);
+  assert.match(styleThreeSource, /const strandCount = 6 \+ Math\.floor/);
+  assert.match(styleThreeSource, /const isPlate = shapeRoll >= 0\.96/);
+  assert.match(styleThreeSource, /const edgeOrigin =/);
   assert.match(styleThreeSource, /context\.fill\(shape\.fill\)/);
   assert.match(styleThreeSource, /context\.stroke\(shape\.fill\)/);
+  assert.doesNotMatch(styleThreeSource, /const trunk|sampleShape|forkCount/);
   assert.match(styleThreeSource, /context\.fillStyle = "#ffffff"/);
   assert.match(styleThreeSource, /rgba\(0, 0, 0/);
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 6/);
