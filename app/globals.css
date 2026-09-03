@@ -1235,8 +1235,9 @@ button {
 
 .microphone-permission-content {
   display: grid;
+  width: 100%;
   justify-items: center;
-  gap: 16px;
+  gap: 20px;
   animation: overlayContentReveal 440ms 90ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1263,8 +1264,28 @@ button {
   animation: permissionConfirmed 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.microphone-permission-screen p {
-  max-width: 250px;
+.microphone-permission-copy {
+  display: grid;
+  width: min(100%, 274px);
+  gap: 14px;
+  text-align: left;
+}
+
+.microphone-permission-copy section {
+  display: grid;
+  gap: 3px;
+}
+
+.microphone-permission-copy h3 {
+  margin: 0;
+  color: rgba(72, 71, 80, 0.86);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.microphone-permission-copy p {
   margin: 0;
   color: rgba(98, 97, 106, 0.78);
   font-family: inherit;

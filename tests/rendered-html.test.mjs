@@ -228,12 +228,18 @@ test("reuses approved device audio and provides a cohesive permission dialog", a
   assert.match(source, /\? "Device audio"/);
   assert.match(source, /Continue to device audio/);
   assert.match(source, /Keep Share audio turned on\./);
-  assert.match(source, /Screen & System Audio Recording/);
+  assert.match(source, /Screen and\s+System Audio Recording\./);
+  assert.match(source, /className="microphone-permission-copy"/);
+  assert.match(source, /<h3>Choose a source<\/h3>/);
+  assert.match(source, /<h3>Your privacy<\/h3>/);
+  assert.doesNotMatch(source, /Privacy & Security → Screen & System Audio Recording/);
+  assert.doesNotMatch(source, /audio locally; nothing is saved/);
   assert.match(source, /displaySurface === "monitor"[\s\S]*?"Entire screen audio"/);
   assert.match(source, /displaySurface === "window"[\s\S]*?"Window audio"/);
   assert.match(source, /Audio is never saved\./);
   assert.match(styles, /\.microphone-permission-icon\.is-system-audio/);
   assert.match(styles, /\.microphone-permission\.is-system-audio/);
+  assert.match(styles, /\.microphone-permission-copy section/);
 });
 
 test("keeps the TouchDesigner overlay independent from beat timing", async () => {
