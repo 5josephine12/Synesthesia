@@ -460,36 +460,32 @@ function panelPlacement(
   };
 }
 
-/** A transient straight link makes the previous visualization hand off to the next. */
-function drawMorphConnector(
+function drawConnectionTerminal(
   context: CanvasRenderingContext2D,
-  from: VisualizationFrame,
-  to: VisualizationFrame,
-  progress: number,
-  life: number,
+  point: { x: number; y: number },
+  variant: number,
+  alpha: number,
 ) {
-  if (progress <= 0 || progress >= 1) return;
-  const alpha = Math.sin(progress * Math.PI) * life;
-  if (alpha <= 0.001) return;
-
-  const fromEdge = frameAnchor(from, to.centerX, to.centerY);
-  const toEdge = frameAnchor(to, from.centerX, from.centerY);
-  const length = Math.hypot(toEdge.x - fromEdge.x, toEdge.y - fromEdge.y);
-  const reveal = easeInOutCubic(clamp(progress / 0.62, 0, 1));
+  const kind = ((variant % 3) + 3) % 3;
+  const size = kind === 0 ? 2.2 : 3.4;
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.lineCap = "round";
-  context.lineWidth = 1;
-  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.5 * alpha);
-  context.shadowColor = glowColor(0.65 * alpha);
+  context.fillStyle = glowColor(alpha);
+  context.strokeStyle = glowColor(alpha);
+  context.shadowColor = glowColor(alpha);
   context.shadowBlur = 5;
-  context.setLineDash([Math.max(0.01, length * reveal), length]);
-  context.beginPath();
-  context.moveTo(fromEdge.x, fromEdge.y);
-  context.lineTo(toEdge.x, toEdge.y);
-  context.stroke();
-  context.setLineDash([]);
+  context.lineWidth = 1;
+  context.translate(point.x, point.y);
+  if (kind === 0) {
+    context.beginPath();
+    context.arc(0, 0, size, 0, Math.PI * 2);
+    context.fill();
+  } else {
+    if (kind === 2) context.rotate(Math.PI / 4);
+    context.strokeRect(-size, -size, size * 2, size * 2);
+    context.fillRect(-0.8, -0.8, 1.6, 1.6);
+  }
   context.restore();
 }
 
@@ -500,6 +496,7 @@ function drawRoutedConnection(
   reveal: number,
   life: number,
   focused: boolean,
+  variant: number,
   now: number,
 ) {
   if (life <= 0.001 || reveal <= 0.001) return;
@@ -522,7 +519,6 @@ function drawRoutedConnection(
     x: start.x + deltaX * 0.68 - normalX * curve * 0.46,
     y: start.y + deltaY * 0.68 - normalY * curve * 0.46,
   };
-  const approximateLength = distance * (1.08 + Math.abs(curve) / distance * 0.34);
   const alpha = life * reveal * (focused ? 0.78 : 0.52);
   const color = (opacity: number) => `rgba(255, 255, 255, ${opacity})`;
 
@@ -559,7 +555,6 @@ function drawRoutedConnection(
   context.globalCompositeOperation = "source-over";
   context.lineCap = "round";
   context.lineJoin = "round";
-  context.setLineDash([Math.max(0.01, approximateLength * reveal), approximateLength + 1]);
   context.beginPath();
   context.moveTo(start.x, start.y);
   context.bezierCurveTo(
@@ -579,16 +574,11 @@ function drawRoutedConnection(
   context.strokeStyle = color(alpha);
   context.lineWidth = focused ? 1.18 : 0.84;
   context.stroke();
-  context.setLineDash([]);
 
-  if (reveal > 0.35) {
+  if (reveal > 0.08) {
     context.shadowBlur = 0;
-    context.fillStyle = color(alpha * 0.9);
-    context.beginPath();
-    context.arc(start.x, start.y, focused ? 2.5 : 2, 0, Math.PI * 2);
-    context.moveTo(end.x + (focused ? 2.5 : 2), end.y);
-    context.arc(end.x, end.y, focused ? 2.5 : 2, 0, Math.PI * 2);
-    context.fill();
+    drawConnectionTerminal(context, start, variant, alpha * 0.9);
+    drawConnectionTerminal(context, end, variant + 1, alpha * 0.9);
 
     const packetProgress = (now * 0.0002 % 1) * clamp(reveal, 0, 1);
     const packet = pointAt(packetProgress);
@@ -649,6 +639,7 @@ function drawFrameNetwork(
       smootherStep(to.progress),
       Math.min(from.life, to.life) * 0.88,
       index === visible.length - 1,
+      index,
       now,
     );
   }
@@ -670,8 +661,9 @@ function measurePanel(
     { width: 142, height: 62 },
     { width: 80, height: 98 },
   ] as const;
-  // Format is stable per pitch, while repetition directly enlarges that format.
-  const format = formats[((node.midi % formats.length) + formats.length) % formats.length];
+  // Successive panels deliberately cycle through square, landscape, portrait,
+  // wide, and compact formats instead of repeating one note-driven silhouette.
+  const format = formats[((node.id % formats.length) + formats.length) % formats.length];
   const footprintScale = 0.88 + clamp((footprint - 42) / 170, 0, 1) * 0.2;
   const velocityScale = 0.94 + node.velocity * 0.12;
   const repetitionScale = 1 + (1 - Math.exp(-node.repeat / 3.2)) * 0.76;
@@ -1032,6 +1024,7 @@ function drawPanel(
   progress: number,
   life: number,
   changing: boolean,
+  terminalVariant: number,
 ) {
   const { pose, frame } = current;
   const viewport = pose.viewport;
@@ -1048,6 +1041,7 @@ function drawPanel(
   context.lineTo(pose.dockX, pose.dockY);
   context.stroke();
   context.restore();
+  drawConnectionTerminal(context, edge, terminalVariant, 0.82 * life);
 
   context.save();
   context.globalCompositeOperation = "source-over";
@@ -1082,13 +1076,12 @@ function drawPanel(
     drawMetadata(context, to, pose, life, 0);
   }
 
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.fillStyle = glowColor(0.75 * life);
-  context.beginPath();
-  context.arc(pose.dockX, pose.dockY, 1.7, 0, Math.PI * 2);
-  context.fill();
-  context.restore();
+  drawConnectionTerminal(
+    context,
+    { x: pose.dockX, y: pose.dockY },
+    terminalVariant + 1,
+    0.82 * life,
+  );
 }
 
 /**
@@ -1242,17 +1235,6 @@ export function drawTelemetryOverlay(
     rendered.map(({ state }) => state.targetKey).join("|"),
   );
 
-  for (const item of rendered) {
-    if (item.changing) {
-      drawMorphConnector(
-        context,
-        item.state.from.frame,
-        item.state.to.frame,
-        item.progress,
-        item.life,
-      );
-    }
-  }
   drawFrameNetwork(context, rendered, now);
   rendered.forEach((item, index) => {
     drawPanel(
@@ -1265,6 +1247,7 @@ export function drawTelemetryOverlay(
       item.progress,
       item.life,
       item.changing,
+      index,
     );
   });
 

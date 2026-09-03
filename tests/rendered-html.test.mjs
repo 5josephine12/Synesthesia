@@ -251,6 +251,8 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /function drawRoutedConnection/);
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
   assert.match(telemetrySource, /function drawFrameNetwork/);
+  assert.match(telemetrySource, /function drawConnectionTerminal/);
+  assert.match(telemetrySource, /node\.id % formats\.length/);
   assert.match(telemetrySource, /function viewportFrame/);
   assert.match(telemetrySource, /const color = \(opacity: number\) => `rgba\(255, 255, 255,/);
   assert.match(telemetrySource, /const curve = clamp\(distance \* 0\.1, 10, 34\)/);
@@ -258,6 +260,8 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /function drawCornerBrackets/);
   assert.doesNotMatch(telemetrySource, /function drawVisualizationFrame/);
   assert.doesNotMatch(telemetrySource, /function drawOperatorChrome/);
+  assert.doesNotMatch(telemetrySource, /function drawMorphConnector/);
+  assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(telemetrySource, /drawFrameNetwork\(context, rendered, now\)/);
 });
