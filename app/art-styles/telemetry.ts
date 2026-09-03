@@ -138,7 +138,7 @@ let cachedChordLabels = new Map<number, string | null>();
 let cachedChordFirstId = -1;
 let cachedChordLastId = -1;
 let cachedChordNodeCount = -1;
-const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["frames", "nodes", "both"];
+const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames"];
 let compositionModeIndex = -1;
 let compositionTransition: OverlayCompositionTransition = {
   from: { frames: 1, nodes: 0 },
@@ -628,6 +628,11 @@ function drawRoutedConnection(
     drawConnectionTerminal(context, start, variant, alpha * 0.9);
     drawConnectionTerminal(context, end, variant + 1, alpha * 0.9);
 
+    // Relays along the cable make the node network read as a system rather
+    // than a decorative line between two rectangular panels.
+    drawConnectionTerminal(context, pointAt(0.36), variant + 2, alpha * 0.78);
+    drawConnectionTerminal(context, pointAt(0.68), variant + 3, alpha * 0.72);
+
     const packetProgress = (now * 0.0002 % 1) * clamp(reveal, 0, 1);
     const packet = pointAt(packetProgress);
     const tangent = tangentAt(packetProgress);
@@ -650,15 +655,16 @@ function drawRoutedConnection(
   context.restore();
 }
 
-function viewportFrame(viewport: Rect): VisualizationFrame {
-  const halfWidth = viewport.width / 2;
-  const halfHeight = viewport.height / 2;
+function dockFrame(pose: PanelPose): VisualizationFrame {
   return {
-    ...viewport,
-    centerX: viewport.x + halfWidth,
-    centerY: viewport.y + halfHeight,
-    halfWidth,
-    halfHeight,
+    x: pose.dockX,
+    y: pose.dockY,
+    width: 0,
+    height: 0,
+    centerX: pose.dockX,
+    centerY: pose.dockY,
+    halfWidth: 0,
+    halfHeight: 0,
     angle: 0,
   };
 }
@@ -684,8 +690,8 @@ function drawFrameNetwork(
     // A single chronological chain keeps the network readable and deliberate.
     drawRoutedConnection(
       context,
-      viewportFrame(from.current.pose.viewport),
-      viewportFrame(to.current.pose.viewport),
+      dockFrame(from.current.pose),
+      dockFrame(to.current.pose),
       smootherStep(to.progress),
       Math.min(from.life, to.life) * 0.88 * nodeMix,
       index === visible.length - 1,
@@ -1100,12 +1106,14 @@ function drawPanel(
   const { pose, frame } = current;
   const viewport = pose.viewport;
   const edge = frameAnchor(frame, pose.dockX, pose.dockY);
+  const panelLife = life * frameMix;
+  const connectorMix = Math.max(frameMix, nodeMix);
 
-  if (frameMix > 0.001) {
+  if (connectorMix > 0.001) {
     context.save();
     context.globalCompositeOperation = "source-over";
-    context.strokeStyle = glowColor(0.68 * life * frameMix);
-    context.shadowColor = glowColor(0.62 * life * frameMix);
+    context.strokeStyle = glowColor(0.68 * life * connectorMix);
+    context.shadowColor = glowColor(0.62 * life * connectorMix);
     context.shadowBlur = 5;
     context.lineWidth = 0.95;
     context.beginPath();
@@ -1115,32 +1123,39 @@ function drawPanel(
     context.restore();
   }
 
-  // Terminals on the tracking-frame cable belong only to the hybrid state.
-  // Frames-only remains clean, while nodes-only never points at an invisible frame.
-  const sharedMix = Math.min(frameMix, nodeMix);
-  if (sharedMix > 0.001) {
-    drawConnectionTerminal(context, edge, terminalVariant, 0.78 * life * sharedMix);
+  if (nodeMix > 0.001) {
+    drawConnectionTerminal(context, edge, terminalVariant, 0.78 * life * nodeMix);
+    drawConnectionTerminal(
+      context,
+      { x: pose.dockX, y: pose.dockY },
+      terminalVariant + 1,
+      0.78 * life * nodeMix,
+    );
   }
+
+  // Nodes-only scenes use the same intentional geometry without retaining
+  // the picture panels that made every state look dominated by rectangles.
+  if (panelLife <= 0.001) return;
 
   context.save();
   context.globalCompositeOperation = "source-over";
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.clip();
-  context.fillStyle = `rgba(244, 250, 251, ${0.48 * life})`;
+  context.fillStyle = `rgba(244, 250, 251, ${0.48 * panelLife})`;
   context.fillRect(viewport.x, viewport.y, viewport.width, viewport.height);
   if (changing) {
     const blend = easeInOutCubic(progress);
-    drawSnapshot(context, snapshots, snapshotBase, viewport, life * (1 - blend) * 0.94);
-    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, life * blend * 0.94);
+    drawSnapshot(context, snapshots, snapshotBase, viewport, panelLife * (1 - blend) * 0.94);
+    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, panelLife * blend * 0.94);
   } else {
-    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, life * 0.94);
+    drawSnapshot(context, snapshots, snapshotBase + 1, viewport, panelLife * 0.94);
   }
   context.restore();
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = accentColor(to.node.color, 0.76 * life);
-  context.shadowColor = glowColor(0.9 * life);
+  context.strokeStyle = accentColor(to.node.color, 0.76 * panelLife);
+  context.shadowColor = glowColor(0.9 * panelLife);
   context.shadowBlur = 7;
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.stroke();
@@ -1149,19 +1164,10 @@ function drawPanel(
   if (changing) {
     const oldAlpha = 1 - easeOutCubic(progress / 0.52);
     const newAlpha = easeOutCubic((progress - 0.38) / 0.62);
-    drawMetadata(context, from, pose, life * oldAlpha, -progress * 4);
-    drawMetadata(context, to, pose, life * newAlpha, (1 - progress) * 4);
+    drawMetadata(context, from, pose, panelLife * oldAlpha, -progress * 4);
+    drawMetadata(context, to, pose, panelLife * newAlpha, (1 - progress) * 4);
   } else {
-    drawMetadata(context, to, pose, life, 0);
-  }
-
-  if (sharedMix > 0.001) {
-    drawConnectionTerminal(
-      context,
-      { x: pose.dockX, y: pose.dockY },
-      terminalVariant + 1,
-      0.78 * life * sharedMix,
-    );
+    drawMetadata(context, to, pose, panelLife, 0);
   }
 }
 

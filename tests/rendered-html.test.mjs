@@ -259,7 +259,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
   assert.match(
     telemetrySource,
-    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["frames", "nodes", "both"\]/,
+    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["both", "nodes", "frames"\]/,
   );
   assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 760/);
   assert.match(telemetrySource, /function currentCompositionMix/);
@@ -274,7 +274,9 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /context\.lineWidth = focused \? 1\.2 : 0\.95/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
   assert.match(telemetrySource, /panelVariant: number/);
-  assert.match(telemetrySource, /function viewportFrame/);
+  assert.match(telemetrySource, /function dockFrame/);
+  assert.match(telemetrySource, /dockFrame\(from\.current\.pose\)/);
+  assert.match(telemetrySource, /dockFrame\(to\.current\.pose\)/);
   assert.match(telemetrySource, /const color = \(opacity: number\) => `rgba\(255, 255, 255,/);
   assert.match(telemetrySource, /const curve = clamp\(distance \* 0\.1, 10, 34\)/);
   assert.doesNotMatch(telemetrySource, /const palettes =/);
@@ -293,7 +295,11 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
     telemetrySource,
     /drawVisualizationFrame\(context, item\.current\.frame, item\.life \* compositionMix\.frames\)/,
   );
-  assert.match(telemetrySource, /const sharedMix = Math\.min\(frameMix, nodeMix\)/);
+  assert.match(telemetrySource, /const panelLife = life \* frameMix/);
+  assert.match(telemetrySource, /const connectorMix = Math\.max\(frameMix, nodeMix\)/);
+  assert.match(telemetrySource, /if \(panelLife <= 0\.001\) return/);
+  assert.match(telemetrySource, /pointAt\(0\.36\)/);
+  assert.match(telemetrySource, /pointAt\(0\.68\)/);
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {
