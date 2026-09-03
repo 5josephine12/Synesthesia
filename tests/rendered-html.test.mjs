@@ -554,7 +554,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /\{ id: "style-4", label: "Halftone" \}/);
   assert.match(auraSource, /liquidMetalRendererReady \?\?= import\("\.\/art-styles\/style-4"\)/);
   assert.match(auraSource, /const telemetryRendererReady = import\("\.\/art-styles\/telemetry"\)/);
-  assert.match(auraSource, /const METALHEART_FORMATION_DURATION = 1900/);
+  assert.match(auraSource, /const METALHEART_FORMATION_DURATION = 620/);
   assert.match(auraSource, /const METALHEART_PULSE_DURATION = 920/);
   assert.match(auraSource, /const METALHEART_VISIBLE_FORMATIONS = 12/);
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 12/);
@@ -592,9 +592,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /particle\.id \+ particle\.midi \* 2 \+ particle\.repeat \* 3/);
   assert.match(styleThreeSource, /const DENSITY_CORE_OFFSETS =/);
   assert.match(styleThreeSource, /const MOTION_FRAME_INTERVAL = 1000 \/ 20/);
-  assert.match(styleThreeSource, /function beatMotion/);
+  assert.match(styleThreeSource, /const FORMATION_DURATION = 620/);
+  assert.match(styleThreeSource, /function beatAccent/);
   assert.match(styleThreeSource, /Math\.pow\(1 - progress, 2\.6\) \* strength/);
-  assert.match(styleThreeSource, /const beatScale = 1 \+ beat\.amount \* 0\.085/);
+  assert.doesNotMatch(styleThreeSource, /beatScale|context\.scale\(beat/);
   assert.match(styleThreeSource, /const focalPoint =/);
   assert.match(styleThreeSource, /const arrival = easeInOutSine/);
   assert.match(styleThreeSource, /if \(hash\(seed, 127\) > 0\.66\)/);
