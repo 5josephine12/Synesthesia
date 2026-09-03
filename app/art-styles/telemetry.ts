@@ -561,13 +561,17 @@ function drawConnectionNode(
   context.restore();
 }
 
-function secondaryPanelDock(pose: PanelPose, branchVariant: number) {
+function secondaryPanelDock(
+  pose: PanelPose,
+  primaryDock: { x: number; y: number },
+  branchVariant: number,
+) {
   const { viewport } = pose;
   const distances = [
-    Math.abs(pose.dockX - viewport.x),
-    Math.abs(pose.dockX - (viewport.x + viewport.width)),
-    Math.abs(pose.dockY - viewport.y),
-    Math.abs(pose.dockY - (viewport.y + viewport.height)),
+    Math.abs(primaryDock.x - viewport.x),
+    Math.abs(primaryDock.x - (viewport.x + viewport.width)),
+    Math.abs(primaryDock.y - viewport.y),
+    Math.abs(primaryDock.y - (viewport.y + viewport.height)),
   ];
   const closestEdge = distances.indexOf(Math.min(...distances));
   const direction = branchVariant % 4 < 2 ? -1 : 1;
@@ -575,15 +579,15 @@ function secondaryPanelDock(pose: PanelPose, branchVariant: number) {
   if (closestEdge < 2) {
     const offset = Math.min(30, viewport.height * 0.3) * direction;
     return {
-      x: pose.dockX,
-      y: clamp(pose.dockY + offset, viewport.y + 8, viewport.y + viewport.height - 8),
+      x: primaryDock.x,
+      y: clamp(primaryDock.y + offset, viewport.y + 8, viewport.y + viewport.height - 8),
     };
   }
 
   const offset = Math.min(36, viewport.width * 0.3) * direction;
   return {
-    x: clamp(pose.dockX + offset, viewport.x + 8, viewport.x + viewport.width - 8),
-    y: pose.dockY,
+    x: clamp(primaryDock.x + offset, viewport.x + 8, viewport.x + viewport.width - 8),
+    y: primaryDock.y,
   };
 }
 
@@ -619,9 +623,12 @@ function drawVisualizerConnection(
 ) {
   const connectorMix = Math.max(frameMix, nodeMix);
   if (life <= 0.001 || connectorMix <= 0.001) return;
-  const edge = frameAnchor(frame, pose.dockX, pose.dockY);
-  const deltaX = pose.dockX - edge.x;
-  const deltaY = pose.dockY - edge.y;
+  // Derive the dock from the panel's visible rectangle on every frame. The
+  // panel and cable can now move independently without their edges separating.
+  const dock = rectAnchor(pose.viewport, frame.centerX, frame.centerY);
+  const edge = frameAnchor(frame, dock.x, dock.y);
+  const deltaX = dock.x - edge.x;
+  const deltaY = dock.y - edge.y;
   const distance = Math.max(1, Math.hypot(deltaX, deltaY));
   const directionX = deltaX / distance;
   const directionY = deltaY / distance;
@@ -629,8 +636,8 @@ function drawVisualizerConnection(
   // antialiasing seam that made a mathematically connected line look detached.
   const startX = edge.x - directionX * 2;
   const startY = edge.y - directionY * 2;
-  const endX = pose.dockX + directionX * 2;
-  const endY = pose.dockY + directionY * 2;
+  const endX = dock.x + directionX * 2;
+  const endY = dock.y + directionY * 2;
 
   if (frameMix > 0.001) {
     context.save();
@@ -656,10 +663,10 @@ function drawVisualizerConnection(
   const hasBranch = nodeMix > 0.001 && branchVariant % 2 === 1 && distance >= 92;
   if (hasBranch) {
     const branchPoint = {
-      x: lerp(edge.x, pose.dockX, 0.44),
-      y: lerp(edge.y, pose.dockY, 0.44),
+      x: lerp(edge.x, dock.x, 0.44),
+      y: lerp(edge.y, dock.y, 0.44),
     };
-    const branchDock = secondaryPanelDock(pose, branchVariant);
+    const branchDock = secondaryPanelDock(pose, dock, branchVariant);
     const branchDeltaX = branchDock.x - branchPoint.x;
     const branchDeltaY = branchDock.y - branchPoint.y;
     const branchDistance = Math.max(1, Math.hypot(branchDeltaX, branchDeltaY));
@@ -688,10 +695,10 @@ function drawVisualizerConnection(
     drawConnectionNode(context, edge, nodeLife);
     drawConnectionNode(
       context,
-      { x: lerp(edge.x, pose.dockX, 0.48), y: lerp(edge.y, pose.dockY, 0.48) },
+      { x: lerp(edge.x, dock.x, 0.48), y: lerp(edge.y, dock.y, 0.48) },
       nodeLife * 0.86,
     );
-    drawConnectionNode(context, { x: pose.dockX, y: pose.dockY }, nodeLife);
+    drawConnectionNode(context, dock, nodeLife);
   }
 }
 
@@ -762,6 +769,27 @@ function frameAnchor(frame: VisualizationFrame, targetX: number, targetY: number
   return {
     x: frame.centerX + edgeLocalX * restoreCosine - edgeLocalY * restoreSine,
     y: frame.centerY + edgeLocalX * restoreSine + edgeLocalY * restoreCosine,
+  };
+}
+
+function rectAnchor(rect: Rect, targetX: number, targetY: number) {
+  const centerX = rect.x + rect.width / 2;
+  const centerY = rect.y + rect.height / 2;
+  const deltaX = targetX - centerX;
+  const deltaY = targetY - centerY;
+  if (Math.hypot(deltaX, deltaY) < 0.001) {
+    return { x: centerX, y: centerY };
+  }
+  const scaleX = Math.abs(deltaX) < 0.001
+    ? Number.POSITIVE_INFINITY
+    : rect.width / 2 / Math.abs(deltaX);
+  const scaleY = Math.abs(deltaY) < 0.001
+    ? Number.POSITIVE_INFINITY
+    : rect.height / 2 / Math.abs(deltaY);
+  const scale = Math.min(scaleX, scaleY);
+  return {
+    x: centerX + deltaX * scale,
+    y: centerY + deltaY * scale,
   };
 }
 

@@ -280,6 +280,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const CONNECTOR_STROKE_WIDTH = 1\.35/);
   assert.match(telemetrySource, /context\.arc\(point\.x, point\.y, 2\.5/);
   assert.match(telemetrySource, /function secondaryPanelDock/);
+  assert.match(telemetrySource, /function rectAnchor/);
   assert.match(telemetrySource, /function drawConnectionCable/);
   assert.match(telemetrySource, /function drawVisualizerConnection/);
   assert.match(telemetrySource, /function drawFrameAsset/);
@@ -292,20 +293,21 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /function drawOperatorChrome/);
   assert.doesNotMatch(telemetrySource, /function drawMorphConnector/);
   assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
-  assert.match(telemetrySource, /const edge = frameAnchor\(frame, pose\.dockX, pose\.dockY\)/);
+  assert.match(telemetrySource, /const dock = rectAnchor\(pose\.viewport, frame\.centerX, frame\.centerY\)/);
+  assert.match(telemetrySource, /const edge = frameAnchor\(frame, dock\.x, dock\.y\)/);
   assert.match(telemetrySource, /const connectorMix = Math\.max\(frameMix, nodeMix\)/);
   assert.match(telemetrySource, /if \(frameMix > 0\.001\)/);
   assert.match(telemetrySource, /context\.strokeRect\(frame\.x, frame\.y, frame\.width, frame\.height\)/);
   assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
-  assert.match(telemetrySource, /const endX = pose\.dockX \+ directionX \* 2/);
+  assert.match(telemetrySource, /const endX = dock\.x \+ directionX \* 2/);
   assert.match(telemetrySource, /drawConnectionCable\([\s\S]*?\{ x: startX, y: startY \},[\s\S]*?\{ x: endX, y: endY \}/);
   assert.doesNotMatch(telemetrySource, /drawCableRelayFrame|largeRelay|LONG_CONNECTION_THRESHOLD/);
   assert.match(telemetrySource, /nodeMix > 0\.001 && branchVariant % 2 === 1 && distance >= 92/);
-  assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(pose, branchVariant\)/);
+  assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(pose, dock, branchVariant\)/);
   assert.match(telemetrySource, /drawConnectionCable\(context, branchPoint, branchEnd/);
   assert.match(telemetrySource, /drawConnectionNode\(context, edge, nodeLife\)/);
-  assert.match(telemetrySource, /lerp\(edge\.x, pose\.dockX, 0\.48\)/);
-  assert.match(telemetrySource, /drawConnectionNode\(context, \{ x: pose\.dockX, y: pose\.dockY \}, nodeLife\)/);
+  assert.match(telemetrySource, /lerp\(edge\.x, dock\.x, 0\.48\)/);
+  assert.match(telemetrySource, /drawConnectionNode\(context, dock, nodeLife\)/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(
     telemetrySource,
