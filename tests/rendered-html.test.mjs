@@ -254,6 +254,13 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /from: enteringPresentation\(presentation\)/);
   assert.match(telemetrySource, /morphStates\.splice\(replacementIndex, 1\)/);
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
+  assert.match(
+    telemetrySource,
+    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["frames", "nodes", "both"\]/,
+  );
+  assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 760/);
+  assert.match(telemetrySource, /function currentCompositionMix/);
+  assert.match(telemetrySource, /if \(addedPanelBatch\) advanceCompositionMode\(now\)/);
   assert.match(telemetrySource, /\.slice\(-MAX_PANELS\)/);
   assert.match(telemetrySource, /const rendered = visibleStates\.map/);
   assert.match(telemetrySource, /function drawRoutedConnection/);
@@ -275,8 +282,15 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
   assert.match(telemetrySource, /const edge = frameAnchor\(frame, pose\.dockX, pose\.dockY\)/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
-  assert.match(telemetrySource, /drawFrameNetwork\(context, rendered, now\)/);
-  assert.match(telemetrySource, /drawVisualizationFrame\(context, item\.current\.frame, item\.life\)/);
+  assert.match(
+    telemetrySource,
+    /drawFrameNetwork\(context, rendered, now, compositionMix\.nodes\)/,
+  );
+  assert.match(
+    telemetrySource,
+    /drawVisualizationFrame\(context, item\.current\.frame, item\.life \* compositionMix\.frames\)/,
+  );
+  assert.match(telemetrySource, /const sharedMix = Math\.min\(frameMix, nodeMix\)/);
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {

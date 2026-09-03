@@ -86,6 +86,19 @@ type OverlayMorphState = {
   height: number;
 };
 
+type OverlayCompositionMode = "frames" | "nodes" | "both";
+
+type OverlayCompositionMix = {
+  frames: number;
+  nodes: number;
+};
+
+type OverlayCompositionTransition = {
+  from: OverlayCompositionMix;
+  to: OverlayCompositionMix;
+  startedAt: number;
+};
+
 /** Canvas tracking is well supported but still missing from some lib.dom builds. */
 type TrackedContext = CanvasRenderingContext2D & { letterSpacing?: string };
 
@@ -102,6 +115,7 @@ const LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
 const MORPH_MS = 1280;
 const DISTANT_MORPH_MS = 1080;
 const ENTRY_MORPH_MS = Math.min(720, MORPH_MS, DISTANT_MORPH_MS);
+const COMPOSITION_MODE_TRANSITION_MS = 760;
 
 const MAX_PANELS = 3;
 const DATA_GAP = 10;
@@ -124,6 +138,13 @@ let cachedChordLabels = new Map<number, string | null>();
 let cachedChordFirstId = -1;
 let cachedChordLastId = -1;
 let cachedChordNodeCount = -1;
+const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["frames", "nodes", "both"];
+let compositionModeIndex = -1;
+let compositionTransition: OverlayCompositionTransition = {
+  from: { frames: 1, nodes: 0 },
+  to: { frames: 1, nodes: 0 },
+  startedAt: Number.NEGATIVE_INFINITY,
+};
 
 const CHORD_SHAPES: readonly { readonly intervals: readonly number[]; readonly suffix: string }[] = [
   { intervals: [0, 4, 7], suffix: "" },
@@ -172,6 +193,32 @@ function smootherStep(value: number) {
 
 function lerp(from: number, to: number, amount: number) {
   return from + (to - from) * amount;
+}
+
+function compositionMixFor(mode: OverlayCompositionMode): OverlayCompositionMix {
+  if (mode === "frames") return { frames: 1, nodes: 0 };
+  if (mode === "nodes") return { frames: 0, nodes: 1 };
+  return { frames: 1, nodes: 1 };
+}
+
+function currentCompositionMix(now: number): OverlayCompositionMix {
+  const progress = smootherStep(
+    (now - compositionTransition.startedAt) / COMPOSITION_MODE_TRANSITION_MS,
+  );
+  return {
+    frames: lerp(compositionTransition.from.frames, compositionTransition.to.frames, progress),
+    nodes: lerp(compositionTransition.from.nodes, compositionTransition.to.nodes, progress),
+  };
+}
+
+function advanceCompositionMode(now: number) {
+  const from = currentCompositionMix(now);
+  compositionModeIndex = (compositionModeIndex + 1) % COMPOSITION_MODES.length;
+  compositionTransition = {
+    from,
+    to: compositionMixFor(COMPOSITION_MODES[compositionModeIndex]),
+    startedAt: now,
+  };
 }
 
 function pitchClass(midi: number) {
@@ -625,7 +672,9 @@ function drawFrameNetwork(
     life: number;
   }[],
   now: number,
+  nodeMix: number,
 ) {
+  if (nodeMix <= 0.001) return;
   const visible = rendered
     .filter((item) => item.life > 0.015)
     .sort((first, second) => first.state.to.node.createdAt - second.state.to.node.createdAt);
@@ -638,7 +687,7 @@ function drawFrameNetwork(
       viewportFrame(from.current.pose.viewport),
       viewportFrame(to.current.pose.viewport),
       smootherStep(to.progress),
-      Math.min(from.life, to.life) * 0.88,
+      Math.min(from.life, to.life) * 0.88 * nodeMix,
       index === visible.length - 1,
       index,
       now,
@@ -1045,23 +1094,33 @@ function drawPanel(
   life: number,
   changing: boolean,
   terminalVariant: number,
+  frameMix: number,
+  nodeMix: number,
 ) {
   const { pose, frame } = current;
   const viewport = pose.viewport;
   const edge = frameAnchor(frame, pose.dockX, pose.dockY);
 
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(0.68 * life);
-  context.shadowColor = glowColor(0.62 * life);
-  context.shadowBlur = 5;
-  context.lineWidth = 0.95;
-  context.beginPath();
-  context.moveTo(edge.x, edge.y);
-  context.lineTo(pose.dockX, pose.dockY);
-  context.stroke();
-  context.restore();
-  drawConnectionTerminal(context, edge, terminalVariant, 0.78 * life);
+  if (frameMix > 0.001) {
+    context.save();
+    context.globalCompositeOperation = "source-over";
+    context.strokeStyle = glowColor(0.68 * life * frameMix);
+    context.shadowColor = glowColor(0.62 * life * frameMix);
+    context.shadowBlur = 5;
+    context.lineWidth = 0.95;
+    context.beginPath();
+    context.moveTo(edge.x, edge.y);
+    context.lineTo(pose.dockX, pose.dockY);
+    context.stroke();
+    context.restore();
+  }
+
+  // Terminals on the tracking-frame cable belong only to the hybrid state.
+  // Frames-only remains clean, while nodes-only never points at an invisible frame.
+  const sharedMix = Math.min(frameMix, nodeMix);
+  if (sharedMix > 0.001) {
+    drawConnectionTerminal(context, edge, terminalVariant, 0.78 * life * sharedMix);
+  }
 
   context.save();
   context.globalCompositeOperation = "source-over";
@@ -1096,12 +1155,14 @@ function drawPanel(
     drawMetadata(context, to, pose, life, 0);
   }
 
-  drawConnectionTerminal(
-    context,
-    { x: pose.dockX, y: pose.dockY },
-    terminalVariant + 1,
-    0.78 * life,
-  );
+  if (sharedMix > 0.001) {
+    drawConnectionTerminal(
+      context,
+      { x: pose.dockX, y: pose.dockY },
+      terminalVariant + 1,
+      0.78 * life * sharedMix,
+    );
+  }
 }
 
 /**
@@ -1109,6 +1170,7 @@ function drawPanel(
  * can sleep, while a connected graph keeps rendering its traveling packets.
  */
 export function telemetryNextFrameAt(now: number) {
+  if (now - compositionTransition.startedAt < COMPOSITION_MODE_TRANSITION_MS) return now;
   let nextFrameAt = Number.POSITIVE_INFINITY;
   for (const state of morphStates) {
     if (now - state.startedAt < state.duration || now - state.sessionStartedAt < ENTER_MS) {
@@ -1176,10 +1238,12 @@ export function drawTelemetryOverlay(
     }
   }
 
+  let addedPanelBatch = false;
   for (const node of active) {
     const targetKey = nodeKey(node);
     if (processedNodeKeys.has(targetKey)) continue;
     processedNodeKeys.add(targetKey);
+    addedPanelBatch = true;
 
     let replacementIndex = -1;
     if (morphStates.length >= MAX_PANELS) {
@@ -1234,6 +1298,11 @@ export function drawTelemetryOverlay(
     }
   }
 
+  // A chord can add several panels in the same rendered frame. Advance once
+  // for the whole musical gesture so the three composition states never skip.
+  if (addedPanelBatch) advanceCompositionMode(now);
+  const compositionMix = currentCompositionMix(now);
+
   // Enforce the cap at the final visible-state boundary as well as insertion.
   // This prevents transitions or retained state from ever drawing a fourth
   // panel, even for one animation frame.
@@ -1270,9 +1339,9 @@ export function drawTelemetryOverlay(
   );
 
   for (const item of rendered) {
-    drawVisualizationFrame(context, item.current.frame, item.life);
+    drawVisualizationFrame(context, item.current.frame, item.life * compositionMix.frames);
   }
-  drawFrameNetwork(context, rendered, now);
+  drawFrameNetwork(context, rendered, now, compositionMix.nodes);
   rendered.forEach((item, index) => {
     drawPanel(
       trackedContext,
@@ -1285,6 +1354,8 @@ export function drawTelemetryOverlay(
       item.life,
       item.changing,
       index,
+      compositionMix.frames,
+      compositionMix.nodes,
     );
   });
 
