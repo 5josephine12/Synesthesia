@@ -131,6 +131,7 @@ const SNAPSHOT_FRAME_INTERVAL = 1000 / 15;
 const HUD_GLOW = "255, 255, 255";
 const OVERLAY_STROKE_WIDTH = 1.25;
 const OVERLAY_GLOW_BLUR = 4.5;
+const CORNER_GLOW_BLUR = 10;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
 let lastSnapshotAt = Number.NEGATIVE_INFINITY;
@@ -328,6 +329,29 @@ function applyOverlayStroke(context: CanvasRenderingContext2D, alpha: number) {
   context.shadowColor = glowColor(visibleAlpha * 0.72);
   context.shadowBlur = OVERLAY_GLOW_BLUR;
   context.lineWidth = OVERLAY_STROKE_WIDTH;
+}
+
+function drawRectangleCornerGlow(
+  context: CanvasRenderingContext2D,
+  rect: Rect,
+  alpha: number,
+) {
+  const corners = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    { x: rect.x, y: rect.y + rect.height },
+  ];
+  const visibleAlpha = clamp(alpha, 0, 1);
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = glowColor(visibleAlpha);
+  context.shadowColor = glowColor(visibleAlpha * 0.94);
+  context.shadowBlur = CORNER_GLOW_BLUR;
+  for (const corner of corners) {
+    context.fillRect(corner.x - 0.8, corner.y - 0.8, 1.6, 1.6);
+  }
+  context.restore();
 }
 
 function visualArrival(age: number) {
@@ -608,26 +632,6 @@ function drawConnectionCable(
   context.restore();
 }
 
-function traceTrackingFrame(
-  context: CanvasRenderingContext2D,
-  frame: VisualizationFrame,
-) {
-  const notchWidth = clamp(frame.width * 0.08, 12, 24);
-  const notchDepth = clamp(frame.height * 0.04, 4, 7);
-  const notchStart = frame.x + frame.width * 0.24;
-
-  context.beginPath();
-  context.moveTo(frame.x, frame.y);
-  context.lineTo(notchStart, frame.y);
-  context.lineTo(notchStart + notchWidth * 0.34, frame.y + notchDepth);
-  context.lineTo(notchStart + notchWidth * 0.66, frame.y + notchDepth);
-  context.lineTo(notchStart + notchWidth, frame.y);
-  context.lineTo(frame.x + frame.width, frame.y);
-  context.lineTo(frame.x + frame.width, frame.y + frame.height);
-  context.lineTo(frame.x, frame.y + frame.height);
-  context.closePath();
-}
-
 function drawVisualizerConnection(
   context: CanvasRenderingContext2D,
   frame: VisualizationFrame,
@@ -656,8 +660,8 @@ function drawVisualizerConnection(
     context.save();
     context.globalCompositeOperation = "source-over";
     applyOverlayStroke(context, life * frameMix);
-    traceTrackingFrame(context, frame);
-    context.stroke();
+    context.strokeRect(frame.x, frame.y, frame.width, frame.height);
+    drawRectangleCornerGlow(context, frame, life * frameMix);
     context.restore();
   }
 
@@ -1181,6 +1185,7 @@ function drawPanel(
   applyOverlayStroke(context, life);
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.stroke();
+  drawRectangleCornerGlow(context, viewport, life);
   context.restore();
 
   if (changing) {

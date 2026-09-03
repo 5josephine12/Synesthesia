@@ -274,11 +274,12 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /NODE_NETWORK_ROUTES/);
   assert.doesNotMatch(telemetrySource, /function drawIndependentNodeNetwork/);
   assert.match(telemetrySource, /function drawConnectionNode/);
-  assert.match(telemetrySource, /function traceTrackingFrame/);
+  assert.match(telemetrySource, /function drawRectangleCornerGlow/);
   assert.doesNotMatch(telemetrySource, /function drawConnectionTerminal/);
   assert.doesNotMatch(telemetrySource, /function drawRelayNode/);
   assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.25/);
   assert.match(telemetrySource, /const OVERLAY_GLOW_BLUR = 4\.5/);
+  assert.match(telemetrySource, /const CORNER_GLOW_BLUR = 10/);
   assert.match(telemetrySource, /function applyOverlayStroke/);
   assert.match(telemetrySource, /context\.arc\(point\.x, point\.y, 2\.5/);
   assert.match(telemetrySource, /function secondaryPanelDock/);
@@ -300,9 +301,9 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const edge = frameAnchor\(frame, dock\.x, dock\.y\)/);
   assert.match(telemetrySource, /if \(life <= 0\.001 \|\| frameMix <= 0\.001\) return/);
   assert.match(telemetrySource, /if \(frameMix > 0\.001\)/);
-  assert.match(telemetrySource, /const notchWidth = clamp\(frame\.width \* 0\.08, 12, 24\)/);
-  assert.match(telemetrySource, /const notchDepth = clamp\(frame\.height \* 0\.04, 4, 7\)/);
-  assert.match(telemetrySource, /traceTrackingFrame\(context, frame\)/);
+  assert.doesNotMatch(telemetrySource, /notchWidth|notchDepth|notchStart|traceTrackingFrame/);
+  assert.match(telemetrySource, /context\.strokeRect\(frame\.x, frame\.y, frame\.width, frame\.height\)/);
+  assert.match(telemetrySource, /drawRectangleCornerGlow\(context, frame, life \* frameMix\)/);
   assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
   assert.match(telemetrySource, /const endX = dock\.x \+ directionX \* 2/);
   assert.match(telemetrySource, /drawConnectionCable\([\s\S]*?\{ x: startX, y: startY \},[\s\S]*?\{ x: endX, y: endY \}/);
@@ -337,6 +338,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /const panelLife = life \* frameMix/);
   assert.match(telemetrySource, /applyOverlayStroke\(context, life \* frameMix\)/);
   assert.match(telemetrySource, /applyOverlayStroke\(context, life\)/);
+  assert.match(telemetrySource, /drawRectangleCornerGlow\(context, viewport, life\)/);
   assert.doesNotMatch(telemetrySource, /CONNECTOR_STROKE_WIDTH|HUD_CONTRAST|accentColor/);
 });
 
