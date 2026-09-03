@@ -2151,6 +2151,49 @@ function drawChronologicalAuraLayers(
           });
           if (liquidMetalFrame) {
             const blendsWithEarlierArtwork = runStart > 0 || hasEarlierArtwork;
+            if (blendsWithEarlierArtwork) {
+              organicContext.clearRect(0, 0, organicLayer.width, organicLayer.height);
+              organicContext.save();
+              organicContext.globalCompositeOperation = "source-over";
+              organicContext.drawImage(
+                context.canvas,
+                0,
+                0,
+                context.canvas.width,
+                context.canvas.height,
+                0,
+                0,
+                organicLayer.width,
+                organicLayer.height,
+              );
+              organicContext.globalCompositeOperation = "destination-in";
+              organicContext.drawImage(
+                liquidMetalFrame.canvas,
+                0,
+                0,
+                organicLayer.width,
+                organicLayer.height,
+              );
+              organicContext.restore();
+
+              context.save();
+              context.globalCompositeOperation = "destination-out";
+              context.globalAlpha = 0.38;
+              context.drawImage(liquidMetalFrame.regionCanvas, 0, 0, width, height);
+              context.restore();
+
+              context.save();
+              context.globalCompositeOperation = "source-over";
+              context.globalAlpha = 0.44;
+              context.drawImage(organicLayer, 0, 0, width, height);
+              context.restore();
+            }
+            context.save();
+            context.globalCompositeOperation = "screen";
+            context.globalAlpha = blendsWithEarlierArtwork ? 0.92 : 0.72;
+            context.imageSmoothingEnabled = true;
+            context.drawImage(liquidMetalFrame.glowCanvas, 0, 0, width, height);
+            context.restore();
             context.save();
             context.globalCompositeOperation = blendsWithEarlierArtwork ? "screen" : "source-over";
             context.globalAlpha = blendsWithEarlierArtwork ? 0.88 : 0.9;

@@ -23,6 +23,8 @@ export type LiquidMetalFrameOptions = {
 
 export type LiquidMetalFrame = {
   canvas: HTMLCanvasElement;
+  glowCanvas: HTMLCanvasElement;
+  regionCanvas: HTMLCanvasElement;
   forming: boolean;
 };
 
@@ -66,6 +68,8 @@ class HalftoneRenderer {
   private readonly context: CanvasRenderingContext2D;
   private readonly glowCanvas: HTMLCanvasElement;
   private readonly glowContext: CanvasRenderingContext2D;
+  private readonly regionCanvas: HTMLCanvasElement;
+  private readonly regionContext: CanvasRenderingContext2D;
   private width = 0;
   private height = 0;
   private displayScale = 1;
@@ -88,6 +92,13 @@ class HalftoneRenderer {
     });
     if (!glowContext) throw new Error("Halftone glow canvas is unavailable");
     this.glowContext = glowContext;
+    this.regionCanvas = document.createElement("canvas");
+    const regionContext = this.regionCanvas.getContext("2d", {
+      alpha: true,
+      desynchronized: true,
+    });
+    if (!regionContext) throw new Error("Halftone region canvas is unavailable");
+    this.regionContext = regionContext;
   }
 
   private syncSize(width: number, height: number) {
@@ -104,6 +115,8 @@ class HalftoneRenderer {
     this.canvas.height = targetHeight;
     this.glowCanvas.width = targetWidth;
     this.glowCanvas.height = targetHeight;
+    this.regionCanvas.width = targetWidth;
+    this.regionCanvas.height = targetHeight;
     return true;
   }
 
@@ -145,6 +158,22 @@ class HalftoneRenderer {
     const bodyPath = new Path2D();
     const accentPath = new Path2D();
     const icyCorePath = new Path2D();
+
+    // The interaction mask is strongest around the perimeter, so underlying
+    // artwork remains intact at the heart and dissolves into dots at its sides.
+    this.regionContext.save();
+    this.regionContext.translate(centerX, centerY);
+    this.regionContext.scale(fieldWidth * arrival * 1.14, fieldHeight * arrival * 1.18);
+    const regionGradient = this.regionContext.createRadialGradient(0, 0, 0.08, 0, 0, 1);
+    regionGradient.addColorStop(0, `rgba(255, 255, 255, ${0.08 + strength * 0.08})`);
+    regionGradient.addColorStop(0.5, `rgba(255, 255, 255, ${0.16 + strength * 0.12})`);
+    regionGradient.addColorStop(0.82, `rgba(255, 255, 255, ${0.5 + strength * 0.2})`);
+    regionGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    this.regionContext.fillStyle = regionGradient;
+    this.regionContext.beginPath();
+    this.regionContext.arc(0, 0, 1, 0, Math.PI * 2);
+    this.regionContext.fill();
+    this.regionContext.restore();
 
     for (let row = -rows; row <= rows; row += 1) {
       for (let column = -columns; column <= columns; column += 1) {
@@ -253,11 +282,18 @@ class HalftoneRenderer {
       signature === this.lastSignature &&
       (!hasLiveFormation || now - this.lastFrameAt < HALFTONE_FRAME_INTERVAL)
     ) {
-      return { canvas: this.canvas, forming: hasLiveFormation };
+      return {
+        canvas: this.canvas,
+        glowCanvas: this.glowCanvas,
+        regionCanvas: this.regionCanvas,
+        forming: hasLiveFormation,
+      };
     }
 
     this.context.setTransform(1, 0, 0, 1, 0, 0);
     this.context.clearRect(0, 0, this.width, this.height);
+    this.regionContext.setTransform(1, 0, 0, 1, 0, 0);
+    this.regionContext.clearRect(0, 0, this.width, this.height);
     let forming = false;
     const occupiedDots = new Map<string, Array<{ x: number; y: number; radius: number }>>();
     for (let index = active.length - 1; index >= 0; index -= 1) {
@@ -268,22 +304,23 @@ class HalftoneRenderer {
     this.glowContext.save();
     this.glowContext.globalCompositeOperation = "source-over";
     this.glowContext.globalAlpha = 0.82;
-    this.glowContext.filter = `blur(${clamp(Math.min(this.width, this.height) * 0.012, 7 * this.displayScale, 16 * this.displayScale)}px)`;
+    this.glowContext.filter = `blur(${clamp(Math.min(this.width, this.height) * 0.02, 12 * this.displayScale, 28 * this.displayScale)}px)`;
     this.glowContext.drawImage(this.canvas, 0, 0);
     this.glowContext.restore();
-    this.context.save();
-    this.context.globalCompositeOperation = "destination-over";
-    this.context.globalAlpha = 0.86;
-    this.context.drawImage(this.glowCanvas, 0, 0);
-    this.context.restore();
     this.lastFrameAt = now;
     this.lastSignature = signature;
-    return { canvas: this.canvas, forming };
+    return {
+      canvas: this.canvas,
+      glowCanvas: this.glowCanvas,
+      regionCanvas: this.regionCanvas,
+      forming,
+    };
   }
 
   reset() {
     this.context.clearRect(0, 0, this.width, this.height);
     this.glowContext.clearRect(0, 0, this.width, this.height);
+    this.regionContext.clearRect(0, 0, this.width, this.height);
     this.lastFrameAt = Number.NEGATIVE_INFINITY;
     this.lastSignature = "";
   }
@@ -294,6 +331,8 @@ class HalftoneRenderer {
     this.canvas.height = 1;
     this.glowCanvas.width = 1;
     this.glowCanvas.height = 1;
+    this.regionCanvas.width = 1;
+    this.regionCanvas.height = 1;
   }
 }
 
