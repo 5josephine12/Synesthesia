@@ -268,15 +268,17 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const rendered = visibleStates\.map/);
   assert.match(telemetrySource, /function drawRoutedConnection/);
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
-  assert.match(telemetrySource, /function drawFrameNetwork/);
+  assert.match(telemetrySource, /const NODE_NETWORK_ROUTES/);
+  assert.match(telemetrySource, /function drawIndependentNodeNetwork/);
   assert.match(telemetrySource, /function drawConnectionTerminal/);
+  assert.match(telemetrySource, /function drawRelayNode/);
   assert.match(telemetrySource, /function drawVisualizationFrame/);
   assert.match(telemetrySource, /context\.lineWidth = focused \? 1\.2 : 0\.95/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
   assert.match(telemetrySource, /panelVariant: number/);
-  assert.match(telemetrySource, /function dockFrame/);
-  assert.match(telemetrySource, /dockFrame\(from\.current\.pose\)/);
-  assert.match(telemetrySource, /dockFrame\(to\.current\.pose\)/);
+  assert.match(telemetrySource, /function pointFrame/);
+  assert.match(telemetrySource, /pointFrame\(points\[index - 1\]\)/);
+  assert.match(telemetrySource, /pointFrame\(points\[index\]\)/);
   assert.match(telemetrySource, /const color = \(opacity: number\) => `rgba\(255, 255, 255,/);
   assert.match(telemetrySource, /const curve = clamp\(distance \* 0\.1, 10, 34\)/);
   assert.doesNotMatch(telemetrySource, /const palettes =/);
@@ -289,16 +291,15 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(
     telemetrySource,
-    /drawFrameNetwork\(context, rendered, now, compositionMix\.nodes\)/,
+    /drawIndependentNodeNetwork\(context, rendered, width, height, now, compositionMix\.nodes\)/,
   );
   assert.match(
     telemetrySource,
     /drawVisualizationFrame\(context, item\.current\.frame, item\.life \* compositionMix\.frames\)/,
   );
   assert.match(telemetrySource, /const panelLife = life \* frameMix/);
-  assert.match(telemetrySource, /const connectorMix = Math\.max\(frameMix, nodeMix\)/);
   assert.match(telemetrySource, /if \(panelLife <= 0\.001\) return/);
-  assert.match(telemetrySource, /pointAt\(0\.36\)/);
+  assert.match(telemetrySource, /pointAt\(0\.38\)/);
   assert.match(telemetrySource, /pointAt\(0\.68\)/);
 });
 

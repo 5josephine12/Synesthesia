@@ -99,6 +99,8 @@ type OverlayCompositionTransition = {
   startedAt: number;
 };
 
+type NodeNetworkPoint = readonly [x: number, y: number];
+
 /** Canvas tracking is well supported but still missing from some lib.dom builds. */
 type TrackedContext = CanvasRenderingContext2D & { letterSpacing?: string };
 
@@ -128,6 +130,12 @@ const SNAPSHOT_FRAME_INTERVAL = 1000 / 15;
 
 const HUD_ACCENT = "232, 234, 236";
 const HUD_GLOW = "255, 255, 255";
+const NODE_NETWORK_ROUTES: readonly (readonly NodeNetworkPoint[])[] = [
+  [[0.08, 0.2], [0.31, 0.37], [0.57, 0.18], [0.9, 0.34]],
+  [[0.1, 0.67], [0.35, 0.48], [0.61, 0.65], [0.88, 0.4]],
+  [[0.17, 0.12], [0.29, 0.43], [0.55, 0.56], [0.83, 0.72]],
+  [[0.09, 0.48], [0.34, 0.25], [0.63, 0.49], [0.91, 0.2]],
+] as const;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
 let lastSnapshotAt = Number.NEGATIVE_INFINITY;
@@ -140,6 +148,7 @@ let cachedChordLastId = -1;
 let cachedChordNodeCount = -1;
 const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames"];
 let compositionModeIndex = -1;
+let nodeNetworkRouteIndex = -1;
 let compositionTransition: OverlayCompositionTransition = {
   from: { frames: 1, nodes: 0 },
   to: { frames: 1, nodes: 0 },
@@ -214,9 +223,13 @@ function currentCompositionMix(now: number): OverlayCompositionMix {
 function advanceCompositionMode(now: number) {
   const from = currentCompositionMix(now);
   compositionModeIndex = (compositionModeIndex + 1) % COMPOSITION_MODES.length;
+  const nextMode = COMPOSITION_MODES[compositionModeIndex];
+  if (nextMode === "both") {
+    nodeNetworkRouteIndex = (nodeNetworkRouteIndex + 1) % NODE_NETWORK_ROUTES.length;
+  }
   compositionTransition = {
     from,
-    to: compositionMixFor(COMPOSITION_MODES[compositionModeIndex]),
+    to: compositionMixFor(nextMode),
     startedAt: now,
   };
 }
@@ -537,6 +550,35 @@ function drawConnectionTerminal(
   context.restore();
 }
 
+function drawRelayNode(
+  context: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  variant: number,
+  alpha: number,
+) {
+  const kind = ((variant % 3) + 3) % 3;
+  const halfSize = kind === 0 ? 5.2 : 6.4;
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.translate(point.x, point.y);
+  if (kind === 2) context.rotate(Math.PI / 4);
+  context.strokeStyle = glowColor(alpha);
+  context.fillStyle = glowColor(alpha * 0.9);
+  context.shadowColor = glowColor(alpha * 0.8);
+  context.shadowBlur = 7;
+  context.lineWidth = 1;
+  if (kind === 0) {
+    context.beginPath();
+    context.arc(0, 0, halfSize, 0, Math.PI * 2);
+    context.stroke();
+  } else {
+    context.strokeRect(-halfSize, -halfSize, halfSize * 2, halfSize * 2);
+  }
+  context.fillRect(-1.15, -1.15, 2.3, 2.3);
+  context.restore();
+}
+
 function drawRoutedConnection(
   context: CanvasRenderingContext2D,
   from: VisualizationFrame,
@@ -628,10 +670,10 @@ function drawRoutedConnection(
     drawConnectionTerminal(context, start, variant, alpha * 0.9);
     drawConnectionTerminal(context, end, variant + 1, alpha * 0.9);
 
-    // Relays along the cable make the node network read as a system rather
-    // than a decorative line between two rectangular panels.
-    drawConnectionTerminal(context, pointAt(0.36), variant + 2, alpha * 0.78);
-    drawConnectionTerminal(context, pointAt(0.68), variant + 3, alpha * 0.72);
+    drawRelayNode(context, pointAt(0.38), variant + 2, alpha * 0.84);
+    if (distance > 120) {
+      drawRelayNode(context, pointAt(0.68), variant + 3, alpha * 0.74);
+    }
 
     const packetProgress = (now * 0.0002 % 1) * clamp(reveal, 0, 1);
     const packet = pointAt(packetProgress);
@@ -655,21 +697,21 @@ function drawRoutedConnection(
   context.restore();
 }
 
-function dockFrame(pose: PanelPose): VisualizationFrame {
+function pointFrame(point: { x: number; y: number }): VisualizationFrame {
   return {
-    x: pose.dockX,
-    y: pose.dockY,
+    x: point.x,
+    y: point.y,
     width: 0,
     height: 0,
-    centerX: pose.dockX,
-    centerY: pose.dockY,
+    centerX: point.x,
+    centerY: point.y,
     halfWidth: 0,
     halfHeight: 0,
     angle: 0,
   };
 }
 
-function drawFrameNetwork(
+function drawIndependentNodeNetwork(
   context: CanvasRenderingContext2D,
   rendered: readonly {
     state: OverlayMorphState;
@@ -677,6 +719,8 @@ function drawFrameNetwork(
     current: FocusPresentation;
     life: number;
   }[],
+  width: number,
+  height: number,
   now: number,
   nodeMix: number,
 ) {
@@ -684,18 +728,27 @@ function drawFrameNetwork(
   const visible = rendered
     .filter((item) => item.life > 0.015)
     .sort((first, second) => first.state.to.node.createdAt - second.state.to.node.createdAt);
-  for (let index = 1; index < visible.length; index += 1) {
-    const from = visible[index - 1];
-    const to = visible[index];
-    // A single chronological chain keeps the network readable and deliberate.
+  if (visible.length === 0) return;
+
+  const latest = visible[visible.length - 1];
+  const route = NODE_NETWORK_ROUTES[Math.max(0, nodeNetworkRouteIndex)];
+  const drift = clamp(Math.min(width, height) * 0.009, 2, 8);
+  const points = route.map(([x, y], index) => ({
+    x: x * width + Math.sin(now * 0.00016 + index * 1.7) * drift,
+    y: y * height + Math.cos(now * 0.00013 + index * 1.35) * drift,
+  }));
+  const networkLife = Math.max(...visible.map((item) => item.life)) * nodeMix;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const reveal = smootherStep(latest.progress * 1.45 - (index - 1) * 0.13);
     drawRoutedConnection(
       context,
-      dockFrame(from.current.pose),
-      dockFrame(to.current.pose),
-      smootherStep(to.progress),
-      Math.min(from.life, to.life) * 0.88 * nodeMix,
-      index === visible.length - 1,
-      index,
+      pointFrame(points[index - 1]),
+      pointFrame(points[index]),
+      reveal,
+      networkLife * 0.9,
+      index === points.length - 1,
+      latest.state.to.node.id + index,
       now,
     );
   }
@@ -1099,21 +1152,18 @@ function drawPanel(
   progress: number,
   life: number,
   changing: boolean,
-  terminalVariant: number,
   frameMix: number,
-  nodeMix: number,
 ) {
   const { pose, frame } = current;
   const viewport = pose.viewport;
   const edge = frameAnchor(frame, pose.dockX, pose.dockY);
   const panelLife = life * frameMix;
-  const connectorMix = Math.max(frameMix, nodeMix);
 
-  if (connectorMix > 0.001) {
+  if (panelLife > 0.001) {
     context.save();
     context.globalCompositeOperation = "source-over";
-    context.strokeStyle = glowColor(0.68 * life * connectorMix);
-    context.shadowColor = glowColor(0.62 * life * connectorMix);
+    context.strokeStyle = glowColor(0.68 * panelLife);
+    context.shadowColor = glowColor(0.62 * panelLife);
     context.shadowBlur = 5;
     context.lineWidth = 0.95;
     context.beginPath();
@@ -1123,18 +1173,8 @@ function drawPanel(
     context.restore();
   }
 
-  if (nodeMix > 0.001) {
-    drawConnectionTerminal(context, edge, terminalVariant, 0.78 * life * nodeMix);
-    drawConnectionTerminal(
-      context,
-      { x: pose.dockX, y: pose.dockY },
-      terminalVariant + 1,
-      0.78 * life * nodeMix,
-    );
-  }
-
-  // Nodes-only scenes use the same intentional geometry without retaining
-  // the picture panels that made every state look dominated by rectangles.
+  // The independent node network owns every node. Frame connectors remain
+  // clean and disappear completely in a nodes-only composition.
   if (panelLife <= 0.001) return;
 
   context.save();
@@ -1177,6 +1217,7 @@ function drawPanel(
  */
 export function telemetryNextFrameAt(now: number) {
   if (now - compositionTransition.startedAt < COMPOSITION_MODE_TRANSITION_MS) return now;
+  if (morphStates.length > 0 && currentCompositionMix(now).nodes > 0.001) return now;
   let nextFrameAt = Number.POSITIVE_INFINITY;
   for (const state of morphStates) {
     if (now - state.startedAt < state.duration || now - state.sessionStartedAt < ENTER_MS) {
@@ -1187,7 +1228,6 @@ export function telemetryNextFrameAt(now: number) {
     if (now < exitStartsAt) nextFrameAt = Math.min(nextFrameAt, exitStartsAt);
     else if (now < exitEndsAt) return now;
   }
-  if (morphStates.length > 1) return now;
   return nextFrameAt;
 }
 
@@ -1335,19 +1375,21 @@ export function drawTelemetryOverlay(
     };
   });
 
-  const snapshots = prepareSnapshotStrip(
-    context,
-    rendered.flatMap(({ state }) => [state.from.frame, state.to.frame]),
-    width,
-    height,
-    now,
-    rendered.map(({ state }) => state.targetKey).join("|"),
-  );
+  const snapshots = compositionMix.frames > 0.001
+    ? prepareSnapshotStrip(
+        context,
+        rendered.flatMap(({ state }) => [state.from.frame, state.to.frame]),
+        width,
+        height,
+        now,
+        rendered.map(({ state }) => state.targetKey).join("|"),
+      )
+    : null;
 
   for (const item of rendered) {
     drawVisualizationFrame(context, item.current.frame, item.life * compositionMix.frames);
   }
-  drawFrameNetwork(context, rendered, now, compositionMix.nodes);
+  drawIndependentNodeNetwork(context, rendered, width, height, now, compositionMix.nodes);
   rendered.forEach((item, index) => {
     drawPanel(
       trackedContext,
@@ -1359,9 +1401,7 @@ export function drawTelemetryOverlay(
       item.progress,
       item.life,
       item.changing,
-      index,
       compositionMix.frames,
-      compositionMix.nodes,
     );
   });
 
