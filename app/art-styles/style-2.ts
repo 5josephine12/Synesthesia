@@ -302,10 +302,10 @@ export function drawDottedSigil(
   // axes on the short side prevents a single Pixel note from spanning most of
   // a wide display while preserving the exact-square pixel grid within it.
   const footprintBasis = Math.min(viewportWidth, viewportHeight);
-  const compactWidth = lerp(0.09, 0.13, hash(seed, 211));
-  const expandedWidth = lerp(0.14, 0.2, hash(seed, 211));
-  const compactHeight = lerp(0.065, 0.09, hash(seed, 227));
-  const expandedHeight = lerp(0.1, 0.145, hash(seed, 227));
+  const compactWidth = lerp(0.18, 0.26, hash(seed, 211));
+  const expandedWidth = lerp(0.28, 0.4, hash(seed, 211));
+  const compactHeight = lerp(0.13, 0.18, hash(seed, 227));
+  const expandedHeight = lerp(0.2, 0.29, hash(seed, 227));
   const widthVariation = lerp(0.96, 1.04, clamp((stretch - 0.78) / 0.54, 0, 1));
   const heightVariation = archetype === "canopy" ? 1.04 : 1;
   const fieldWidth = footprintBasis * lerp(compactWidth, expandedWidth, footprintGrowth) * widthVariation;
