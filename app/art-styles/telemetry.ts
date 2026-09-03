@@ -120,6 +120,7 @@ const ENTRY_MORPH_MS = Math.min(720, MORPH_MS, DISTANT_MORPH_MS);
 const COMPOSITION_MODE_TRANSITION_MS = 760;
 
 const MAX_PANELS = 3;
+const MAX_VISIBLE_FRAME_ASSETS = 2;
 const DATA_GAP = 10;
 const PANEL_GAP = 62;
 const PANEL_COLLISION_GAP = 18;
@@ -423,18 +424,32 @@ function visualizationFrame(
   const sine = Math.abs(Math.sin(node.angle));
   const projectedHalfWidth = cosine * halfWidth + sine * halfHeight;
   const projectedHalfHeight = sine * halfWidth + cosine * halfHeight;
-  const centerX = node.x * width;
-  const centerY = node.y * height;
+  const unclampedCenterX = node.x * width;
+  const unclampedCenterY = node.y * height;
+  const frameWidth = Math.min(projectedHalfWidth * 2, Math.max(28, width - 28));
+  const frameHeight = Math.min(projectedHalfHeight * 2, Math.max(28, height - 28));
+  const frameX = clamp(
+    unclampedCenterX - frameWidth / 2,
+    14,
+    Math.max(14, width - frameWidth - 14),
+  );
+  const frameY = clamp(
+    unclampedCenterY - frameHeight / 2,
+    14,
+    Math.max(14, height - frameHeight - 14),
+  );
+  const centerX = frameX + frameWidth / 2;
+  const centerY = frameY + frameHeight / 2;
 
   return {
-    x: centerX - projectedHalfWidth,
-    y: centerY - projectedHalfHeight,
-    width: projectedHalfWidth * 2,
-    height: projectedHalfHeight * 2,
+    x: frameX,
+    y: frameY,
+    width: frameWidth,
+    height: frameHeight,
     centerX,
     centerY,
-    halfWidth: projectedHalfWidth,
-    halfHeight: projectedHalfHeight,
+    halfWidth: frameWidth / 2,
+    halfHeight: frameHeight / 2,
     angle: 0,
   };
 }
@@ -754,20 +769,26 @@ function drawIndependentNodeNetwork(
   }
 }
 
-/** Full tracking frames from the original effect, without corner brackets. */
-function drawVisualizationFrame(
+/** A tracking frame and its leader are one indivisible on-screen asset. */
+function drawVisualizationFrameAsset(
   context: CanvasRenderingContext2D,
   frame: VisualizationFrame,
+  pose: PanelPose,
   life: number,
 ) {
   if (life <= 0.001) return;
+  const edge = frameAnchor(frame, pose.dockX, pose.dockY);
   context.save();
   context.globalCompositeOperation = "source-over";
   context.strokeStyle = glowColor(0.74 * life);
   context.shadowColor = glowColor(0.64 * life);
   context.shadowBlur = 6;
   context.lineWidth = 1.28;
-  context.strokeRect(frame.x, frame.y, frame.width, frame.height);
+  context.beginPath();
+  context.rect(frame.x, frame.y, frame.width, frame.height);
+  context.moveTo(edge.x, edge.y);
+  context.lineTo(pose.dockX, pose.dockY);
+  context.stroke();
   context.restore();
 }
 
@@ -1154,24 +1175,9 @@ function drawPanel(
   changing: boolean,
   frameMix: number,
 ) {
-  const { pose, frame } = current;
+  const { pose } = current;
   const viewport = pose.viewport;
-  const edge = frameAnchor(frame, pose.dockX, pose.dockY);
   const panelLife = life * frameMix;
-
-  if (panelLife > 0.001) {
-    context.save();
-    context.globalCompositeOperation = "source-over";
-    context.strokeStyle = glowColor(0.78 * panelLife);
-    context.shadowColor = glowColor(0.72 * panelLife);
-    context.shadowBlur = 6;
-    context.lineWidth = 0.95;
-    context.beginPath();
-    context.moveTo(edge.x, edge.y);
-    context.lineTo(pose.dockX, pose.dockY);
-    context.stroke();
-    context.restore();
-  }
 
   // The independent node network owns every node. Frame connectors remain
   // clean and disappear completely in a nodes-only composition.
@@ -1374,23 +1380,29 @@ export function drawTelemetryOverlay(
       changing: state.targetKey !== nodeKey(state.from.node) && rawProgress < 1,
     };
   });
+  const frameItems = rendered.slice(-MAX_VISIBLE_FRAME_ASSETS);
 
   const snapshots = compositionMix.frames > 0.001
     ? prepareSnapshotStrip(
         context,
-        rendered.flatMap(({ state }) => [state.from.frame, state.to.frame]),
+        frameItems.flatMap(({ state }) => [state.from.frame, state.to.frame]),
         width,
         height,
         now,
-        rendered.map(({ state }) => state.targetKey).join("|"),
+        frameItems.map(({ state }) => state.targetKey).join("|"),
       )
     : null;
 
-  for (const item of rendered) {
-    drawVisualizationFrame(context, item.current.frame, item.life * compositionMix.frames);
+  for (const item of frameItems) {
+    drawVisualizationFrameAsset(
+      context,
+      item.current.frame,
+      item.current.pose,
+      item.life * compositionMix.frames,
+    );
   }
   drawIndependentNodeNetwork(context, rendered, width, height, now, compositionMix.nodes);
-  rendered.forEach((item, index) => {
+  frameItems.forEach((item, index) => {
     drawPanel(
       trackedContext,
       item.state.from,
