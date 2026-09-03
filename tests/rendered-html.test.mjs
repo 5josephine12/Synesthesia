@@ -259,7 +259,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
   assert.match(
     telemetrySource,
-    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["both", "nodes", "frames"\]/,
+    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \["both", "nodes", "frames", "nodes"\]/,
   );
   assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 760/);
   assert.match(telemetrySource, /function currentCompositionMix/);
@@ -272,6 +272,8 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /function drawIndependentNodeNetwork/);
   assert.match(telemetrySource, /function drawConnectionTerminal/);
   assert.match(telemetrySource, /function drawRelayNode/);
+  assert.match(telemetrySource, /const size = kind === 0 \? 2\.8 : 4\.2/);
+  assert.match(telemetrySource, /const halfSize = kind === 0 \? 6\.2 : 7\.8/);
   assert.match(telemetrySource, /function drawVisualizationFrame/);
   assert.match(telemetrySource, /context\.lineWidth = focused \? 1\.2 : 0\.95/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
@@ -301,6 +303,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /if \(panelLife <= 0\.001\) return/);
   assert.match(telemetrySource, /pointAt\(0\.38\)/);
   assert.match(telemetrySource, /pointAt\(0\.68\)/);
+  assert.match(telemetrySource, /context\.strokeStyle = glowColor\(0\.74 \* life\)/);
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {

@@ -131,10 +131,10 @@ const SNAPSHOT_FRAME_INTERVAL = 1000 / 15;
 const HUD_ACCENT = "232, 234, 236";
 const HUD_GLOW = "255, 255, 255";
 const NODE_NETWORK_ROUTES: readonly (readonly NodeNetworkPoint[])[] = [
-  [[0.08, 0.2], [0.31, 0.37], [0.57, 0.18], [0.9, 0.34]],
-  [[0.1, 0.67], [0.35, 0.48], [0.61, 0.65], [0.88, 0.4]],
-  [[0.17, 0.12], [0.29, 0.43], [0.55, 0.56], [0.83, 0.72]],
-  [[0.09, 0.48], [0.34, 0.25], [0.63, 0.49], [0.91, 0.2]],
+  [[0.07, 0.2], [0.23, 0.31], [0.41, 0.38], [0.62, 0.18], [0.91, 0.34]],
+  [[0.08, 0.67], [0.25, 0.56], [0.43, 0.47], [0.65, 0.64], [0.9, 0.39]],
+  [[0.16, 0.11], [0.25, 0.31], [0.31, 0.47], [0.57, 0.57], [0.85, 0.72]],
+  [[0.07, 0.49], [0.24, 0.34], [0.39, 0.24], [0.65, 0.5], [0.92, 0.19]],
 ] as const;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
@@ -146,7 +146,7 @@ let cachedChordLabels = new Map<number, string | null>();
 let cachedChordFirstId = -1;
 let cachedChordLastId = -1;
 let cachedChordNodeCount = -1;
-const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames"];
+const COMPOSITION_MODES: readonly OverlayCompositionMode[] = ["both", "nodes", "frames", "nodes"];
 let compositionModeIndex = -1;
 let nodeNetworkRouteIndex = -1;
 let compositionTransition: OverlayCompositionTransition = {
@@ -528,14 +528,14 @@ function drawConnectionTerminal(
   alpha: number,
 ) {
   const kind = ((variant % 3) + 3) % 3;
-  const size = kind === 0 ? 2.2 : 3.4;
+  const size = kind === 0 ? 2.8 : 4.2;
 
   context.save();
   context.globalCompositeOperation = "source-over";
   context.fillStyle = glowColor(alpha);
   context.strokeStyle = glowColor(alpha);
   context.shadowColor = glowColor(alpha);
-  context.shadowBlur = 5;
+  context.shadowBlur = 7;
   context.lineWidth = 1;
   context.translate(point.x, point.y);
   if (kind === 0) {
@@ -557,7 +557,7 @@ function drawRelayNode(
   alpha: number,
 ) {
   const kind = ((variant % 3) + 3) % 3;
-  const halfSize = kind === 0 ? 5.2 : 6.4;
+  const halfSize = kind === 0 ? 6.2 : 7.8;
 
   context.save();
   context.globalCompositeOperation = "source-over";
@@ -566,8 +566,8 @@ function drawRelayNode(
   context.strokeStyle = glowColor(alpha);
   context.fillStyle = glowColor(alpha * 0.9);
   context.shadowColor = glowColor(alpha * 0.8);
-  context.shadowBlur = 7;
-  context.lineWidth = 1;
+  context.shadowBlur = 9;
+  context.lineWidth = 1.1;
   if (kind === 0) {
     context.beginPath();
     context.arc(0, 0, halfSize, 0, Math.PI * 2);
@@ -609,7 +609,7 @@ function drawRoutedConnection(
     x: start.x + deltaX * 0.68 - normalX * curve * 0.46,
     y: start.y + deltaY * 0.68 - normalY * curve * 0.46,
   };
-  const alpha = life * reveal * (focused ? 0.9 : 0.72);
+  const alpha = life * reveal * (focused ? 0.98 : 0.84);
   const color = (opacity: number) => `rgba(255, 255, 255, ${opacity})`;
 
   const pointAt = (amount: number) => {
@@ -655,9 +655,9 @@ function drawRoutedConnection(
     end.x,
     end.y,
   );
-  context.strokeStyle = color(alpha * 0.3);
-  context.shadowColor = color(alpha * 0.72);
-  context.shadowBlur = focused ? 8 : 6;
+  context.strokeStyle = color(alpha * 0.38);
+  context.shadowColor = color(alpha * 0.86);
+  context.shadowBlur = focused ? 10 : 8;
   context.lineWidth = focused ? 3.2 : 2.7;
   context.stroke();
   context.shadowBlur = focused ? 4 : 3;
@@ -763,10 +763,10 @@ function drawVisualizationFrame(
   if (life <= 0.001) return;
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = glowColor(0.52 * life);
-  context.shadowColor = glowColor(0.42 * life);
-  context.shadowBlur = 4;
-  context.lineWidth = 1.05;
+  context.strokeStyle = glowColor(0.74 * life);
+  context.shadowColor = glowColor(0.64 * life);
+  context.shadowBlur = 6;
+  context.lineWidth = 1.28;
   context.strokeRect(frame.x, frame.y, frame.width, frame.height);
   context.restore();
 }
@@ -1162,9 +1162,9 @@ function drawPanel(
   if (panelLife > 0.001) {
     context.save();
     context.globalCompositeOperation = "source-over";
-    context.strokeStyle = glowColor(0.68 * panelLife);
-    context.shadowColor = glowColor(0.62 * panelLife);
-    context.shadowBlur = 5;
+    context.strokeStyle = glowColor(0.78 * panelLife);
+    context.shadowColor = glowColor(0.72 * panelLife);
+    context.shadowBlur = 6;
     context.lineWidth = 0.95;
     context.beginPath();
     context.moveTo(edge.x, edge.y);
@@ -1194,9 +1194,9 @@ function drawPanel(
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = accentColor(to.node.color, 0.76 * panelLife);
-  context.shadowColor = glowColor(0.9 * panelLife);
-  context.shadowBlur = 7;
+  context.strokeStyle = accentColor(to.node.color, 0.9 * panelLife);
+  context.shadowColor = glowColor(panelLife);
+  context.shadowBlur = 9;
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.stroke();
   context.restore();
