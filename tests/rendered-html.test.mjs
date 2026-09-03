@@ -450,6 +450,9 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const edgeOrigin =/);
   assert.match(styleThreeSource, /context\.fill\(shape\.fill\)/);
   assert.match(styleThreeSource, /context\.stroke\(shape\.fill\)/);
+  const unionStrokeIndex = styleThreeSource.indexOf("for (const shape of shapes) context.stroke(shape.fill);");
+  const unionFillIndex = styleThreeSource.indexOf("for (const shape of shapes) context.fill(shape.fill);");
+  assert.ok(unionStrokeIndex >= 0 && unionFillIndex > unionStrokeIndex);
   assert.doesNotMatch(styleThreeSource, /const trunk|sampleShape|forkCount|responsiveCenter|index < 2/);
   assert.match(styleThreeSource, /context\.fillStyle = "#ffffff"/);
   assert.match(styleThreeSource, /rgba\(0, 0, 0/);

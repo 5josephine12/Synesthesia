@@ -428,14 +428,14 @@ function drawInkComposition(
   context.strokeStyle = `rgba(0, 0, 0, ${outlineAlpha})`;
   context.lineWidth = clamp(shortSide * 0.00078, 0.72, 1.08);
   context.fillStyle = "#ffffff";
-  for (const shape of shapes) {
-    context.stroke(shape.fill);
-    context.fill(shape.fill);
-  }
-  for (const fragment of fragments) {
-    context.stroke(fragment);
-    context.fill(fragment);
-  }
+
+  // Establish every contour first, then cover them with the complete white
+  // silhouette. Where forms touch or cross, the later union fill erases the
+  // interior seams and leaves only the outside edge of the combined body.
+  for (const shape of shapes) context.stroke(shape.fill);
+  for (const fragment of fragments) context.stroke(fragment);
+  for (const shape of shapes) context.fill(shape.fill);
+  for (const fragment of fragments) context.fill(fragment);
 
   context.restore();
 }
