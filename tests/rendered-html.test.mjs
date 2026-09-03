@@ -252,9 +252,8 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
   assert.match(telemetrySource, /function drawFrameNetwork/);
   assert.match(telemetrySource, /function drawConnectionTerminal/);
-  assert.match(telemetrySource, /function drawRelayFrame/);
-  assert.match(telemetrySource, /drawRelayFrame\(context, pointAt\(0\.38\)/);
-  assert.match(telemetrySource, /context\.lineWidth = focused \? 1\.75 : 1\.35/);
+  assert.match(telemetrySource, /function drawVisualizationFrame/);
+  assert.match(telemetrySource, /context\.lineWidth = focused \? 1\.2 : 0\.95/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
   assert.match(telemetrySource, /panelVariant: number/);
   assert.match(telemetrySource, /function viewportFrame/);
@@ -262,13 +261,14 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const curve = clamp\(distance \* 0\.1, 10, 34\)/);
   assert.doesNotMatch(telemetrySource, /const palettes =/);
   assert.doesNotMatch(telemetrySource, /function drawCornerBrackets/);
-  assert.doesNotMatch(telemetrySource, /function drawVisualizationFrame/);
+  assert.doesNotMatch(telemetrySource, /function drawRelayFrame/);
   assert.doesNotMatch(telemetrySource, /function drawOperatorChrome/);
   assert.doesNotMatch(telemetrySource, /function drawMorphConnector/);
   assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
-  assert.doesNotMatch(telemetrySource, /const edge = frameAnchor\(frame, pose\.dockX, pose\.dockY\)/);
+  assert.match(telemetrySource, /const edge = frameAnchor\(frame, pose\.dockX, pose\.dockY\)/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(telemetrySource, /drawFrameNetwork\(context, rendered, now\)/);
+  assert.match(telemetrySource, /drawVisualizationFrame\(context, item\.current\.frame, item\.life\)/);
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {
