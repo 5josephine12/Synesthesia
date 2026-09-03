@@ -133,12 +133,14 @@ test("exports GIFs at preview quality with a stable full palette", async () => {
   assert.match(source, /palette: frame === 0 \? globalPalette : undefined/);
   assert.match(source, /const artworkHistoryRef = useRef<BlobParticle\[\]>\(\[\]\)/);
   assert.match(source, /const exportSnapshotRef = useRef<ArtworkExportSnapshot \| null>\(null\)/);
-  assert.match(source, /particles: artworkHistoryRef\.current\.map\(\(particle\) => \(\{ \.\.\.particle \}\)\)/);
+  assert.match(source, /particles: artworkHistoryRef\.current\.slice\(\)/);
   assert.match(source, /const exportBlobs = exportSnapshot\?\.particles \?\? blobsRef\.current/);
   assert.match(source, /const exportNow = exportSnapshot\?\.capturedAt \?\? performance\.now\(\)/);
   assert.match(source, /exportSnapshot === null &&\s*compactedHistoryActiveRef\.current/);
   assert.match(source, /artworkHistoryRef\.current\.push\(nextBlob\)/);
-  assert.match(source, /artworkHistoryRef\.current = artworkHistoryRef\.current\.map/);
+  assert.match(source, /const activeHistoryStartRef = useRef\(0\)/);
+  assert.match(source, /for \(let index = activeHistoryStartRef\.current; index < artworkHistory\.length; index \+= 1\)/);
+  assert.match(source, /activeHistoryStartRef\.current = artworkHistory\.length/);
 });
 
 test("exports the still image directly from its preview-quality canvas", async () => {
@@ -431,7 +433,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const DOTTED_GLOW_MATURATION_DURATION = 7200/);
   assert.match(
     auraSource,
-    /blob\.artStyle === "style-2" &&\s*blob\.frozenAt === undefined &&\s*now - blob\.createdAt < DOTTED_FORMATION_SETTLE_DURATION/,
+    /!hasMovingDottedStyle &&\s*blob\.frozenAt === undefined &&\s*now - blob\.createdAt < DOTTED_FORMATION_SETTLE_DURATION/,
   );
   assert.match(auraSource, /drawDottedSigilFlowLayer\(\s*pixelContext/);
   assert.match(auraSource, /function drawPixelLayerAtBackingResolution/);
@@ -470,12 +472,12 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleTwoSource, /const expandedHeight = lerp\(0\.2, 0\.29, hash\(seed, 227\)\)/);
   assert.match(auraSource, /const PIXEL_COMPOSITION_ANCHORS =/);
   assert.match(auraSource, /expansion: clamp\(blob\.compositionIndex \/ 12, 0, 1\)/);
-  assert.match(auraSource, /const occupiedGridCells = new Set<string>\(\)/);
-  assert.match(styleTwoSource, /const reservedCells = occupiedCells \?\? new Set<string>\(\)/);
+  assert.match(auraSource, /const occupiedGridCells = new Set<number>\(\)/);
+  assert.match(styleTwoSource, /const reservedCells = occupiedCells \?\? new Set<number>\(\)/);
   assert.doesNotMatch(styleTwoSource, /candidateCells|activeCells|\.sort\(/);
   assert.match(styleTwoSource, /const bodyPaths = bodyColors\.map\(\(\) => new Path2D\(\)\)/);
   assert.match(styleTwoSource, /const glowPath = new Path2D\(\)/);
-  assert.match(styleTwoSource, /const cellKey = `\$\{column\}:\$\{row\}`/);
+  assert.match(styleTwoSource, /const cellKey = gridCellKey\(column, row\)/);
   assert.match(styleTwoSource, /if \(reservedCells\.has\(cellKey\)\) continue/);
   assert.doesNotMatch(styleTwoSource, /rowOffset|columnOffset|touchesOccupiedCell/);
   assert.match(styleTwoSource, /pixel\(bodyPaths\[tone\], gridX, gridY, pixelSize\)/);
@@ -512,7 +514,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /pixelLayer\.width = output\.width/);
   assert.match(auraSource, /const AURA_BACKING_PIXEL_BUDGET = 1_500_000/);
   assert.match(auraSource, /const AURA_RENDER_PIXEL_BUDGET = 360_000/);
-  assert.match(auraSource, /dpr = Math\.max\(1, Math\.min\(window\.devicePixelRatio \|\| 1, 1\.25, pixelBudgetRatio\)\)/);
+  assert.match(auraSource, /const nextDpr = Math\.max\([\s\S]*?Math\.min\(window\.devicePixelRatio \|\| 1, 1\.25, pixelBudgetRatio\)/);
   assert.match(styleTwoSource, /accentContext\.globalAlpha = clamp\(alpha \* \(0\.55 \+ emphasis \* 0\.3\)/);
   assert.match(auraSource, /const rgb565Cache = new Int16Array\(65536\)/);
   assert.doesNotMatch(auraSource, /const dottedBlobs = blobs\.slice/);
@@ -546,6 +548,9 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(telemetrySource, /export function telemetryNextFrameAt/);
   assert.match(auraSource, /scheduleRendererWake\(nextTelemetryFrameAt\)/);
   assert.match(auraSource, /now - runtime\.lastReadingAt >= 250/);
+  assert.match(auraSource, /const telemetryNodesScratch: BlobParticle\[\] = \[\]/);
+  assert.match(auraSource, /telemetryNodesScratch\.length = 0/);
+  assert.match(auraSource, /width === nextWidth &&\s*height === nextHeight &&\s*dpr === nextDpr/);
   assert.match(styles, /button\s*\{[\s\S]*?touch-action: manipulation/);
   assert.match(styles, /\.instrument-cluster\s*\{[\s\S]*?contain: layout paint style/);
   assert.match(styles, /\.piano-key\s*\{[\s\S]*?transition: transform 90ms/);
@@ -587,7 +592,8 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /metalheartRenderer\.drawMetalheartLayer\(context/);
   assert.match(auraSource, /styleEpoch: styleLayerEpochRef\.current/);
   assert.match(auraSource, /blob\.artStyle === previousStyle && blob\.frozenAt === undefined/);
-  assert.match(auraSource, /\? \{ \.\.\.blob, frozenAt \}/);
+  assert.match(auraSource, /liveBlobs\[index\] = \{ \.\.\.blob, frozenAt \}/);
+  assert.match(auraSource, /artworkHistory\[index\] = \{ \.\.\.blob, frozenAt \}/);
   assert.match(auraSource, /const layerIsLive = layerParticles\.some/);
   assert.match(auraSource, /pulse: layerIsLive \? metalheartPulse/);
   assert.match(auraSource, /\(blobStyle === "style-3" \|\| blobStyle === "style-4"\)/);
@@ -618,10 +624,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const isLoop = shapeRoll >= 0\.32/);
   assert.match(styleThreeSource, /const isPlate = shapeRoll >= 0\.92/);
   assert.match(styleThreeSource, /const edgeOrigin =/);
-  assert.match(styleThreeSource, /context\.fill\(shape\.fill\)/);
-  assert.match(styleThreeSource, /context\.stroke\(shape\.fill\)/);
-  const unionStrokeIndex = styleThreeSource.indexOf("for (const shape of shapes) context.stroke(shape.fill);");
-  const unionFillIndex = styleThreeSource.indexOf("for (const shape of shapes) context.fill(shape.fill);");
+  assert.match(styleThreeSource, /context\.fill\(shape\)/);
+  assert.match(styleThreeSource, /context\.stroke\(shape\)/);
+  assert.doesNotMatch(styleThreeSource, /const centers: Point\[\]|const widths: number\[\]|const tangentAngles: number\[\]/);
+  const unionStrokeIndex = styleThreeSource.indexOf("for (const shape of shapes) context.stroke(shape);");
+  const unionFillIndex = styleThreeSource.indexOf("for (const shape of shapes) context.fill(shape);");
   assert.ok(unionStrokeIndex >= 0 && unionFillIndex > unionStrokeIndex);
   assert.doesNotMatch(styleThreeSource, /const trunk|sampleShape|forkCount|responsiveCenter|index < 2/);
   assert.match(styleThreeSource, /context\.fillStyle = "#ffffff"/);
@@ -657,7 +664,8 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleFourSource, /glowGradient\.addColorStop\(0\.68/);
   assert.doesNotMatch(styleFourSource, /glowContext\.filter/);
   assert.doesNotMatch(styleFourSource, /Math\.cos\(angle\)|Math\.sin\(angle\)/);
-  assert.match(styleFourSource, /const occupiedDots = new Map/);
+  assert.match(styleFourSource, /const occupiedDots = new Map<number/);
+  assert.match(styleFourSource, /gridCellKey\(cellX \+ offsetX, cellY \+ offsetY\)/);
   assert.match(styleFourSource, /overlapsExistingDot/);
   assert.match(auraSource, /context\.globalCompositeOperation = blendsWithEarlierArtwork \? "screen" : "source-over"/);
   assert.match(auraSource, /context\.globalCompositeOperation = "color"/);

@@ -19,7 +19,7 @@ export type DottedSigilOptions = {
   stretch: number;
   curvature: number;
   accentContext?: CanvasRenderingContext2D;
-  occupiedCells?: Set<string>;
+  occupiedCells?: Set<number>;
 };
 
 export type DottedSigilColor = {
@@ -92,6 +92,10 @@ function pixel(
 
 function distance(x: number, y: number) {
   return Math.hypot(x, y);
+}
+
+function gridCellKey(column: number, row: number) {
+  return ((column & 0xffff) << 16) | (row & 0xffff);
 }
 
 function almond(x: number, y: number, width: number, height: number) {
@@ -315,7 +319,7 @@ export function drawDottedSigil(
   const startRow = Math.floor((centerY - fieldHeight) / gridStep);
   const endRow = Math.ceil((centerY + fieldHeight) / gridStep);
   const pixelSize = Math.max(1, Math.round(gridStep * 0.5));
-  const reservedCells = occupiedCells ?? new Set<string>();
+  const reservedCells = occupiedCells ?? new Set<number>();
   const bodyPaths = bodyColors.map(() => new Path2D());
   const glowPath = new Path2D();
   let activeCellCount = 0;
@@ -350,7 +354,7 @@ export function drawDottedSigil(
         0,
         1,
       );
-      const cellKey = `${column}:${row}`;
+      const cellKey = gridCellKey(column, row);
       if (reservedCells.has(cellKey)) continue;
       reservedCells.add(cellKey);
 

@@ -62,6 +62,10 @@ function hsla(
   return `hsla(${color.h}, ${clamp(color.s + saturationOffset, 0, 100)}%, ${clamp(color.l + lightnessOffset, 0, 100)}%, ${alpha})`;
 }
 
+function gridCellKey(column: number, row: number) {
+  return ((column & 0xffff) << 16) | (row & 0xffff);
+}
+
 class HalftoneRenderer {
   readonly canvas: HTMLCanvasElement;
 
@@ -124,7 +128,7 @@ class HalftoneRenderer {
     particle: LiquidMetalParticleState,
     now: number,
     reducedMotion: boolean,
-    occupiedDots: Map<string, Array<{ x: number; y: number; radius: number }>>,
+    occupiedDots: Map<number, Array<{ x: number; y: number; radius: number }>>,
   ) {
     const effectiveNow = particle.frozenAt ?? now;
     const age = reducedMotion && particle.frozenAt === undefined
@@ -208,7 +212,7 @@ class HalftoneRenderer {
         let overlapsExistingDot = false;
         for (let offsetY = -2; offsetY <= 2 && !overlapsExistingDot; offsetY += 1) {
           for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
-            const nearby = occupiedDots.get(`${cellX + offsetX}:${cellY + offsetY}`);
+            const nearby = occupiedDots.get(gridCellKey(cellX + offsetX, cellY + offsetY));
             if (!nearby) continue;
             if (nearby.some((dot) => Math.hypot(px - dot.x, py - dot.y) < (radius + dot.radius) * 0.74)) {
               overlapsExistingDot = true;
@@ -217,7 +221,7 @@ class HalftoneRenderer {
           }
         }
         if (overlapsExistingDot) continue;
-        const cellKey = `${cellX}:${cellY}`;
+        const cellKey = gridCellKey(cellX, cellY);
         const occupiedCell = occupiedDots.get(cellKey);
         if (occupiedCell) occupiedCell.push({ x: px, y: py, radius });
         else occupiedDots.set(cellKey, [{ x: px, y: py, radius }]);
@@ -310,7 +314,7 @@ class HalftoneRenderer {
     this.regionContext.setTransform(1, 0, 0, 1, 0, 0);
     this.regionContext.clearRect(0, 0, this.width, this.height);
     let forming = false;
-    const occupiedDots = new Map<string, Array<{ x: number; y: number; radius: number }>>();
+    const occupiedDots = new Map<number, Array<{ x: number; y: number; radius: number }>>();
     for (let index = active.length - 1; index >= 0; index -= 1) {
       if (this.drawField(active[index], now, reducedMotion, occupiedDots)) forming = true;
     }

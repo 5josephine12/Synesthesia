@@ -95,10 +95,6 @@ type RibbonSpec = {
   hook: number;
 };
 
-type InkShape = {
-  fill: Path2D;
-};
-
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -139,15 +135,6 @@ function hash(seed: number, index: number) {
   return ((value ^ (value >>> 15)) >>> 0) / 4294967296;
 }
 
-function rotatePoint(point: Point, origin: Point, angle: number): Point {
-  const cosine = Math.cos(angle);
-  const sine = Math.sin(angle);
-  return {
-    x: origin.x + point.x * cosine - point.y * sine,
-    y: origin.y + point.x * sine + point.y * cosine,
-  };
-}
-
 function traceBoundary(points: readonly Point[], path = new Path2D()) {
   if (points.length === 0) return path;
   path.moveTo(points[0].x, points[0].y);
@@ -157,34 +144,7 @@ function traceBoundary(points: readonly Point[], path = new Path2D()) {
   return path;
 }
 
-function localRibbonCenter(spec: RibbonSpec, progress: number): Point {
-  const phase = hash(spec.seed, 3) * TAU;
-  const envelope = Math.sin(progress * Math.PI);
-  const direction = hash(spec.seed, 11) > 0.5 ? 1 : -1;
-  const broadCurve = Math.pow(progress, 1.35) * spec.bend * spec.length;
-  const primaryWave =
-    Math.sin(progress * Math.PI * lerp(0.62, 1.08, hash(spec.seed, 5)) + phase) *
-    spec.length *
-    spec.wave *
-    envelope;
-  const firstElbow = Math.max(0, progress - 0.31) * spec.length * 0.052 * direction;
-  const secondElbow = Math.max(0, progress - 0.67) * spec.length * 0.085 * -direction;
-  const hook =
-    spec.hook *
-    spec.length *
-    0.17 *
-    Math.pow(smoothstep(0.68, 1, progress), 1.35);
-  return {
-    x: progress * spec.length,
-    y: broadCurve + primaryWave + firstElbow + secondElbow + hook,
-  };
-}
-
-function worldRibbonCenter(spec: RibbonSpec, progress: number) {
-  return rotatePoint(localRibbonCenter(spec, progress), spec.origin, spec.angle);
-}
-
-function ribbonWidth(spec: RibbonSpec, normalized: number, edge: -1 | 1) {
+function ribbonWidth(spec: RibbonSpec, normalized: number, edgePhase: number) {
   const taper = Math.pow(Math.max(0.002, 1 - normalized), 0.36);
   const section = normalized < 0.16
     ? 0.68
@@ -195,51 +155,80 @@ function ribbonWidth(spec: RibbonSpec, normalized: number, edge: -1 | 1) {
         : normalized < 0.79
           ? 0.92 + spec.lobe * 0.28
           : 0.5;
-  const edgePhase = hash(spec.seed, edge > 0 ? 17 : 19) * TAU;
   const machinedVariance = Math.sin(normalized * TAU * 3 + edgePhase) * 0.022;
   return Math.max(0.24, spec.width * (section + machinedVariance) * taper);
 }
 
-function buildRibbon(spec: RibbonSpec): InkShape {
+function buildRibbon(spec: RibbonSpec) {
   const reveal = clamp(spec.reveal, 0.025, 1);
   const samples = Math.max(12, Math.ceil(44 * reveal));
   const left: Point[] = [];
   const right: Point[] = [];
-  const centers: Point[] = [];
-  const widths: number[] = [];
-  const tangentAngles: number[] = [];
+  const phase = hash(spec.seed, 3) * TAU;
+  const direction = hash(spec.seed, 11) > 0.5 ? 1 : -1;
+  const waveFrequency = lerp(0.62, 1.08, hash(spec.seed, 5));
+  const leftEdgePhase = hash(spec.seed, 17) * TAU;
+  const rightEdgePhase = hash(spec.seed, 19) * TAU;
+  const cosine = Math.cos(spec.angle);
+  const sine = Math.sin(spec.angle);
+  const center = { x: 0, y: 0 };
+  const previous = { x: 0, y: 0 };
+  const next = { x: 0, y: 0 };
+  let tipX = spec.origin.x;
+  let tipY = spec.origin.y;
+  let tipTangentAngle = spec.angle;
+
+  const centerAt = (progress: number, point: Point) => {
+    const envelope = Math.sin(progress * Math.PI);
+    const localX = progress * spec.length;
+    const broadCurve = Math.pow(progress, 1.35) * spec.bend * spec.length;
+    const primaryWave =
+      Math.sin(progress * Math.PI * waveFrequency + phase) *
+      spec.length *
+      spec.wave *
+      envelope;
+    const firstElbow = Math.max(0, progress - 0.31) * spec.length * 0.052 * direction;
+    const secondElbow = Math.max(0, progress - 0.67) * spec.length * 0.085 * -direction;
+    const hook =
+      spec.hook *
+      spec.length *
+      0.17 *
+      Math.pow(smoothstep(0.68, 1, progress), 1.35);
+    const localY = broadCurve + primaryWave + firstElbow + secondElbow + hook;
+    point.x = spec.origin.x + localX * cosine - localY * sine;
+    point.y = spec.origin.y + localX * sine + localY * cosine;
+  };
 
   for (let index = 0; index <= samples; index += 1) {
     const normalized = index / samples;
     const progress = normalized * reveal;
-    const center = worldRibbonCenter(spec, progress);
-    const previous = worldRibbonCenter(spec, Math.max(0, progress - 0.0035));
-    const next = worldRibbonCenter(spec, Math.min(1, progress + 0.0035));
+    centerAt(progress, center);
+    centerAt(Math.max(0, progress - 0.0035), previous);
+    centerAt(Math.min(1, progress + 0.0035), next);
     const tangentAngle = Math.atan2(next.y - previous.y, next.x - previous.x);
     const normalX = -Math.sin(tangentAngle);
     const normalY = Math.cos(tangentAngle);
-    const leftWidth = ribbonWidth(spec, normalized, 1);
-    const rightWidth = ribbonWidth(spec, normalized, -1);
-    centers.push(center);
-    widths.push((leftWidth + rightWidth) * 0.5);
-    tangentAngles.push(tangentAngle);
+    const leftWidth = ribbonWidth(spec, normalized, leftEdgePhase);
+    const rightWidth = ribbonWidth(spec, normalized, rightEdgePhase);
     left.push({ x: center.x + normalX * leftWidth, y: center.y + normalY * leftWidth });
     right.push({ x: center.x - normalX * rightWidth, y: center.y - normalY * rightWidth });
+    tipX = center.x;
+    tipY = center.y;
+    tipTangentAngle = tangentAngle;
   }
 
   const fill = new Path2D();
   traceBoundary(left, fill);
-  const tip = centers[centers.length - 1];
   fill.quadraticCurveTo(
-    tip.x + Math.cos(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
-    tip.y + Math.sin(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
+    tipX + Math.cos(tipTangentAngle) * spec.length * 0.025,
+    tipY + Math.sin(tipTangentAngle) * spec.length * 0.025,
     right[right.length - 1].x,
     right[right.length - 1].y,
   );
   for (let index = right.length - 2; index >= 0; index -= 1) fill.lineTo(right[index].x, right[index].y);
   fill.closePath();
 
-  return { fill };
+  return fill;
 }
 
 function buildLoop(
@@ -252,18 +241,18 @@ function buildLoop(
   startAngle: number,
   sweep: number,
   reveal: number,
-): InkShape {
+): Path2D {
   const visibleSweep = sweep * clamp(reveal, 0.025, 1);
   const samples = Math.max(16, Math.ceil(Math.abs(visibleSweep) * 14));
   const left: Point[] = [];
   const right: Point[] = [];
+  const cosine = Math.cos(rotation);
+  const sine = Math.sin(rotation);
   for (let index = 0; index <= samples; index += 1) {
     const progress = index / samples;
     const angle = startAngle + visibleSweep * progress;
     const localTangentX = -Math.sin(angle) * radiusX * Math.sign(visibleSweep);
     const localTangentY = Math.cos(angle) * radiusY * Math.sign(visibleSweep);
-    const cosine = Math.cos(rotation);
-    const sine = Math.sin(rotation);
     const tangentX = localTangentX * cosine - localTangentY * sine;
     const tangentY = localTangentX * sine + localTangentY * cosine;
     const tangentLength = Math.max(0.0001, Math.hypot(tangentX, tangentY));
@@ -273,13 +262,12 @@ function buildLoop(
     const mechanicalStep = progress < 0.28 ? 0.72 : progress < 0.64 ? 1.08 : 0.62;
     const variation = 1 + Math.sin(progress * TAU * 3 + hash(seed, 11) * TAU) * 0.025;
     const halfWidth = Math.max(0.22, width * endTaper * mechanicalStep * variation);
-    const point = rotatePoint(
-      { x: Math.cos(angle) * radiusX, y: Math.sin(angle) * radiusY },
-      center,
-      rotation,
-    );
-    left.push({ x: point.x + normalX * halfWidth, y: point.y + normalY * halfWidth });
-    right.push({ x: point.x - normalX * halfWidth, y: point.y - normalY * halfWidth });
+    const localX = Math.cos(angle) * radiusX;
+    const localY = Math.sin(angle) * radiusY;
+    const pointX = center.x + localX * cosine - localY * sine;
+    const pointY = center.y + localX * sine + localY * cosine;
+    left.push({ x: pointX + normalX * halfWidth, y: pointY + normalY * halfWidth });
+    right.push({ x: pointX - normalX * halfWidth, y: pointY - normalY * halfWidth });
   }
   const fill = new Path2D();
   traceBoundary(left, fill);
@@ -287,17 +275,18 @@ function buildLoop(
     fill.lineTo(right[index].x, right[index].y);
   }
   fill.closePath();
-  return { fill };
+  return fill;
 }
 
 function makeFragment(seed: number, center: Point, scale: number) {
   const points: Point[] = [];
   const count = 5 + Math.floor(hash(seed, 5) * 3);
+  const widthScale = lerp(0.65, 1.45, hash(seed, 29));
   for (let index = 0; index < count; index += 1) {
     const angle = (index / count) * TAU;
     const radius = scale * lerp(0.42, 1, hash(seed, 13 + index));
     points.push({
-      x: center.x + Math.cos(angle) * radius * lerp(0.65, 1.45, hash(seed, 29)),
+      x: center.x + Math.cos(angle) * radius * widthScale,
       y: center.y + Math.sin(angle) * radius,
     });
   }
@@ -323,7 +312,7 @@ function drawInkComposition(
   beatAccent: number,
 ) {
   const shortSide = Math.min(width, height);
-  const shapes: InkShape[] = [];
+  const shapes: Path2D[] = [];
   const fragments: Path2D[] = [];
   const motionTime = reducedMotion ? 0 : now * 0.00016;
 
@@ -462,9 +451,9 @@ function drawInkComposition(
   // Establish every contour first, then cover them with the complete white
   // silhouette. Where forms touch or cross, the later union fill erases the
   // interior seams and leaves only the outside edge of the combined body.
-  for (const shape of shapes) context.stroke(shape.fill);
+  for (const shape of shapes) context.stroke(shape);
   for (const fragment of fragments) context.stroke(fragment);
-  for (const shape of shapes) context.fill(shape.fill);
+  for (const shape of shapes) context.fill(shape);
   for (const fragment of fragments) context.fill(fragment);
 
   context.restore();
@@ -636,9 +625,9 @@ export function drawMetalheartParticle(
   context.save();
   context.strokeStyle = `rgba(0, 0, 0, ${clamp(options.alpha * 0.94, 0, 0.96)})`;
   context.lineWidth = clamp(options.radius * 0.013, 1.7, 2.7);
-  context.stroke(shape.fill);
+  context.stroke(shape);
   context.fillStyle = "#ffffff";
-  context.fill(shape.fill);
+  context.fill(shape);
   context.restore();
 }
 

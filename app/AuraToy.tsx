@@ -2017,7 +2017,7 @@ function drawDottedSigilFlowLayer(
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  const occupiedGridCells = new Set<string>();
+  const occupiedGridCells = new Set<number>();
   for (let position = dottedIndices.length - 1; position >= 0; position -= 1) {
     const index = dottedIndices[position];
     const blob = blobs[index];
@@ -2215,9 +2215,11 @@ function drawChronologicalAuraLayers(
       }
     } else if (runKind === "metalheart") {
       if (metalheartRenderer) {
-        const layerParticles = blobs
-          .slice(runStart, runEnd)
-          .filter((blob) => visibleMetalheartIds.has(blob.id));
+        const layerParticles: BlobParticle[] = [];
+        for (let index = runStart; index < runEnd; index += 1) {
+          const blob = blobs[index];
+          if (visibleMetalheartIds.has(blob.id)) layerParticles.push(blob);
+        }
         if (layerParticles.length > 0) {
           const layerIsLive = layerParticles.some((blob) => blob.frozenAt === undefined);
           const layerNow = layerIsLive
@@ -2269,9 +2271,11 @@ function drawChronologicalAuraLayers(
       context.restore();
     } else if (runKind === "liquid-metal") {
       if (liquidMetalRenderer) {
-        const layerParticles = blobs
-          .slice(runStart, runEnd)
-          .filter((blob) => visibleLiquidMetalIds.has(blob.id));
+        const layerParticles: BlobParticle[] = [];
+        for (let index = runStart; index < runEnd; index += 1) {
+          const blob = blobs[index];
+          if (visibleLiquidMetalIds.has(blob.id)) layerParticles.push(blob);
+        }
         if (layerParticles.length > 0) {
           const layerIsLive = layerParticles.some((blob) => blob.frozenAt === undefined);
           const layerNow = layerIsLive
@@ -2515,6 +2519,7 @@ export function AuraToy() {
   const replayRenderStatesRef = useRef<WeakMap<HTMLCanvasElement, ReplayRenderState>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
   const artworkHistoryRef = useRef<BlobParticle[]>([]);
+  const activeHistoryStartRef = useRef(0);
   const exportSnapshotRef = useRef<ArtworkExportSnapshot | null>(null);
   const blobIdRef = useRef(1);
   const noteRepeatRef = useRef<Map<string, number>>(new Map());
@@ -2824,7 +2829,7 @@ export function AuraToy() {
       kind === "image" ? imagePreviewButtonRef.current : gifPreviewButtonRef.current;
     const capturedAt = performance.now();
     exportSnapshotRef.current = {
-      particles: artworkHistoryRef.current.map((particle) => ({ ...particle })),
+      particles: artworkHistoryRef.current.slice(),
       capturedAt,
     };
     replayRenderStatesRef.current = new WeakMap();
@@ -4460,6 +4465,7 @@ export function AuraToy() {
     let hasCompactedHistory = false;
     let scheduledWakeTimer: number | null = null;
     let scheduledWakeAt = Number.POSITIVE_INFINITY;
+    const telemetryNodesScratch: BlobParticle[] = [];
 
     const syncOffscreenSize = (preserveSettled = false) => {
       const layerTotal = blobsRef.current.length;
@@ -4548,12 +4554,29 @@ export function AuraToy() {
 
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      width = Math.max(1, rect.width);
-      height = Math.max(1, rect.height);
-      const pixelBudgetRatio = Math.sqrt(AURA_BACKING_PIXEL_BUDGET / Math.max(1, width * height));
-      dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 1.25, pixelBudgetRatio));
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
+      const nextWidth = Math.max(1, rect.width);
+      const nextHeight = Math.max(1, rect.height);
+      const pixelBudgetRatio = Math.sqrt(
+        AURA_BACKING_PIXEL_BUDGET / Math.max(1, nextWidth * nextHeight),
+      );
+      const nextDpr = Math.max(
+        1,
+        Math.min(window.devicePixelRatio || 1, 1.25, pixelBudgetRatio),
+      );
+      const nextCanvasWidth = Math.round(nextWidth * nextDpr);
+      const nextCanvasHeight = Math.round(nextHeight * nextDpr);
+      if (
+        width === nextWidth &&
+        height === nextHeight &&
+        dpr === nextDpr &&
+        canvas.width === nextCanvasWidth &&
+        canvas.height === nextCanvasHeight
+      ) return;
+      width = nextWidth;
+      height = nextHeight;
+      dpr = nextDpr;
+      canvas.width = nextCanvasWidth;
+      canvas.height = nextCanvasHeight;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       syncHistorySize();
       syncOffscreenSize(false);
@@ -4805,6 +4828,7 @@ export function AuraToy() {
       }
 
       let newestDottedCreatedAt = Number.NEGATIVE_INFINITY;
+      let hasMovingDottedStyle = false;
       let hasAuraStyle = false;
       let hasMetalheartStyle = false;
       let hasMovingMetalheartStyle = false;
@@ -4815,6 +4839,11 @@ export function AuraToy() {
         const blobStyle = blob.artStyle ?? currentArtStyle;
         if (blobStyle === "style-2") {
           if (!Number.isFinite(newestDottedCreatedAt)) newestDottedCreatedAt = blob.createdAt;
+          if (
+            !hasMovingDottedStyle &&
+            blob.frozenAt === undefined &&
+            now - blob.createdAt < DOTTED_FORMATION_SETTLE_DURATION
+          ) hasMovingDottedStyle = true;
         } else if (blobStyle === "style-3") {
           hasMetalheartStyle = true;
           if (blob.frozenAt === undefined) hasMovingMetalheartStyle = true;
@@ -4849,12 +4878,7 @@ export function AuraToy() {
       const dottedMotionIsActive =
         hasDottedStyle &&
         !reducedMotionRef.current &&
-        blobsRef.current.some(
-          (blob) =>
-            blob.artStyle === "style-2" &&
-            blob.frozenAt === undefined &&
-            now - blob.createdAt < DOTTED_FORMATION_SETTLE_DURATION,
-        );
+        hasMovingDottedStyle;
       const blurRadius =
         (containsOrganicStyle || hasCompactedHistory
           ? reducedMotionRef.current
@@ -4989,15 +5013,17 @@ export function AuraToy() {
       // Screen-only: exports render from drawAuraComposition without this pass.
       if (telemetryOpacity > 0.001 && telemetryRenderer) {
         const activeStyleEpoch = styleLayerEpochRef.current;
-        const activeStyleNodes = blobsRef.current.filter(
-          (blob) =>
+        telemetryNodesScratch.length = 0;
+        for (const blob of blobsRef.current) {
+          if (
             blob.artStyle === currentArtStyle &&
             blob.styleEpoch === activeStyleEpoch &&
-            blob.frozenAt === undefined,
-        );
+            blob.frozenAt === undefined
+          ) telemetryNodesScratch.push(blob);
+        }
         telemetryRenderer.drawTelemetryOverlay(
           context,
-          activeStyleNodes,
+          telemetryNodesScratch,
           width,
           height,
           now,
@@ -5566,6 +5592,7 @@ export function AuraToy() {
     releaseTimersRef.current.clear();
     blobsRef.current = [];
     artworkHistoryRef.current = [];
+    activeHistoryStartRef.current = 0;
     exportSnapshotRef.current = null;
     blobIdRef.current = 1;
     noteRepeatRef.current.clear();
@@ -5609,16 +5636,21 @@ export function AuraToy() {
       if (!nextStyle || nextStyle.id === artStyleRef.current) return;
       const previousStyle = artStyleRef.current;
       const frozenAt = performance.now();
-      blobsRef.current = blobsRef.current.map((blob) =>
-        blob.artStyle === previousStyle && blob.frozenAt === undefined
-          ? { ...blob, frozenAt }
-          : blob,
-      );
-      artworkHistoryRef.current = artworkHistoryRef.current.map((blob) =>
-        blob.artStyle === previousStyle && blob.frozenAt === undefined
-          ? { ...blob, frozenAt }
-          : blob,
-      );
+      const liveBlobs = blobsRef.current;
+      for (let index = 0; index < liveBlobs.length; index += 1) {
+        const blob = liveBlobs[index];
+        if (blob.artStyle === previousStyle && blob.frozenAt === undefined) {
+          liveBlobs[index] = { ...blob, frozenAt };
+        }
+      }
+      const artworkHistory = artworkHistoryRef.current;
+      for (let index = activeHistoryStartRef.current; index < artworkHistory.length; index += 1) {
+        const blob = artworkHistory[index];
+        if (blob.artStyle === previousStyle && blob.frozenAt === undefined) {
+          artworkHistory[index] = { ...blob, frozenAt };
+        }
+      }
+      activeHistoryStartRef.current = artworkHistory.length;
       if (previousStyle === "style-3") {
         metalheartPulseRef.current.startedAt = Number.NEGATIVE_INFINITY;
       }
