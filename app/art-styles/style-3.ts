@@ -61,24 +61,34 @@ export type MetalheartPulseOptions = {
 };
 
 const FORMATION_DURATION = 1900;
-const MAX_VISIBLE_ORGANISMS = 8;
+const MAX_VISIBLE_GROWTHS = 8;
 const RENDER_PIXEL_BUDGET = 1_050_000;
+const COMPOSITION_SEED = 0x6f726761;
 const TAU = Math.PI * 2;
 
 type Point = { x: number; y: number };
 
-type OrganismOptions = {
+type RibbonSpec = {
   seed: number;
-  radius: number;
-  stretch: number;
-  thickness: number;
-  curvature: number;
-  velocity: number;
-  repeat: number;
-  arrival: number;
-  alpha: number;
-  now: number;
-  pulse: number;
+  origin: Point;
+  angle: number;
+  length: number;
+  width: number;
+  bend: number;
+  wave: number;
+  reveal: number;
+  lobe: number;
+  hook: number;
+};
+
+type InkShape = {
+  fill: Path2D;
+  edge: Path2D;
+  holes: Path2D[];
+  details: Path2D[];
+  centers: Point[];
+  widths: number[];
+  tangentAngles: number[];
 };
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -98,6 +108,11 @@ function easeInOutSine(value: number) {
   return -(Math.cos(Math.PI * clamp(value, 0, 1)) - 1) / 2;
 }
 
+function smoothstep(edge0: number, edge1: number, value: number) {
+  const progress = clamp((value - edge0) / Math.max(0.0001, edge1 - edge0), 0, 1);
+  return progress * progress * (3 - 2 * progress);
+}
+
 function hash(seed: number, index: number) {
   let value = (seed ^ Math.imul(index + 1, 0x9e3779b1)) >>> 0;
   value = Math.imul(value ^ (value >>> 16), 0x21f0aaad);
@@ -105,318 +120,361 @@ function hash(seed: number, index: number) {
   return ((value ^ (value >>> 15)) >>> 0) / 4294967296;
 }
 
-function smoothClosedPath(points: readonly Point[]) {
+function rotatePoint(point: Point, origin: Point, angle: number): Point {
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  return {
+    x: origin.x + point.x * cosine - point.y * sine,
+    y: origin.y + point.x * sine + point.y * cosine,
+  };
+}
+
+function traceBoundary(points: readonly Point[], path = new Path2D()) {
+  if (points.length === 0) return path;
+  path.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    path.lineTo(points[index].x, points[index].y);
+  }
+  return path;
+}
+
+function localRibbonCenter(spec: RibbonSpec, progress: number): Point {
+  const phase = hash(spec.seed, 3) * TAU;
+  const envelope = Math.sin(progress * Math.PI);
+  const broadCurve = Math.pow(progress, 1.45) * spec.bend * spec.length;
+  const primaryWave =
+    Math.sin(progress * Math.PI * lerp(0.72, 1.46, hash(spec.seed, 5)) + phase) *
+    spec.length *
+    spec.wave *
+    envelope;
+  const fineWave =
+    Math.sin(progress * Math.PI * 3.4 + phase * 0.61) *
+    spec.length *
+    spec.wave *
+    0.22 *
+    envelope *
+    envelope;
+  const hook =
+    spec.hook *
+    spec.length *
+    0.17 *
+    Math.pow(smoothstep(0.68, 1, progress), 1.35);
+  return {
+    x: progress * spec.length,
+    y: broadCurve + primaryWave + fineWave + hook,
+  };
+}
+
+function worldRibbonCenter(spec: RibbonSpec, progress: number) {
+  return rotatePoint(localRibbonCenter(spec, progress), spec.origin, spec.angle);
+}
+
+function ribbonWidth(spec: RibbonSpec, normalized: number, edge: -1 | 1) {
+  const taper = Math.pow(Math.max(0.003, 1 - normalized), 0.43);
+  const firstLobe = Math.exp(-Math.pow((normalized - 0.23) / 0.16, 2)) * spec.lobe;
+  const secondLobe = Math.exp(-Math.pow((normalized - 0.58) / 0.19, 2)) * (0.32 + spec.lobe * 0.38);
+  const neck = Math.exp(-Math.pow((normalized - 0.42) / 0.08, 2)) * 0.24;
+  const edgePhase = hash(spec.seed, edge > 0 ? 17 : 19) * TAU;
+  const erosion =
+    Math.sin(normalized * TAU * 2.6 + edgePhase) * 0.1 +
+    Math.sin(normalized * TAU * 7.1 + edgePhase * 0.72) * 0.045;
+  return Math.max(
+    0.28,
+    spec.width * (0.48 + firstLobe + secondLobe - neck + erosion) * taper,
+  );
+}
+
+function buildHole(
+  centers: readonly Point[],
+  widths: readonly number[],
+  tangentAngles: readonly number[],
+  start: number,
+  end: number,
+  scale: number,
+) {
+  const left: Point[] = [];
+  const right: Point[] = [];
+  const first = Math.max(1, Math.floor(start * (centers.length - 1)));
+  const last = Math.min(centers.length - 2, Math.ceil(end * (centers.length - 1)));
+  for (let index = first; index <= last; index += 1) {
+    const segmentProgress = (index - first) / Math.max(1, last - first);
+    const tipTaper = Math.pow(Math.max(0.03, Math.sin(segmentProgress * Math.PI)), 0.42);
+    const halfWidth = widths[index] * scale * tipTaper;
+    const normalX = -Math.sin(tangentAngles[index]);
+    const normalY = Math.cos(tangentAngles[index]);
+    left.push({ x: centers[index].x + normalX * halfWidth, y: centers[index].y + normalY * halfWidth });
+    right.push({ x: centers[index].x - normalX * halfWidth, y: centers[index].y - normalY * halfWidth });
+  }
   const path = new Path2D();
-  if (points.length < 3) return path;
-  const last = points[points.length - 1];
-  const first = points[0];
-  path.moveTo((last.x + first.x) * 0.5, (last.y + first.y) * 0.5);
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index];
-    const next = points[(index + 1) % points.length];
-    path.quadraticCurveTo(current.x, current.y, (current.x + next.x) * 0.5, (current.y + next.y) * 0.5);
+  if (left.length === 0 || right.length === 0) return path;
+  traceBoundary(left, path);
+  for (let index = right.length - 1; index >= 0; index -= 1) {
+    path.lineTo(right[index].x, right[index].y);
   }
   path.closePath();
   return path;
 }
 
-function traceCapsule(path: Path2D, x: number, y: number, length: number, width: number, angle: number) {
-  const cosine = Math.cos(angle);
-  const sine = Math.sin(angle);
-  const normalX = -sine * width;
-  const normalY = cosine * width;
-  const startX = x - cosine * length * 0.5;
-  const startY = y - sine * length * 0.5;
-  const endX = x + cosine * length * 0.5;
-  const endY = y + sine * length * 0.5;
-  path.moveTo(startX + normalX, startY + normalY);
-  path.quadraticCurveTo(x - cosine * length * 0.57 - normalX * 0.25, y - sine * length * 0.57 - normalY * 0.25, startX - normalX, startY - normalY);
-  path.lineTo(endX - normalX, endY - normalY);
-  path.quadraticCurveTo(x + cosine * length * 0.57 + normalX * 0.25, y + sine * length * 0.57 + normalY * 0.25, endX + normalX, endY + normalY);
-  path.closePath();
-}
-
-function branchCenter(
-  seed: number,
-  branchIndex: number,
-  progress: number,
-  length: number,
-  bend: number,
-  motion: number,
-) {
-  const phase = hash(seed, branchIndex * 29 + 7) * TAU;
-  const swell = Math.sin(progress * Math.PI);
-  const hook = Math.pow(progress, 1.72) * bend * length;
-  const organicWave =
-    Math.sin(progress * Math.PI * lerp(0.72, 1.34, hash(seed, branchIndex * 31 + 9)) + phase) *
-    length *
-    lerp(0.018, 0.052, hash(seed, branchIndex * 37 + 11)) *
-    swell;
-  const secondaryWave =
-    Math.sin(progress * Math.PI * 3.1 + phase * 0.63) *
-    length *
-    0.008 *
-    swell *
-    swell;
-  return {
-    x: progress * length,
-    y: hook + organicWave + secondaryWave + motion * length * 0.012 * swell,
-  };
-}
-
-function buildBranch(
-  seed: number,
-  branchIndex: number,
-  length: number,
-  rootWidth: number,
-  bend: number,
-  reveal: number,
-  motion: number,
-) {
-  const outline = new Path2D();
-  const innerLines: Path2D[] = [];
-  const revealed = clamp(reveal, 0.035, 1);
-  const samples = Math.max(4, Math.ceil(18 * revealed));
+function buildRibbon(spec: RibbonSpec): InkShape {
+  const reveal = clamp(spec.reveal, 0.025, 1);
+  const samples = Math.max(7, Math.ceil(30 * reveal));
   const left: Point[] = [];
   const right: Point[] = [];
   const centers: Point[] = [];
   const widths: number[] = [];
+  const tangentAngles: number[] = [];
 
   for (let index = 0; index <= samples; index += 1) {
     const normalized = index / samples;
-    const progress = normalized * revealed;
-    const center = branchCenter(seed, branchIndex, progress, length, bend, motion);
-    const next = branchCenter(seed, branchIndex, Math.min(1, progress + 0.006), length, bend, motion);
-    const tangentX = next.x - center.x;
-    const tangentY = next.y - center.y;
-    const tangentLength = Math.max(0.0001, Math.hypot(tangentX, tangentY));
-    const normalX = -tangentY / tangentLength;
-    const normalY = tangentX / tangentLength;
-    const taper = Math.pow(Math.max(0.018, 1 - normalized), 0.48);
-    const rib = 0.74 + Math.sin(normalized * Math.PI) * 0.38;
-    const irregularity = 0.9 + Math.sin(normalized * 10.4 + hash(seed, branchIndex + 83) * TAU) * 0.1;
-    const width = Math.max(0.32, rootWidth * taper * rib * irregularity);
+    const progress = normalized * reveal;
+    const center = worldRibbonCenter(spec, progress);
+    const previous = worldRibbonCenter(spec, Math.max(0, progress - 0.0035));
+    const next = worldRibbonCenter(spec, Math.min(1, progress + 0.0035));
+    const tangentAngle = Math.atan2(next.y - previous.y, next.x - previous.x);
+    const normalX = -Math.sin(tangentAngle);
+    const normalY = Math.cos(tangentAngle);
+    const leftWidth = ribbonWidth(spec, normalized, 1);
+    const rightWidth = ribbonWidth(spec, normalized, -1);
     centers.push(center);
-    widths.push(width);
-    left.push({ x: center.x + normalX * width, y: center.y + normalY * width });
-    right.push({ x: center.x - normalX * width, y: center.y - normalY * width });
+    widths.push((leftWidth + rightWidth) * 0.5);
+    tangentAngles.push(tangentAngle);
+    left.push({ x: center.x + normalX * leftWidth, y: center.y + normalY * leftWidth });
+    right.push({ x: center.x - normalX * rightWidth, y: center.y - normalY * rightWidth });
   }
 
-  outline.moveTo(left[0].x, left[0].y);
-  for (let index = 1; index < left.length; index += 1) outline.lineTo(left[index].x, left[index].y);
+  const fill = new Path2D();
+  traceBoundary(left, fill);
   const tip = centers[centers.length - 1];
-  outline.quadraticCurveTo(
-    tip.x + length * 0.018,
-    tip.y + (hash(seed, branchIndex * 41 + 19) - 0.5) * rootWidth,
+  fill.quadraticCurveTo(
+    tip.x + Math.cos(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
+    tip.y + Math.sin(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
     right[right.length - 1].x,
     right[right.length - 1].y,
   );
-  for (let index = right.length - 2; index >= 0; index -= 1) outline.lineTo(right[index].x, right[index].y);
-  outline.closePath();
+  for (let index = right.length - 2; index >= 0; index -= 1) fill.lineTo(right[index].x, right[index].y);
+  fill.closePath();
 
-  const lineCount = 2 + Math.floor(hash(seed, branchIndex * 43 + 23) * 3);
-  for (let lineIndex = 0; lineIndex < lineCount; lineIndex += 1) {
-    const line = new Path2D();
-    const start = lerp(0.18, 0.38, hash(seed, branchIndex * 47 + lineIndex));
-    const end = lerp(0.62, 0.92, hash(seed, branchIndex * 53 + lineIndex));
+  const edge = new Path2D();
+  traceBoundary(left, edge);
+  edge.quadraticCurveTo(
+    tip.x + Math.cos(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
+    tip.y + Math.sin(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
+    right[right.length - 1].x,
+    right[right.length - 1].y,
+  );
+  for (let index = right.length - 2; index >= 0; index -= 1) edge.lineTo(right[index].x, right[index].y);
+
+  const details: Path2D[] = [];
+  const detailCount = 2 + Math.floor(hash(spec.seed, 61) * 3);
+  for (let detailIndex = 0; detailIndex < detailCount; detailIndex += 1) {
+    const detail = new Path2D();
+    const start = lerp(0.12, 0.31, hash(spec.seed, 67 + detailIndex));
+    const end = lerp(0.58, 0.92, hash(spec.seed, 73 + detailIndex));
     let started = false;
-    for (let index = 0; index < centers.length; index += 1) {
-      const normalized = index / Math.max(1, centers.length - 1);
+    for (let index = 1; index < centers.length - 1; index += 1) {
+      const normalized = index / (centers.length - 1);
       if (normalized < start || normalized > end) continue;
-      const current = centers[index];
-      const previous = centers[Math.max(0, index - 1)];
-      const next = centers[Math.min(centers.length - 1, index + 1)];
-      const tangentLength = Math.max(0.0001, Math.hypot(next.x - previous.x, next.y - previous.y));
-      const normalX = -(next.y - previous.y) / tangentLength;
-      const normalY = (next.x - previous.x) / tangentLength;
-      const side = lineIndex % 2 === 0 ? 1 : -1;
-      const offset = widths[index] * lerp(0.2, 0.58, (lineIndex + 1) / (lineCount + 1)) * side;
-      const x = current.x + normalX * offset;
-      const y = current.y + normalY * offset;
+      if (Math.sin(normalized * 38 + detailIndex * 2.7 + hash(spec.seed, 79) * TAU) > 0.86) {
+        started = false;
+        continue;
+      }
+      const side = detailIndex % 2 === 0 ? 1 : -1;
+      const offset = widths[index] * lerp(0.22, 0.66, (detailIndex + 1) / (detailCount + 1)) * side;
+      const point = {
+        x: centers[index].x - Math.sin(tangentAngles[index]) * offset,
+        y: centers[index].y + Math.cos(tangentAngles[index]) * offset,
+      };
       if (!started) {
-        line.moveTo(x, y);
+        detail.moveTo(point.x, point.y);
         started = true;
       } else {
-        line.lineTo(x, y);
+        detail.lineTo(point.x, point.y);
       }
     }
-    innerLines.push(line);
+    details.push(detail);
   }
 
-  return { outline, innerLines };
+  const holes: Path2D[] = [];
+  if (spec.width > 5 && reveal > 0.72) {
+    holes.push(buildHole(centers, widths, tangentAngles, 0.2, 0.43, lerp(0.18, 0.33, hash(spec.seed, 89))));
+    if (spec.width > 11 && hash(spec.seed, 97) > 0.38) {
+      holes.push(buildHole(centers, widths, tangentAngles, 0.5, 0.72, lerp(0.14, 0.25, hash(spec.seed, 101))));
+    }
+  }
+
+  return { fill, edge, holes, details, centers, widths, tangentAngles };
 }
 
-function organismBranchAngles(seed: number) {
-  const handedness = hash(seed, 3) > 0.5 ? 1 : -1;
-  return [
-    -0.08,
-    Math.PI + 0.18,
-    0.58 * handedness,
-    -0.82 * handedness,
-    1.28 * handedness,
-    -1.46 * handedness,
-    Math.PI + 0.64 * handedness,
-    Math.PI - 0.9 * handedness,
-  ];
+function sampleShape(shape: InkShape, progress: number) {
+  const index = Math.round(clamp(progress, 0, 1) * (shape.centers.length - 1));
+  return {
+    point: shape.centers[index],
+    width: shape.widths[index],
+    angle: shape.tangentAngles[index],
+  };
 }
 
-function drawOrganism(context: CanvasRenderingContext2D, options: OrganismOptions) {
-  const {
-    seed,
-    radius,
-    stretch,
-    thickness,
-    curvature,
-    velocity,
-    arrival,
-    alpha,
-    now,
-    pulse,
-  } = options;
-  const reveal = easeOutCubic(arrival);
-  if (radius <= 0 || alpha <= 0 || reveal <= 0) return;
+function makeFragment(seed: number, center: Point, scale: number) {
+  const points: Point[] = [];
+  const count = 5 + Math.floor(hash(seed, 5) * 3);
+  for (let index = 0; index < count; index += 1) {
+    const angle = (index / count) * TAU;
+    const radius = scale * lerp(0.42, 1, hash(seed, 13 + index));
+    points.push({
+      x: center.x + Math.cos(angle) * radius * lerp(0.65, 1.45, hash(seed, 29)),
+      y: center.y + Math.sin(angle) * radius,
+    });
+  }
+  const path = new Path2D();
+  if (points.length === 0) return path;
+  path.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) path.lineTo(points[index].x, points[index].y);
+  path.closePath();
+  return path;
+}
 
-  const contourAlpha = clamp(alpha * (0.78 + pulse * 0.2), 0, 0.98);
-  const whiteAlpha = clamp(alpha * (0.92 + pulse * 0.08), 0, 0.99);
-  const outlineWidth = clamp(radius * 0.0065, 0.72, 1.42);
-  const bodyRadius = radius * lerp(0.19, 0.29, hash(seed, 5));
-  const motion = Math.sin(now * 0.0014 + seed * 0.001) * (1 - reveal) * 0.9;
-  const branchAngles = organismBranchAngles(seed);
-  const branchCount = 6 + Math.floor(hash(seed, 17) * 3);
+function growthSeed(particle: MetalheartParticleState) {
+  return particle.id * 4099 + particle.midi * 131 + particle.repeat * 17;
+}
+
+function drawInkComposition(
+  context: CanvasRenderingContext2D,
+  active: readonly MetalheartParticleState[],
+  width: number,
+  height: number,
+  now: number,
+  reducedMotion: boolean,
+  pulse: number,
+) {
+  const shortSide = Math.min(width, height);
+  const shapes: InkShape[] = [];
+  const fragments: Path2D[] = [];
+  const direction = hash(COMPOSITION_SEED, 2) > 0.5 ? 1 : -1;
+  const start = {
+    x: direction > 0 ? -width * 0.08 : width * 1.08,
+    y: height * lerp(0.24, 0.4, hash(COMPOSITION_SEED, 7)),
+  };
+  const endY = height * lerp(0.58, 0.76, hash(COMPOSITION_SEED, 11));
+  const endX = direction > 0 ? width * 1.08 : -width * 0.08;
+  const trunkLength = Math.hypot(endX - start.x, endY - start.y);
+  const trunkAngle = Math.atan2(endY - start.y, endX - start.x);
+  const strongestArrival = active.reduce((maximum, particle) => {
+    const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
+    return Math.max(maximum, easeOutCubic(age / FORMATION_DURATION));
+  }, 0);
+  const trunk = buildRibbon({
+    seed: COMPOSITION_SEED,
+    origin: start,
+    angle: trunkAngle,
+    length: trunkLength,
+    width: shortSide * 0.058,
+    bend: -0.035,
+    wave: 0.028,
+    reveal: strongestArrival,
+    lobe: 0.82,
+    hook: 0.12,
+  });
+  shapes.push(trunk);
+
+  for (let index = 0; index < active.length; index += 1) {
+    const particle = active[index];
+    const seed = growthSeed(particle);
+    const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
+    const arrival = easeOutCubic(age / FORMATION_DURATION);
+    if (arrival <= 0.01) continue;
+    const stableSlot = ((particle.id * 5 + particle.midi * 3) % 13 + 13) % 13;
+    const attachProgress = clamp(0.08 + (stableSlot / 12) * 0.84 + (hash(seed, 3) - 0.5) * 0.035, 0.06, 0.94);
+    const attachment = sampleShape(trunk, attachProgress);
+    const side = hash(seed, 7) > 0.5 ? 1 : -1;
+    const departure = side * lerp(0.42, 1.16, hash(seed, 13));
+    const primaryAngle = attachment.angle + departure;
+    const primaryLength =
+      shortSide *
+      lerp(0.27, 0.56, hash(seed, 17)) *
+      lerp(0.92, 1.08, particle.velocity);
+    const primary = buildRibbon({
+      seed,
+      origin: attachment.point,
+      angle: primaryAngle,
+      length: primaryLength,
+      width: shortSide * lerp(0.014, 0.034, hash(seed, 19)) * (0.88 + particle.thickness * 0.28),
+      bend: particle.curvature * 0.085 + side * lerp(0.02, 0.13, hash(seed, 23)),
+      wave: lerp(0.018, 0.052, hash(seed, 29)),
+      reveal: arrival,
+      lobe: lerp(0.48, 1.08, hash(seed, 31)),
+      hook: side * lerp(0.32, 1.04, hash(seed, 37)),
+    });
+    shapes.push(primary);
+
+    const forkCount = 1 + Math.floor(hash(seed, 41) * 3);
+    for (let forkIndex = 0; forkIndex < forkCount; forkIndex += 1) {
+      const forkProgress = lerp(0.34, 0.76, (forkIndex + 1) / (forkCount + 1)) + (hash(seed, 43 + forkIndex) - 0.5) * 0.08;
+      const forkAttachment = sampleShape(primary, forkProgress);
+      const forkSide = forkIndex % 2 === 0 ? -side : side;
+      const forkReveal = clamp((arrival - 0.12 - forkIndex * 0.07) / 0.8, 0, 1);
+      if (forkReveal <= 0.01) continue;
+      const fork = buildRibbon({
+        seed: seed + 101 + forkIndex * 47,
+        origin: forkAttachment.point,
+        angle: forkAttachment.angle + forkSide * lerp(0.22, 0.72, hash(seed, 53 + forkIndex)),
+        length: primaryLength * lerp(0.26, 0.54, hash(seed, 59 + forkIndex)),
+        width: Math.max(1.2, forkAttachment.width * lerp(0.42, 0.78, hash(seed, 61 + forkIndex))),
+        bend: forkSide * lerp(0.04, 0.2, hash(seed, 67 + forkIndex)),
+        wave: lerp(0.016, 0.046, hash(seed, 71 + forkIndex)),
+        reveal: forkReveal,
+        lobe: lerp(0.3, 0.82, hash(seed, 73 + forkIndex)),
+        hook: forkSide * lerp(0.18, 0.86, hash(seed, 79 + forkIndex)),
+      });
+      shapes.push(fork);
+    }
+
+    const fragmentCount = 2 + Math.floor(hash(seed, 83) * 4);
+    for (let fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex += 1) {
+      const fragmentAnchor = sampleShape(primary, lerp(0.36, 0.88, hash(seed, 89 + fragmentIndex)));
+      const offset = primaryLength * lerp(0.018, 0.065, hash(seed, 97 + fragmentIndex));
+      const fragmentCenter = {
+        x: fragmentAnchor.point.x + Math.cos(fragmentAnchor.angle + side * Math.PI * 0.5) * offset,
+        y: fragmentAnchor.point.y + Math.sin(fragmentAnchor.angle + side * Math.PI * 0.5) * offset,
+      };
+      fragments.push(makeFragment(seed + 401 + fragmentIndex * 23, fragmentCenter, shortSide * lerp(0.003, 0.009, hash(seed, 103 + fragmentIndex))));
+    }
+  }
 
   context.save();
-  const formationScale = lerp(0.72, 1, reveal);
-  context.scale(formationScale, formationScale);
   context.lineCap = "round";
   context.lineJoin = "round";
   context.miterLimit = 2;
+  context.fillStyle = "rgba(255, 255, 255, 0.985)";
+  for (const shape of shapes) context.fill(shape.fill);
+  for (const fragment of fragments) context.fill(fragment);
 
-  for (let index = branchCount - 1; index >= 0; index -= 1) {
-    const delay = index * 0.035;
-    const branchReveal = clamp((reveal - delay) / Math.max(0.18, 1 - delay), 0, 1);
-    if (branchReveal <= 0.01) continue;
-    const branchScale = index < 2 ? 1 : lerp(0.46, 0.84, hash(seed, index * 61 + 7));
-    const length =
-      radius *
-      (1.48 + stretch * 0.55) *
-      branchScale *
-      lerp(0.94, 1.08, velocity) *
-      lerp(0.84, 1.17, hash(seed, index * 67 + 13));
-    const rootWidth =
-      radius *
-      (0.055 + thickness * 0.052) *
-      lerp(0.72, 1.26, hash(seed, index * 71 + 29));
-    const bend =
-      curvature * 0.075 +
-      (hash(seed, index * 73 + 31) - 0.5) * (index < 2 ? 0.11 : 0.24);
-    const angle = branchAngles[index] + (hash(seed, index * 79 + 37) - 0.5) * 0.24;
-
-    context.save();
-    context.rotate(angle);
-    context.translate(-bodyRadius * lerp(0.04, 0.22, hash(seed, index * 83 + 41)), 0);
-    const branch = buildBranch(seed, index, length, rootWidth, bend, branchReveal, motion);
-
-    context.fillStyle = `rgba(255, 255, 255, ${whiteAlpha})`;
-    context.strokeStyle = `rgba(8, 9, 12, ${contourAlpha})`;
-    context.lineWidth = outlineWidth;
-    context.fill(branch.outline);
-    context.stroke(branch.outline);
-
-    context.strokeStyle = `rgba(12, 13, 17, ${contourAlpha * 0.72})`;
-    context.lineWidth = Math.max(0.52, outlineWidth * 0.62);
-    for (const line of branch.innerLines) context.stroke(line);
-
-    if (index >= 2 && hash(seed, index * 89 + 43) > 0.38 && branchReveal > 0.64) {
-      const joint = new Path2D();
-      const jointProgress = lerp(0.2, 0.42, hash(seed, index * 97 + 47));
-      const jointCenter = branchCenter(seed, index, jointProgress, length, bend, motion);
-      traceCapsule(
-        joint,
-        jointCenter.x,
-        jointCenter.y,
-        rootWidth * lerp(1.75, 2.8, hash(seed, index * 101 + 53)),
-        rootWidth * 0.34,
-        Math.PI * 0.5 + bend,
-      );
-      context.fillStyle = `rgba(255, 255, 255, ${whiteAlpha})`;
-      context.fill(joint);
-      context.strokeStyle = `rgba(8, 9, 12, ${contourAlpha * 0.9})`;
-      context.lineWidth = Math.max(0.58, outlineWidth * 0.72);
-      context.stroke(joint);
-    }
-    context.restore();
+  context.save();
+  context.globalCompositeOperation = "destination-out";
+  context.fillStyle = "rgba(0, 0, 0, 1)";
+  for (const shape of shapes) {
+    for (const hole of shape.holes) context.fill(hole);
   }
+  context.restore();
 
-  const bodyPoints: Point[] = [];
-  const bodyPointCount = 16;
-  for (let index = 0; index < bodyPointCount; index += 1) {
-    const angle = (index / bodyPointCount) * TAU;
-    const irregularity =
-      0.78 +
-      hash(seed, 211 + index) * 0.34 +
-      Math.sin(angle * 3 + hash(seed, 233) * TAU) * 0.075;
-    bodyPoints.push({
-      x: Math.cos(angle) * bodyRadius * irregularity * lerp(1.1, 1.55, hash(seed, 239)),
-      y: Math.sin(angle) * bodyRadius * irregularity,
-    });
+  const outlineAlpha = clamp(0.72 + pulse * 0.2, 0.72, 0.94);
+  context.strokeStyle = `rgba(4, 5, 8, ${outlineAlpha})`;
+  context.lineWidth = clamp(shortSide * 0.00105, 0.72, 1.24);
+  for (const shape of shapes) {
+    context.stroke(shape.edge);
+    for (const hole of shape.holes) context.stroke(hole);
   }
-  const body = smoothClosedPath(bodyPoints);
-  context.fillStyle = `rgba(255, 255, 255, ${whiteAlpha})`;
-  context.strokeStyle = `rgba(8, 9, 12, ${contourAlpha})`;
-  context.lineWidth = outlineWidth;
-  context.fill(body);
-  context.stroke(body);
+  for (const fragment of fragments) context.stroke(fragment);
 
-  const bodyEchoes = 2 + Math.floor(hash(seed, 251) * 2);
-  for (let index = 0; index < bodyEchoes; index += 1) {
-    const arcRadius = bodyRadius * (0.36 + index * 0.19);
-    context.beginPath();
-    context.ellipse(
-      bodyRadius * (hash(seed, 257 + index) - 0.5) * 0.28,
-      bodyRadius * (hash(seed, 263 + index) - 0.5) * 0.24,
-      arcRadius * lerp(1.18, 1.62, hash(seed, 269 + index)),
-      arcRadius * lerp(0.38, 0.68, hash(seed, 271 + index)),
-      (hash(seed, 277 + index) - 0.5) * 1.2,
-      Math.PI * lerp(0.08, 0.32, hash(seed, 281 + index)),
-      Math.PI * lerp(1.05, 1.74, hash(seed, 283 + index)),
-    );
-    context.strokeStyle = `rgba(10, 11, 15, ${contourAlpha * 0.58})`;
-    context.lineWidth = Math.max(0.5, outlineWidth * 0.55);
-    context.stroke();
-  }
-
-  const fragmentCount = 3 + Math.floor(hash(seed, 293) * 4);
-  context.fillStyle = `rgba(255, 255, 255, ${whiteAlpha})`;
-  context.strokeStyle = `rgba(8, 9, 12, ${contourAlpha * 0.82})`;
-  context.lineWidth = Math.max(0.5, outlineWidth * 0.62);
-  for (let index = 0; index < fragmentCount; index += 1) {
-    const orbit = bodyRadius * lerp(1.34, 2.18, hash(seed, 301 + index));
-    const angle = hash(seed, 317 + index) * TAU;
-    const fragment = new Path2D();
-    traceCapsule(
-      fragment,
-      Math.cos(angle) * orbit,
-      Math.sin(angle) * orbit,
-      radius * lerp(0.035, 0.085, hash(seed, 331 + index)),
-      Math.max(0.55, radius * lerp(0.004, 0.009, hash(seed, 347 + index))),
-      angle + (hash(seed, 359 + index) - 0.5) * 1.6,
-    );
-    context.fill(fragment);
-    context.stroke(fragment);
-  }
-
-  if (pulse > 0.01) {
-    context.beginPath();
-    context.ellipse(0, 0, bodyRadius * (1.28 + pulse * 0.72), bodyRadius * (0.84 + pulse * 0.46), -0.18, 0, TAU);
-    context.strokeStyle = `rgba(255, 255, 255, ${pulse * 0.38})`;
-    context.lineWidth = outlineWidth + pulse * 1.2;
-    context.stroke();
+  context.strokeStyle = `rgba(12, 13, 17, ${clamp(0.5 + pulse * 0.14, 0.5, 0.7)})`;
+  context.lineWidth = clamp(shortSide * 0.00072, 0.5, 0.82);
+  for (const shape of shapes) {
+    for (const detail of shape.details) context.stroke(detail);
   }
 
   context.restore();
 }
 
-class ContourOrganismRenderer {
+class ContourCompositionRenderer {
   readonly canvas: HTMLCanvasElement;
   private readonly context: CanvasRenderingContext2D;
   private width = 0;
@@ -449,7 +507,7 @@ class ContourOrganismRenderer {
     if (width <= 0 || height <= 0) return null;
     this.syncSize(width, height);
     const active: MetalheartParticleState[] = [];
-    for (let index = particles.length - 1; index >= 0 && active.length < MAX_VISIBLE_ORGANISMS; index -= 1) {
+    for (let index = particles.length - 1; index >= 0 && active.length < MAX_VISIBLE_GROWTHS; index -= 1) {
       if (particles[index].artStyle === "style-3") active.push(particles[index]);
     }
     active.reverse();
@@ -462,42 +520,18 @@ class ContourOrganismRenderer {
     const pulseEnvelope = pulseProgress >= 0 && pulseProgress < 1
       ? Math.sin(pulseProgress * Math.PI) * Math.pow(1 - pulseProgress, 0.72) * clamp(pulse?.strength ?? 0, 0, 1)
       : 0;
-    const shortSide = Math.min(width, height);
     let forming = false;
+    for (const particle of active) {
+      if (!reducedMotion && now - particle.createdAt < FORMATION_DURATION) {
+        forming = true;
+        break;
+      }
+    }
 
     this.context.setTransform(1, 0, 0, 1, 0, 0);
     this.context.clearRect(0, 0, this.width, this.height);
     this.context.setTransform(this.scale, 0, 0, this.scale, 0, 0);
-
-    for (const particle of active) {
-      const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
-      const arrival = clamp(age / FORMATION_DURATION, 0, 1);
-      if (arrival < 0.999) forming = true;
-      const seed = particle.id * 4099 + particle.midi * 131 + particle.repeat * 17;
-      const distanceToPulse = pulse
-        ? Math.hypot(particle.x - pulse.x, particle.y - pulse.y)
-        : 1;
-      const localPulse = pulseEnvelope * clamp(1.16 - distanceToPulse * 1.35, 0.24, 1);
-
-      this.context.save();
-      this.context.translate(particle.x * width, particle.y * height);
-      this.context.rotate(particle.angle * 0.72);
-      drawOrganism(this.context, {
-        seed,
-        radius: shortSide * particle.radius * lerp(0.86, 1.14, particle.velocity),
-        stretch: particle.stretch,
-        thickness: particle.thickness,
-        curvature: particle.curvature,
-        velocity: particle.velocity,
-        repeat: particle.repeat,
-        arrival,
-        alpha: clamp(0.72 + particle.velocity * 0.24, 0.76, 0.96),
-        now,
-        pulse: localPulse,
-      });
-      this.context.restore();
-    }
-
+    drawInkComposition(this.context, active, width, height, now, reducedMotion, pulseEnvelope);
     return { canvas: this.canvas, forming };
   }
 
@@ -513,13 +547,13 @@ class ContourOrganismRenderer {
   }
 }
 
-let contourRenderer: ContourOrganismRenderer | null = null;
+let contourRenderer: ContourCompositionRenderer | null = null;
 let canvasUnavailable = false;
 
 function getContourRenderer() {
   if (canvasUnavailable) return null;
   try {
-    contourRenderer ??= new ContourOrganismRenderer();
+    contourRenderer ??= new ContourCompositionRenderer();
     return contourRenderer;
   } catch {
     canvasUnavailable = true;
@@ -549,19 +583,28 @@ export function drawMetalheartParticle(
   context: CanvasRenderingContext2D,
   options: MetalheartParticleOptions,
 ) {
-  drawOrganism(context, {
+  const reveal = easeOutCubic(options.arrival);
+  if (reveal <= 0 || options.alpha <= 0) return;
+  const shape = buildRibbon({
     seed: options.seed,
-    radius: options.radius,
-    stretch: options.stretch,
-    thickness: options.thickness,
-    curvature: options.curvature,
-    velocity: options.velocity,
-    repeat: options.repeat,
-    arrival: options.arrival,
-    alpha: options.alpha,
-    now: options.time,
-    pulse: 0,
+    origin: { x: 0, y: 0 },
+    angle: 0,
+    length: options.radius * (1.9 + options.stretch * 0.62),
+    width: options.radius * (0.08 + options.thickness * 0.08),
+    bend: options.curvature * 0.1,
+    wave: 0.036,
+    reveal,
+    lobe: 0.82,
+    hook: hash(options.seed, 7) > 0.5 ? 0.72 : -0.72,
   });
+  context.save();
+  context.fillStyle = `rgba(255, 255, 255, ${clamp(options.alpha, 0, 0.99)})`;
+  context.fill(shape.fill);
+  context.strokeStyle = `rgba(4, 5, 8, ${clamp(options.alpha * 0.82, 0, 0.9)})`;
+  context.lineWidth = clamp(options.radius * 0.006, 0.68, 1.2);
+  context.stroke(shape.edge);
+  for (const detail of shape.details) context.stroke(detail);
+  context.restore();
 }
 
 export function drawMetalheartPulse(
@@ -571,12 +614,12 @@ export function drawMetalheartPulse(
   const { centerX, centerY, width, height, progress, strength } = options;
   if (progress < 0 || progress >= 1 || strength <= 0) return;
   const envelope = Math.sin(progress * Math.PI) * Math.pow(1 - progress, 0.72) * clamp(strength, 0, 1);
-  const radius = Math.min(width, height) * lerp(0.028, 0.13, easeInOutSine(progress));
+  const radius = Math.min(width, height) * lerp(0.022, 0.1, easeInOutSine(progress));
   context.save();
   context.beginPath();
-  context.ellipse(centerX, centerY, radius * 1.7, radius, -0.18, 0, TAU);
-  context.strokeStyle = `rgba(12, 13, 16, ${envelope * 0.18})`;
-  context.lineWidth = Math.max(0.55, Math.min(width, height) * 0.00085);
+  context.ellipse(centerX, centerY, radius * 1.9, radius * 0.48, -0.12, 0, TAU);
+  context.strokeStyle = `rgba(4, 5, 8, ${envelope * 0.16})`;
+  context.lineWidth = Math.max(0.55, Math.min(width, height) * 0.0008);
   context.stroke();
   context.restore();
 }
