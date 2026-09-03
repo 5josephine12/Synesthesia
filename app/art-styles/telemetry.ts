@@ -490,6 +490,28 @@ function drawConnectionTerminal(
   context.restore();
 }
 
+function drawRelayFrame(
+  context: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  halfSize: number,
+  alpha: number,
+) {
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.translate(point.x, point.y);
+  context.fillStyle = glowColor(alpha * 0.12);
+  context.strokeStyle = glowColor(alpha);
+  context.shadowColor = glowColor(alpha * 0.9);
+  context.shadowBlur = 10;
+  context.lineWidth = 1.35;
+  context.fillRect(-halfSize, -halfSize, halfSize * 2, halfSize * 2);
+  context.strokeRect(-halfSize, -halfSize, halfSize * 2, halfSize * 2);
+  context.shadowBlur = 4;
+  context.strokeStyle = glowColor(alpha * 0.72);
+  context.strokeRect(-2.5, -2.5, 5, 5);
+  context.restore();
+}
+
 function drawRoutedConnection(
   context: CanvasRenderingContext2D,
   from: VisualizationFrame,
@@ -520,7 +542,7 @@ function drawRoutedConnection(
     x: start.x + deltaX * 0.68 - normalX * curve * 0.46,
     y: start.y + deltaY * 0.68 - normalY * curve * 0.46,
   };
-  const alpha = life * reveal * (focused ? 0.78 : 0.52);
+  const alpha = life * reveal * (focused ? 0.96 : 0.82);
   const color = (opacity: number) => `rgba(255, 255, 255, ${opacity})`;
 
   const pointAt = (amount: number) => {
@@ -566,20 +588,24 @@ function drawRoutedConnection(
     end.x,
     end.y,
   );
-  context.strokeStyle = color(alpha * 0.22);
-  context.shadowColor = color(alpha * 0.6);
-  context.shadowBlur = focused ? 8 : 5;
-  context.lineWidth = focused ? 3.4 : 2.6;
+  context.strokeStyle = color(alpha * 0.38);
+  context.shadowColor = color(alpha * 0.82);
+  context.shadowBlur = focused ? 12 : 9;
+  context.lineWidth = focused ? 5.2 : 4.4;
   context.stroke();
-  context.shadowBlur = focused ? 4 : 2;
+  context.shadowBlur = focused ? 6 : 4;
   context.strokeStyle = color(alpha);
-  context.lineWidth = focused ? 1.18 : 0.84;
+  context.lineWidth = focused ? 1.75 : 1.35;
   context.stroke();
 
   if (reveal > 0.08) {
     context.shadowBlur = 0;
     drawConnectionTerminal(context, start, variant, alpha * 0.9);
     drawConnectionTerminal(context, end, variant + 1, alpha * 0.9);
+    drawRelayFrame(context, pointAt(0.38), focused ? 10 : 8, alpha * 0.92);
+    if (distance > 120) {
+      drawRelayFrame(context, pointAt(0.68), focused ? 7 : 6, alpha * 0.82);
+    }
 
     const packetProgress = (now * 0.0002 % 1) * clamp(reveal, 0, 1);
     const packet = pointAt(packetProgress);

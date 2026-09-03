@@ -252,6 +252,9 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
   assert.match(telemetrySource, /function drawFrameNetwork/);
   assert.match(telemetrySource, /function drawConnectionTerminal/);
+  assert.match(telemetrySource, /function drawRelayFrame/);
+  assert.match(telemetrySource, /drawRelayFrame\(context, pointAt\(0\.38\)/);
+  assert.match(telemetrySource, /context\.lineWidth = focused \? 1\.75 : 1\.35/);
   assert.match(telemetrySource, /panelVariant % formats\.length/);
   assert.match(telemetrySource, /panelVariant: number/);
   assert.match(telemetrySource, /function viewportFrame/);
