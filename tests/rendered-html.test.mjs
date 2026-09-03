@@ -331,7 +331,16 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
     /blob\.artStyle === "style-2" &&\s*blob\.frozenAt === undefined &&\s*now - blob\.createdAt < DOTTED_FORMATION_SETTLE_DURATION/,
   );
   assert.match(auraSource, /drawDottedSigilFlowLayer\(\s*pixelContext/);
-  assert.match(auraSource, /context\.drawImage\(pixelLayer, 0, 0, width, height\)/);
+  assert.match(auraSource, /function drawPixelLayerAtBackingResolution/);
+  assert.match(auraSource, /context\.setTransform\(1, 0, 0, 1, 0, 0\)/);
+  assert.match(
+    auraSource,
+    /context\.drawImage\(source, 0, 0, context\.canvas\.width, context\.canvas\.height\)/,
+  );
+  assert.match(auraSource, /const pixelBackingWidth = Math\.max\(1, context\.canvas\.width\)/);
+  assert.match(auraSource, /const pixelWidth = Math\.max\(1, canvas\.width\)/);
+  assert.match(auraSource, /drawPixelLayerAtBackingResolution\(context, pixelLayer\)/);
+  assert.doesNotMatch(auraSource, /context\.drawImage\(pixelLayer, 0, 0, width, height\)/);
   assert.match(auraSource, /const displayedPixelSize = displayWidth < 500 \? 2 : 3/);
   assert.match(auraSource, /const displayedGridStep = displayedPixelSize \* 2/);
   assert.match(auraSource, /centerX: blob\.x \* width/);
@@ -394,8 +403,8 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /context\.globalCompositeOperation = "luminosity"/);
   assert.match(auraSource, /context\.globalAlpha = blendsWithEarlierArtwork \? 0\.94 : 1/);
   assert.match(auraSource, /context\.globalCompositeOperation = "difference"/);
-  assert.match(auraSource, /context\.drawImage\(pixelAccentLayer/);
-  assert.match(auraSource, /const pixelWidth = Math\.max\(1, Math\.round\(width\)\)/);
+  assert.match(auraSource, /drawPixelLayerAtBackingResolution\(context, pixelAccentLayer\)/);
+  assert.match(auraSource, /const pixelWidth = Math\.max\(1, canvas\.width\)/);
   assert.match(auraSource, /pixelLayer\.width = output\.width/);
   assert.match(auraSource, /const AURA_BACKING_PIXEL_BUDGET = 1_500_000/);
   assert.match(auraSource, /const AURA_RENDER_PIXEL_BUDGET = 360_000/);

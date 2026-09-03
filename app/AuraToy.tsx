@@ -1956,6 +1956,17 @@ function drawDottedSigilFlowLayer(
   context.restore();
 }
 
+function drawPixelLayerAtBackingResolution(
+  context: CanvasRenderingContext2D,
+  source: HTMLCanvasElement,
+) {
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.imageSmoothingEnabled = false;
+  context.drawImage(source, 0, 0, context.canvas.width, context.canvas.height);
+  context.restore();
+}
+
 function drawChronologicalAuraLayers(
   context: CanvasRenderingContext2D,
   organicLayer: HTMLCanvasElement,
@@ -2025,6 +2036,22 @@ function drawChronologicalAuraLayers(
     }
 
     if (runKind === "pixel") {
+      const pixelBackingWidth = Math.max(1, context.canvas.width);
+      const pixelBackingHeight = Math.max(1, context.canvas.height);
+      if (
+        pixelLayer.width !== pixelBackingWidth ||
+        pixelLayer.height !== pixelBackingHeight
+      ) {
+        pixelLayer.width = pixelBackingWidth;
+        pixelLayer.height = pixelBackingHeight;
+      }
+      if (
+        pixelAccentLayer.width !== pixelBackingWidth ||
+        pixelAccentLayer.height !== pixelBackingHeight
+      ) {
+        pixelAccentLayer.width = pixelBackingWidth;
+        pixelAccentLayer.height = pixelBackingHeight;
+      }
       pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
       pixelAccentContext.clearRect(0, 0, pixelAccentLayer.width, pixelAccentLayer.height);
       drawDottedSigilFlowLayer(
@@ -2047,35 +2074,35 @@ function drawChronologicalAuraLayers(
         context.globalCompositeOperation = "screen";
         context.globalAlpha = 0.7;
         context.filter = `blur(${clamp(Math.min(width, height) * 0.009, 4, 9)}px)`;
-        context.drawImage(pixelAccentLayer, 0, 0, width, height);
+        drawPixelLayerAtBackingResolution(context, pixelAccentLayer);
         context.restore();
 
         context.save();
         context.globalCompositeOperation = "color";
         context.globalAlpha = 0.46;
         context.imageSmoothingEnabled = false;
-        context.drawImage(pixelLayer, 0, 0, width, height);
+        drawPixelLayerAtBackingResolution(context, pixelLayer);
         context.restore();
 
         context.save();
         context.globalCompositeOperation = "luminosity";
         context.globalAlpha = 0.38;
         context.imageSmoothingEnabled = false;
-        context.drawImage(pixelLayer, 0, 0, width, height);
+        drawPixelLayerAtBackingResolution(context, pixelLayer);
         context.restore();
       }
       context.save();
       context.globalCompositeOperation = "source-over";
       context.globalAlpha = blendsWithEarlierArtwork ? 0.94 : 1;
       context.imageSmoothingEnabled = false;
-      context.drawImage(pixelLayer, 0, 0, width, height);
+      drawPixelLayerAtBackingResolution(context, pixelLayer);
       context.restore();
       if (blendsWithEarlierArtwork) {
         context.save();
         context.globalCompositeOperation = "difference";
         context.globalAlpha = 0.5;
         context.imageSmoothingEnabled = false;
-        context.drawImage(pixelAccentLayer, 0, 0, width, height);
+        drawPixelLayerAtBackingResolution(context, pixelAccentLayer);
         context.restore();
       }
     } else if (runKind === "metalheart") {
@@ -4327,8 +4354,8 @@ export function AuraToy() {
           settledCount = 0;
         }
       }
-      const pixelWidth = Math.max(1, Math.round(width));
-      const pixelHeight = Math.max(1, Math.round(height));
+      const pixelWidth = Math.max(1, canvas.width);
+      const pixelHeight = Math.max(1, canvas.height);
       if (pixelLayer.width !== pixelWidth || pixelLayer.height !== pixelHeight) {
         pixelLayer.width = pixelWidth;
         pixelLayer.height = pixelHeight;
@@ -4781,7 +4808,7 @@ export function AuraToy() {
         context.save();
         context.globalCompositeOperation = "source-over";
         context.imageSmoothingEnabled = false;
-        context.drawImage(pixelLayer, 0, 0, width, height);
+        drawPixelLayerAtBackingResolution(context, pixelLayer);
         context.restore();
       } else {
         context.save();
