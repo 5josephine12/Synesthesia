@@ -441,7 +441,9 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /export function renderMetalheartFrame/);
   assert.match(styleThreeSource, /function buildRibbon/);
   assert.match(styleThreeSource, /function buildLoop/);
-  assert.match(styleThreeSource, /const strandCount = 6 \+ Math\.floor/);
+  assert.match(styleThreeSource, /const strandCount = 8 \+ Math\.floor/);
+  assert.match(styleThreeSource, /const COMPOSITION_FLOW_ANGLE = -0\.67/);
+  assert.match(styleThreeSource, /const focalPoint =/);
   assert.match(styleThreeSource, /const isPlate = shapeRoll >= 0\.96/);
   assert.match(styleThreeSource, /const edgeOrigin =/);
   assert.match(styleThreeSource, /context\.fill\(shape\.fill\)/);
@@ -450,7 +452,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /context\.fillStyle = "#ffffff"/);
   assert.match(styleThreeSource, /rgba\(0, 0, 0/);
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 6/);
-  assert.match(styleThreeSource, /const RENDER_PIXEL_BUDGET = 3_200_000/);
+  assert.match(styleThreeSource, /const RENDER_PIXEL_BUDGET = 5_000_000/);
   assert.match(styleThreeSource, /desynchronized: true/);
   assert.match(styleThreeSource, /Math\.pow\(Math\.max\(0\.002, 1 - normalized\), 0\.36\)/);
   assert.match(styleThreeSource, /const displayScale = Math\.min\(1\.5, window\.devicePixelRatio \|\| 1\)/);

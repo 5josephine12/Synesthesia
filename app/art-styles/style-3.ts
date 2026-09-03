@@ -62,9 +62,10 @@ export type MetalheartPulseOptions = {
 
 const FORMATION_DURATION = 1900;
 const MAX_VISIBLE_GROWTHS = 6;
-const RENDER_PIXEL_BUDGET = 3_200_000;
+const RENDER_PIXEL_BUDGET = 5_000_000;
 const TAU = Math.PI * 2;
-const DIRECTION_SET = [-1.52, -1.16, -0.78, -0.38, -0.08, 0.34, 0.7, 1.08, 1.46, 2.18, 2.72] as const;
+const COMPOSITION_FLOW_ANGLE = -0.67;
+const FLOW_DIRECTION_OFFSETS = [-0.86, -0.56, -0.34, -0.18, -0.06, 0, 0.1, 0.24, 0.43, 0.72, 1.42] as const;
 
 type Point = { x: number; y: number };
 
@@ -173,7 +174,7 @@ function ribbonWidth(spec: RibbonSpec, normalized: number, edge: -1 | 1) {
 
 function buildRibbon(spec: RibbonSpec): InkShape {
   const reveal = clamp(spec.reveal, 0.025, 1);
-  const samples = Math.max(7, Math.ceil(24 * reveal));
+  const samples = Math.max(12, Math.ceil(44 * reveal));
   const left: Point[] = [];
   const right: Point[] = [];
   const centers: Point[] = [];
@@ -218,20 +219,25 @@ function buildLoop(
   center: Point,
   radiusX: number,
   radiusY: number,
+  rotation: number,
   width: number,
   startAngle: number,
   sweep: number,
   reveal: number,
 ): InkShape {
   const visibleSweep = sweep * clamp(reveal, 0.025, 1);
-  const samples = Math.max(9, Math.ceil(Math.abs(visibleSweep) * 8));
+  const samples = Math.max(16, Math.ceil(Math.abs(visibleSweep) * 14));
   const left: Point[] = [];
   const right: Point[] = [];
   for (let index = 0; index <= samples; index += 1) {
     const progress = index / samples;
     const angle = startAngle + visibleSweep * progress;
-    const tangentX = -Math.sin(angle) * radiusX * Math.sign(visibleSweep);
-    const tangentY = Math.cos(angle) * radiusY * Math.sign(visibleSweep);
+    const localTangentX = -Math.sin(angle) * radiusX * Math.sign(visibleSweep);
+    const localTangentY = Math.cos(angle) * radiusY * Math.sign(visibleSweep);
+    const cosine = Math.cos(rotation);
+    const sine = Math.sin(rotation);
+    const tangentX = localTangentX * cosine - localTangentY * sine;
+    const tangentY = localTangentX * sine + localTangentY * cosine;
     const tangentLength = Math.max(0.0001, Math.hypot(tangentX, tangentY));
     const normalX = -tangentY / tangentLength;
     const normalY = tangentX / tangentLength;
@@ -239,10 +245,11 @@ function buildLoop(
     const mechanicalStep = progress < 0.28 ? 0.72 : progress < 0.64 ? 1.08 : 0.62;
     const variation = 1 + Math.sin(progress * TAU * 3 + hash(seed, 11) * TAU) * 0.025;
     const halfWidth = Math.max(0.22, width * endTaper * mechanicalStep * variation);
-    const point = {
-      x: center.x + Math.cos(angle) * radiusX,
-      y: center.y + Math.sin(angle) * radiusY,
-    };
+    const point = rotatePoint(
+      { x: Math.cos(angle) * radiusX, y: Math.sin(angle) * radiusY },
+      center,
+      rotation,
+    );
     left.push({ x: point.x + normalX * halfWidth, y: point.y + normalY * halfWidth });
     right.push({ x: point.x - normalX * halfWidth, y: point.y - normalY * halfWidth });
   }
@@ -290,6 +297,18 @@ function drawInkComposition(
   const shortSide = Math.min(width, height);
   const shapes: InkShape[] = [];
   const fragments: Path2D[] = [];
+  const responsiveCenter = active.reduce(
+    (center, particle) => ({ x: center.x + particle.x, y: center.y + particle.y }),
+    { x: 0, y: 0 },
+  );
+  const responsiveX = (responsiveCenter.x / Math.max(1, active.length)) * width;
+  const responsiveY = (responsiveCenter.y / Math.max(1, active.length)) * height;
+  const focalPoint = {
+    x: lerp(width * 0.3, responsiveX, 0.1),
+    y: lerp(height * 0.57, responsiveY, 0.08),
+  };
+  const flow = { x: Math.cos(COMPOSITION_FLOW_ANGLE), y: Math.sin(COMPOSITION_FLOW_ANGLE) };
+  const crossFlow = { x: -flow.y, y: flow.x };
 
   for (let index = 0; index < active.length; index += 1) {
     const particle = active[index];
@@ -297,11 +316,14 @@ function drawInkComposition(
     const age = reducedMotion ? FORMATION_DURATION : Math.max(0, now - particle.createdAt);
     const arrival = easeOutCubic(age / FORMATION_DURATION);
     if (arrival <= 0.01) continue;
+    const order = active.length <= 1 ? 0 : index / (active.length - 1) - 0.5;
+    const alongFlow = shortSide * (order * 0.29 + (hash(seed, 3) - 0.5) * 0.055);
+    const acrossFlow = shortSide * (hash(seed, 5) - 0.5) * 0.17;
     const pocket = {
-      x: particle.x * width + (hash(seed, 3) - 0.5) * shortSide * 0.14,
-      y: particle.y * height + (hash(seed, 5) - 0.5) * shortSide * 0.12,
+      x: focalPoint.x + flow.x * alongFlow + crossFlow.x * acrossFlow,
+      y: focalPoint.y + flow.y * alongFlow + crossFlow.y * acrossFlow,
     };
-    const strandCount = 6 + Math.floor(hash(seed, 7) * 5);
+    const strandCount = 8 + Math.floor(hash(seed, 7) * 5);
     for (let strandIndex = 0; strandIndex < strandCount; strandIndex += 1) {
       const strandSeed = seed + strandIndex * 193;
       const delay = strandIndex * 0.025;
@@ -311,17 +333,18 @@ function drawInkComposition(
       const isLoop = shapeRoll > 0.68 && shapeRoll < 0.82;
       const isMedium = shapeRoll >= 0.82 && shapeRoll < 0.96;
       const isPlate = shapeRoll >= 0.96;
-      const offsetAngle = hash(strandSeed, 13) * TAU;
-      const offsetRadius = shortSide * Math.pow(hash(strandSeed, 17), 1.7) * 0.17;
+      const localAlong = (hash(strandSeed, 13) - 0.5) * shortSide * 0.22;
+      const localAcross = (hash(strandSeed, 17) - 0.5) * shortSide * 0.135;
       const origin = {
-        x: pocket.x + Math.cos(offsetAngle) * offsetRadius * lerp(0.6, 1.45, hash(strandSeed, 19)),
-        y: pocket.y + Math.sin(offsetAngle) * offsetRadius,
+        x: pocket.x + flow.x * localAlong + crossFlow.x * localAcross,
+        y: pocket.y + flow.y * localAlong + crossFlow.y * localAcross,
       };
-      const directionIndex = Math.floor(hash(strandSeed, 23) * DIRECTION_SET.length);
+      const directionIndex = Math.floor(hash(strandSeed, 23) * FLOW_DIRECTION_OFFSETS.length);
       const angle =
-        DIRECTION_SET[Math.min(DIRECTION_SET.length - 1, directionIndex)] +
-        particle.angle * 0.18 +
-        (hash(strandSeed, 29) - 0.5) * 0.2;
+        COMPOSITION_FLOW_ANGLE +
+        FLOW_DIRECTION_OFFSETS[Math.min(FLOW_DIRECTION_OFFSETS.length - 1, directionIndex)] +
+        particle.angle * 0.045 +
+        (hash(strandSeed, 29) - 0.5) * 0.12;
 
       if (isLoop) {
         shapes.push(buildLoop(
@@ -329,6 +352,7 @@ function drawInkComposition(
           origin,
           shortSide * lerp(0.055, 0.14, hash(strandSeed, 31)),
           shortSide * lerp(0.035, 0.11, hash(strandSeed, 37)),
+          COMPOSITION_FLOW_ANGLE + (hash(strandSeed, 39) - 0.5) * 0.82,
           shortSide * lerp(0.0012, 0.0032, hash(strandSeed, 41)),
           angle,
           (hash(strandSeed, 43) > 0.5 ? 1 : -1) * lerp(Math.PI * 0.78, Math.PI * 1.72, hash(strandSeed, 47)),
@@ -361,22 +385,24 @@ function drawInkComposition(
       }));
     }
 
-    // A small number of hairline gestures enter from beyond the crop. They
-    // aim toward a density pocket but continue independently through it.
+    // A small number of parallel hairline gestures cross the crop along the
+    // composition's shared diagonal without becoming one connected trunk.
     if (index < 2) {
-      const fromLeft = hash(seed, 131) > 0.5;
+      const fromLeadingEdge = hash(seed, 131) > 0.5;
       const edgeOrigin = {
-        x: fromLeft ? -width * 0.09 : width * 1.09,
-        y: clamp(pocket.y + (hash(seed, 137) - 0.5) * height * 0.42, -height * 0.08, height * 1.08),
+        x: fromLeadingEdge ? -width * 0.1 : focalPoint.x - flow.x * shortSide * 0.72,
+        y: fromLeadingEdge
+          ? clamp(focalPoint.y + shortSide * lerp(0.18, 0.5, hash(seed, 137)), -height * 0.08, height * 1.08)
+          : focalPoint.y - flow.y * shortSide * 0.72,
       };
-      const edgeAngle = Math.atan2(pocket.y - edgeOrigin.y, pocket.x - edgeOrigin.x) + (hash(seed, 139) - 0.5) * 0.24;
+      const edgeAngle = COMPOSITION_FLOW_ANGLE + (hash(seed, 139) - 0.5) * 0.16;
       shapes.push(buildRibbon({
         seed: seed + 1709,
         origin: edgeOrigin,
         angle: edgeAngle,
-        length: Math.hypot(pocket.x - edgeOrigin.x, pocket.y - edgeOrigin.y) + shortSide * lerp(0.22, 0.46, hash(seed, 149)),
+        length: Math.hypot(width, height) * lerp(0.72, 1.02, hash(seed, 149)),
         width: shortSide * lerp(0.00055, 0.00135, hash(seed, 151)),
-        bend: (hash(seed, 157) - 0.5) * 0.06,
+        bend: (hash(seed, 157) - 0.5) * 0.035,
         wave: 0.004,
         reveal: arrival,
         lobe: 0.18,
@@ -395,12 +421,12 @@ function drawInkComposition(
   }
 
   context.save();
-  context.lineCap = "round";
+  context.lineCap = "butt";
   context.lineJoin = "miter";
   context.miterLimit = 3;
-  const outlineAlpha = clamp(0.72 + pulse * 0.12, 0.72, 0.88);
+  const outlineAlpha = clamp(0.66 + pulse * 0.12, 0.66, 0.82);
   context.strokeStyle = `rgba(0, 0, 0, ${outlineAlpha})`;
-  context.lineWidth = clamp(shortSide * 0.00125, 1, 1.65);
+  context.lineWidth = clamp(shortSide * 0.00078, 0.72, 1.08);
   context.fillStyle = "#ffffff";
   for (const shape of shapes) {
     context.stroke(shape.fill);
