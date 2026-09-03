@@ -159,15 +159,15 @@ class HalftoneRenderer {
     const accentPath = new Path2D();
     const icyCorePath = new Path2D();
 
-    // The interaction mask is strongest around the perimeter, so underlying
-    // artwork remains intact at the heart and dissolves into dots at its sides.
+    // A long, continuous falloff prevents the underlying artwork from revealing
+    // the boundary of an individual halftone field.
     this.regionContext.save();
     this.regionContext.translate(centerX, centerY);
     this.regionContext.scale(fieldWidth * arrival * 1.14, fieldHeight * arrival * 1.18);
     const regionGradient = this.regionContext.createRadialGradient(0, 0, 0.08, 0, 0, 1);
-    regionGradient.addColorStop(0, `rgba(255, 255, 255, ${0.08 + strength * 0.08})`);
-    regionGradient.addColorStop(0.5, `rgba(255, 255, 255, ${0.16 + strength * 0.12})`);
-    regionGradient.addColorStop(0.82, `rgba(255, 255, 255, ${0.5 + strength * 0.2})`);
+    regionGradient.addColorStop(0, `rgba(255, 255, 255, ${0.24 + strength * 0.12})`);
+    regionGradient.addColorStop(0.42, `rgba(255, 255, 255, ${0.18 + strength * 0.1})`);
+    regionGradient.addColorStop(0.74, `rgba(255, 255, 255, ${0.08 + strength * 0.06})`);
     regionGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
     this.regionContext.fillStyle = regionGradient;
     this.regionContext.beginPath();
@@ -242,6 +242,19 @@ class HalftoneRenderer {
       s: clamp(accent.s * 0.54, 3, 68),
       l: clamp(Math.max(accent.l + 22, 78), 78, 90),
     };
+    this.glowContext.save();
+    this.glowContext.translate(centerX, centerY);
+    this.glowContext.scale(fieldWidth * 1.85 * arrival, fieldHeight * 2 * arrival);
+    const glowGradient = this.glowContext.createRadialGradient(0, 0, 0, 0, 0, 1);
+    glowGradient.addColorStop(0, `rgba(250, 254, 255, ${(0.32 + strength * 0.16) * arrival})`);
+    glowGradient.addColorStop(0.34, hsla(luminousBody, (0.24 + strength * 0.08) * arrival));
+    glowGradient.addColorStop(0.68, hsla(luminousAccent, (0.1 + strength * 0.05) * arrival));
+    glowGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+    this.glowContext.fillStyle = glowGradient;
+    this.glowContext.beginPath();
+    this.glowContext.arc(0, 0, 1, 0, Math.PI * 2);
+    this.glowContext.fill();
+    this.glowContext.restore();
     this.context.save();
     this.context.globalCompositeOperation = "source-over";
     this.context.fillStyle = hsla(luminousBody, 0.68 * arrival);
@@ -292,6 +305,8 @@ class HalftoneRenderer {
 
     this.context.setTransform(1, 0, 0, 1, 0, 0);
     this.context.clearRect(0, 0, this.width, this.height);
+    this.glowContext.setTransform(1, 0, 0, 1, 0, 0);
+    this.glowContext.clearRect(0, 0, this.width, this.height);
     this.regionContext.setTransform(1, 0, 0, 1, 0, 0);
     this.regionContext.clearRect(0, 0, this.width, this.height);
     let forming = false;
@@ -299,14 +314,6 @@ class HalftoneRenderer {
     for (let index = active.length - 1; index >= 0; index -= 1) {
       if (this.drawField(active[index], now, reducedMotion, occupiedDots)) forming = true;
     }
-    this.glowContext.setTransform(1, 0, 0, 1, 0, 0);
-    this.glowContext.clearRect(0, 0, this.width, this.height);
-    this.glowContext.save();
-    this.glowContext.globalCompositeOperation = "source-over";
-    this.glowContext.globalAlpha = 0.82;
-    this.glowContext.filter = `blur(${clamp(Math.min(this.width, this.height) * 0.02, 12 * this.displayScale, 28 * this.displayScale)}px)`;
-    this.glowContext.drawImage(this.canvas, 0, 0);
-    this.glowContext.restore();
     this.lastFrameAt = now;
     this.lastSignature = signature;
     return {

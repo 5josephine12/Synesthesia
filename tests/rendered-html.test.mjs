@@ -511,9 +511,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleFourSource, /const py = centerY \+ localY/);
   assert.match(styleFourSource, /rgba\(247, 253, 255/);
   assert.match(styleFourSource, /const regionGradient = this\.regionContext\.createRadialGradient/);
-  assert.match(styleFourSource, /regionGradient\.addColorStop\(0\.82/);
+  assert.match(styleFourSource, /regionGradient\.addColorStop\(0\.74/);
   assert.match(styleFourSource, /regionCanvas: this\.regionCanvas/);
-  assert.match(styleFourSource, /filter = `blur/);
+  assert.match(styleFourSource, /const glowGradient = this\.glowContext\.createRadialGradient/);
+  assert.match(styleFourSource, /glowGradient\.addColorStop\(0\.68/);
+  assert.doesNotMatch(styleFourSource, /glowContext\.filter/);
   assert.doesNotMatch(styleFourSource, /Math\.cos\(angle\)|Math\.sin\(angle\)/);
   assert.match(styleFourSource, /const occupiedDots = new Map/);
   assert.match(styleFourSource, /overlapsExistingDot/);

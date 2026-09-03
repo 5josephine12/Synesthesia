@@ -2178,13 +2178,13 @@ function drawChronologicalAuraLayers(
 
               context.save();
               context.globalCompositeOperation = "destination-out";
-              context.globalAlpha = 0.38;
+              context.globalAlpha = 0.24;
               context.drawImage(liquidMetalFrame.regionCanvas, 0, 0, width, height);
               context.restore();
 
               context.save();
               context.globalCompositeOperation = "source-over";
-              context.globalAlpha = 0.44;
+              context.globalAlpha = 0.36;
               context.drawImage(organicLayer, 0, 0, width, height);
               context.restore();
             }
