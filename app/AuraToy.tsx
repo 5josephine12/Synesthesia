@@ -6060,48 +6060,33 @@ export function AuraToy() {
                   {permissionPromptSource === "system" ? (
                     <>
                       <section>
-                        <h3>Choose a source</h3>
                         <p>Select a tab, a window, or your entire screen.</p>
                       </section>
                       <section>
-                        <h3>Share the audio</h3>
-                        <p>Keep Share audio turned on.</p>
-                      </section>
-                      <section>
-                        <h3>On a Mac</h3>
                         <p>
-                          Allow browser audio recording in Privacy and Security. Open Screen and
-                          System Audio Recording.
+                          Keep Share audio turned on. On a Mac, allow browser audio recording in
+                          Privacy and Security. Open Screen and System Audio Recording.
                         </p>
                       </section>
                       <section>
-                        <h3>Your privacy</h3>
                         <p>Aura listens on this device. Audio is never saved.</p>
                       </section>
                     </>
                   ) : permissionPromptSource === "external" ? (
                     <>
                       <section>
-                        <h3>Connect your device</h3>
-                        <p>Use a MIDI instrument or USB audio device.</p>
+                        <p>Connect a MIDI instrument or USB audio device.</p>
                       </section>
                       <section>
-                        <h3>What Aura reads</h3>
-                        <p>Aura reads notes and audio on this device.</p>
-                      </section>
-                      <section>
-                        <h3>Your privacy</h3>
-                        <p>Nothing is saved.</p>
+                        <p>Aura reads notes and audio on this device. Nothing is saved.</p>
                       </section>
                     </>
                   ) : (
                     <>
                       <section>
-                        <h3>What Aura hears</h3>
                         <p>Aura listens for pitch, rhythm, and volume.</p>
                       </section>
                       <section>
-                        <h3>Your privacy</h3>
                         <p>Audio stays on this device. Audio is never saved.</p>
                       </section>
                     </>
