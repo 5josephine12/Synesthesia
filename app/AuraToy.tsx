@@ -2152,8 +2152,8 @@ function drawChronologicalAuraLayers(
           if (liquidMetalFrame) {
             const blendsWithEarlierArtwork = runStart > 0 || hasEarlierArtwork;
             context.save();
-            context.globalCompositeOperation = blendsWithEarlierArtwork ? "multiply" : "source-over";
-            context.globalAlpha = blendsWithEarlierArtwork ? 0.72 : 0.9;
+            context.globalCompositeOperation = blendsWithEarlierArtwork ? "screen" : "source-over";
+            context.globalAlpha = blendsWithEarlierArtwork ? 0.88 : 0.9;
             context.imageSmoothingEnabled = true;
             context.imageSmoothingQuality = "high";
             context.drawImage(liquidMetalFrame.canvas, 0, 0, width, height);

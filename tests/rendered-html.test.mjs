@@ -506,9 +506,16 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleFourSource, /path\.arc\(px, py, radius, 0, Math\.PI \* 2\)/);
   assert.match(styleFourSource, /const bodyPath = new Path2D\(\)/);
   assert.match(styleFourSource, /const accentPath = new Path2D\(\)/);
+  assert.match(styleFourSource, /const icyCorePath = new Path2D\(\)/);
+  assert.match(styleFourSource, /const px = centerX \+ localX/);
+  assert.match(styleFourSource, /const py = centerY \+ localY/);
+  assert.match(styleFourSource, /rgba\(247, 253, 255/);
+  assert.match(styleFourSource, /globalCompositeOperation = "destination-over"/);
+  assert.match(styleFourSource, /filter = `blur/);
+  assert.doesNotMatch(styleFourSource, /Math\.cos\(angle\)|Math\.sin\(angle\)/);
   assert.match(styleFourSource, /const occupiedDots = new Map/);
   assert.match(styleFourSource, /overlapsExistingDot/);
-  assert.match(auraSource, /context\.globalCompositeOperation = blendsWithEarlierArtwork \? "multiply" : "source-over"/);
+  assert.match(auraSource, /context\.globalCompositeOperation = blendsWithEarlierArtwork \? "screen" : "source-over"/);
   assert.match(auraSource, /context\.globalCompositeOperation = "color"/);
   assert.match(styleFourSource, /desynchronized: true/);
   assert.doesNotMatch(styleFourSource, /getImageData|createRadialGradient|shadowBlur|ShaderMaterial|from "three"/);

@@ -64,6 +64,8 @@ class HalftoneRenderer {
   readonly canvas: HTMLCanvasElement;
 
   private readonly context: CanvasRenderingContext2D;
+  private readonly glowCanvas: HTMLCanvasElement;
+  private readonly glowContext: CanvasRenderingContext2D;
   private width = 0;
   private height = 0;
   private displayScale = 1;
@@ -79,6 +81,13 @@ class HalftoneRenderer {
     });
     if (!context) throw new Error("Halftone canvas is unavailable");
     this.context = context;
+    this.glowCanvas = document.createElement("canvas");
+    const glowContext = this.glowCanvas.getContext("2d", {
+      alpha: true,
+      desynchronized: true,
+    });
+    if (!glowContext) throw new Error("Halftone glow canvas is unavailable");
+    this.glowContext = glowContext;
   }
 
   private syncSize(width: number, height: number) {
@@ -93,6 +102,8 @@ class HalftoneRenderer {
     this.displayScale = scale;
     this.canvas.width = targetWidth;
     this.canvas.height = targetHeight;
+    this.glowCanvas.width = targetWidth;
+    this.glowCanvas.height = targetHeight;
     return true;
   }
 
@@ -116,9 +127,6 @@ class HalftoneRenderer {
     const pitch = clamp((particle.midi - 24) / 83, 0, 1);
     const strength = clamp(particle.velocity, 0, 1);
     const seed = particle.id * 4099 + particle.midi * 131 + particle.repeat * 17;
-    const angle = lerp(-0.9, 0.9, hash(seed, 3)) + (pitch - 0.5) * 0.45;
-    const cosine = Math.cos(angle);
-    const sine = Math.sin(angle);
 
     // Strong bass notes occupy a broader, denser field. Higher and quieter
     // notes leave finer, airier screens, while every dot remains circular.
@@ -132,13 +140,11 @@ class HalftoneRenderer {
     const gridStep = clamp(dotRadius * lerp(2.5, 1.92, strength), 4.5 * scale, 16 * scale);
     const centerX = particle.x * width;
     const centerY = particle.y * height;
-    const drift = (1 - arrival) * shortSide * 0.055;
-    const originX = centerX - cosine * drift;
-    const originY = centerY - sine * drift;
     const columns = Math.ceil((fieldWidth * 2.15) / gridStep);
     const rows = Math.ceil((fieldHeight * 2.15) / gridStep);
     const bodyPath = new Path2D();
     const accentPath = new Path2D();
+    const icyCorePath = new Path2D();
 
     for (let row = -rows; row <= rows; row += 1) {
       for (let column = -columns; column <= columns; column += 1) {
@@ -161,8 +167,8 @@ class HalftoneRenderer {
         );
         if (occupancy <= 0.025 || arrival <= revealOrder) continue;
 
-        const px = originX + localX * cosine - localY * sine;
-        const py = originY + localX * sine + localY * cosine;
+        const px = centerX + localX;
+        const py = centerY + localY;
         if (px < -dotRadius || px > width + dotRadius || py < -dotRadius || py > height + dotRadius) continue;
         const edgeScale = clamp((occupancy + 0.18) / 0.82, 0.16, 1.18);
         const pulseScale = lerp(0.72, 1, clamp((arrival - revealOrder) / 0.24, 0, 1));
@@ -189,17 +195,32 @@ class HalftoneRenderer {
         const path = hash(seed + row * 43 + column * 17, 67) > 0.82 ? accentPath : bodyPath;
         path.moveTo(px + radius, py);
         path.arc(px, py, radius, 0, Math.PI * 2);
+        const coreRadius = radius * lerp(0.5, 0.68, strength);
+        icyCorePath.moveTo(px + coreRadius, py);
+        icyCorePath.arc(px, py, coreRadius, 0, Math.PI * 2);
       }
     }
 
     const body = particle.color ?? { h: 338, s: 92, l: 62 };
     const accent = particle.accent ?? body;
+    const luminousBody = {
+      h: body.h,
+      s: clamp(body.s * 0.58, 34, 72),
+      l: clamp(Math.max(body.l + 20, 76), 76, 88),
+    };
+    const luminousAccent = {
+      h: accent.h,
+      s: clamp(accent.s * 0.54, 3, 68),
+      l: clamp(Math.max(accent.l + 22, 78), 78, 90),
+    };
     this.context.save();
     this.context.globalCompositeOperation = "source-over";
-    this.context.fillStyle = hsla(body, 0.76 * arrival, 5, 4);
+    this.context.fillStyle = hsla(luminousBody, 0.68 * arrival);
     this.context.fill(bodyPath);
-    this.context.fillStyle = hsla(accent, 0.6 * arrival, 4, 7);
+    this.context.fillStyle = hsla(luminousAccent, 0.56 * arrival);
     this.context.fill(accentPath);
+    this.context.fillStyle = `rgba(247, 253, 255, ${0.92 * arrival})`;
+    this.context.fill(icyCorePath);
     this.context.restore();
 
     return particle.frozenAt === undefined && arrival < 0.999;
@@ -242,6 +263,19 @@ class HalftoneRenderer {
     for (let index = active.length - 1; index >= 0; index -= 1) {
       if (this.drawField(active[index], now, reducedMotion, occupiedDots)) forming = true;
     }
+    this.glowContext.setTransform(1, 0, 0, 1, 0, 0);
+    this.glowContext.clearRect(0, 0, this.width, this.height);
+    this.glowContext.save();
+    this.glowContext.globalCompositeOperation = "source-over";
+    this.glowContext.globalAlpha = 0.82;
+    this.glowContext.filter = `blur(${clamp(Math.min(this.width, this.height) * 0.012, 7 * this.displayScale, 16 * this.displayScale)}px)`;
+    this.glowContext.drawImage(this.canvas, 0, 0);
+    this.glowContext.restore();
+    this.context.save();
+    this.context.globalCompositeOperation = "destination-over";
+    this.context.globalAlpha = 0.86;
+    this.context.drawImage(this.glowCanvas, 0, 0);
+    this.context.restore();
     this.lastFrameAt = now;
     this.lastSignature = signature;
     return { canvas: this.canvas, forming };
@@ -249,6 +283,7 @@ class HalftoneRenderer {
 
   reset() {
     this.context.clearRect(0, 0, this.width, this.height);
+    this.glowContext.clearRect(0, 0, this.width, this.height);
     this.lastFrameAt = Number.NEGATIVE_INFINITY;
     this.lastSignature = "";
   }
@@ -257,6 +292,8 @@ class HalftoneRenderer {
     this.reset();
     this.canvas.width = 1;
     this.canvas.height = 1;
+    this.glowCanvas.width = 1;
+    this.glowCanvas.height = 1;
   }
 }
 
