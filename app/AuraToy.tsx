@@ -1182,6 +1182,17 @@ function setMicrophoneTrackHints(stream: MediaStream, mode: MicrophoneModeId) {
   }
 }
 
+function reusableSystemAudioStream(stream: MediaStream | null) {
+  if (!stream?.active) return null;
+  return stream.getAudioTracks().some((track) => track.readyState === "live") ? stream : null;
+}
+
+function setMediaStreamEnabled(stream: MediaStream, enabled: boolean) {
+  for (const track of stream.getTracks()) {
+    if (track.readyState === "live") track.enabled = enabled;
+  }
+}
+
 function configureMicrophonePipeline(runtime: MicrophoneRuntime, mode: MicrophoneModeId) {
   runtime.source.disconnect();
   for (const node of runtime.processingNodes) node.disconnect();
@@ -3013,7 +3024,7 @@ export function AuraToy() {
     wakeRendererRef.current?.();
   }, []);
 
-  const stopMicrophone = useCallback(() => {
+  const stopMicrophone = useCallback((preserveSystemAudio = true) => {
     microphoneGenerationRef.current += 1;
     const midiInput = externalMidiInputRef.current;
     if (midiInput) midiInput.onmidimessage = null;
@@ -3025,11 +3036,19 @@ export function AuraToy() {
     externalMidiInputRef.current = null;
     externalMidiAccessRef.current = null;
     const runtime = microphoneRef.current;
-    disposeMicrophoneRuntime(runtime);
-    if (systemAudioStreamRef.current && systemAudioStreamRef.current !== runtime?.stream) {
-      systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
+    const retainedSystemAudio = reusableSystemAudioStream(systemAudioStreamRef.current);
+    const keepsRuntimeStream =
+      preserveSystemAudio && retainedSystemAudio !== null && runtime?.stream === retainedSystemAudio;
+    disposeMicrophoneRuntime(runtime, !keepsRuntimeStream, keepsRuntimeStream);
+    if (preserveSystemAudio && retainedSystemAudio) {
+      setMediaStreamEnabled(retainedSystemAudio, false);
+      systemAudioStreamRef.current = retainedSystemAudio;
+    } else {
+      if (systemAudioStreamRef.current && systemAudioStreamRef.current !== runtime?.stream) {
+        systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+      systemAudioStreamRef.current = null;
     }
-    systemAudioStreamRef.current = null;
     microphoneRef.current = null;
     audioInputSourceRef.current = null;
     microphoneButtonRef.current?.style.setProperty("--mic-level", "0");
@@ -3084,11 +3103,14 @@ export function AuraToy() {
       return;
     }
 
-    const previousRuntime = microphoneRef.current;
-    disposeMicrophoneRuntime(previousRuntime);
-    if (previousRuntime?.stream === systemAudioStreamRef.current) {
+    let retainedSystemAudio = reusableSystemAudioStream(systemAudioStreamRef.current);
+    if (!retainedSystemAudio && systemAudioStreamRef.current) {
+      systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
       systemAudioStreamRef.current = null;
     }
+    const previousRuntime = microphoneRef.current;
+    const keepsPreviousSystemAudio = previousRuntime?.stream === retainedSystemAudio;
+    disposeMicrophoneRuntime(previousRuntime, !keepsPreviousSystemAudio, keepsPreviousSystemAudio);
     microphoneRef.current = null;
     const generation = microphoneGenerationRef.current + 1;
     microphoneGenerationRef.current = generation;
@@ -3118,8 +3140,13 @@ export function AuraToy() {
         if (audioContext.state === "suspended") {
           initialResumeAttempt = audioContext.resume().catch(() => undefined);
         }
-        systemAudioStreamRef.current = null;
-        stream = await mediaDevices.getDisplayMedia(DEVICE_AUDIO_CAPTURE_OPTIONS);
+        if (retainedSystemAudio) {
+          stream = retainedSystemAudio;
+          setMediaStreamEnabled(stream, true);
+        } else {
+          stream = await mediaDevices.getDisplayMedia(DEVICE_AUDIO_CAPTURE_OPTIONS);
+          retainedSystemAudio = stream;
+        }
         selectedDisplaySurface = stream.getVideoTracks()[0]?.getSettings().displaySurface;
         if (stream.getAudioTracks().length === 0) {
           stream.getTracks().forEach((track) => track.stop());
@@ -3154,11 +3181,12 @@ export function AuraToy() {
         }
       }
       if (generation !== microphoneGenerationRef.current) {
-        stream.getTracks().forEach((track) => {
-          track.stop();
-        });
+        const keepsSharedStream =
+          isSystemAudio && stream === systemAudioStreamRef.current && reusableSystemAudioStream(stream);
+        if (keepsSharedStream) setMediaStreamEnabled(stream, false);
+        else stream.getTracks().forEach((track) => track.stop());
         if (audioContext) void audioContext.close().catch(() => undefined);
-        if (stream === systemAudioStreamRef.current) {
+        if (!keepsSharedStream && stream === systemAudioStreamRef.current) {
           systemAudioStreamRef.current = null;
         }
         return;
@@ -3801,10 +3829,13 @@ export function AuraToy() {
         }, { once: true });
       });
     } catch {
-      stream?.getTracks().forEach((track) => {
-        track.stop();
-      });
-      if (stream === systemAudioStreamRef.current) {
+      const keepsSharedStream =
+        isSystemAudio && stream === systemAudioStreamRef.current && reusableSystemAudioStream(stream);
+      if (stream) {
+        if (keepsSharedStream) setMediaStreamEnabled(stream, false);
+        else stream.getTracks().forEach((track) => track.stop());
+      }
+      if (!keepsSharedStream && stream === systemAudioStreamRef.current) {
         systemAudioStreamRef.current = null;
       }
       if (audioContext) void audioContext.close().catch(() => undefined);
@@ -4050,46 +4081,26 @@ export function AuraToy() {
     systemAudioState,
   ]);
 
-  const replaceLiveMicrophoneStream = useCallback(async (runtime: MicrophoneRuntime, generation: number) => {
+  const updateLiveMicrophoneTrack = useCallback(async (runtime: MicrophoneRuntime, generation: number) => {
     const sync = microphoneModeSyncRef.current + 1;
     microphoneModeSyncRef.current = sync;
     const mode = microphoneModeRef.current;
-    let nextStream: MediaStream;
+    const track = runtime.stream.getAudioTracks()[0];
+    if (!track || track.readyState !== "live") return;
     try {
-      nextStream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraintsForMicrophoneMode(mode),
-      });
-      setMicrophoneTrackHints(nextStream, mode);
+      await track.applyConstraints(audioConstraintsForMicrophoneMode(mode));
     } catch {
+      // The local Web Audio pipeline already applies the selected mode even
+      // when a browser does not support the equivalent capture constraint.
       return;
     }
     if (
       sync !== microphoneModeSyncRef.current ||
       generation !== microphoneGenerationRef.current ||
       microphoneRef.current !== runtime
-    ) {
-      nextStream.getTracks().forEach((track) => track.stop());
-      return;
-    }
-
-    const previousSource = runtime.source;
-    const previousStream = runtime.stream;
-    runtime.stream = nextStream;
-    runtime.source = runtime.context.createMediaStreamSource(nextStream);
-    configureMicrophonePipeline(runtime, mode);
-    previousSource.disconnect();
-    previousStream.getTracks().forEach((track) => track.stop());
-    nextStream.getAudioTracks().forEach((track) => {
-      track.addEventListener("ended", () => {
-        if (generation !== microphoneGenerationRef.current) return;
-        const current = microphoneRef.current;
-        if (!current) return;
-        if (current.stream.getAudioTracks().some((active) => active.id === track.id)) {
-          stopMicrophone();
-        }
-      });
-    });
-  }, [stopMicrophone]);
+    ) return;
+    setMicrophoneTrackHints(runtime.stream, mode);
+  }, []);
 
   const selectMicrophoneMode = useCallback(
     (mode: MicrophoneModeId, direction?: -1 | 1) => {
@@ -4114,9 +4125,9 @@ export function AuraToy() {
       setMicrophoneMelodyPitchClass(null);
       setMicrophoneBeatPitchClasses([]);
       setMicrophoneReading("Listening");
-      void replaceLiveMicrophoneStream(runtime, microphoneGenerationRef.current);
+      void updateLiveMicrophoneTrack(runtime, microphoneGenerationRef.current);
     },
-    [replaceLiveMicrophoneStream],
+    [updateLiveMicrophoneTrack],
   );
 
   const cycleMicrophoneMode = useCallback(

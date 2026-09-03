@@ -187,15 +187,19 @@ test("connects external MIDI and USB audio inputs from the hardware control", as
   assert.match(styles, /\.microphone-permission-icon\.is-external-input/);
 });
 
-test("opens a fresh device-audio picker and provides a cohesive permission dialog", async () => {
+test("reuses approved device audio and provides a cohesive permission dialog", async () => {
   const source = await readFile(new URL("../app/AuraToy.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
   assert.match(source, /const systemAudioStreamRef = useRef<MediaStream \| null>\(null\)/);
-  assert.match(source, /systemAudioStreamRef\.current = null;\s*stream = await mediaDevices\.getDisplayMedia/);
-  assert.match(source, /disposeMicrophoneRuntime\(runtime\)/);
-  assert.match(source, /disposeMicrophoneRuntime\(previousRuntime\)/);
-  assert.doesNotMatch(source, /rememberedStream|reusedSystemAudio|retainSystemAudio|retainPreviousSystemAudio/);
+  assert.match(source, /function reusableSystemAudioStream/);
+  assert.match(source, /const retainedSystemAudio = reusableSystemAudioStream\(systemAudioStreamRef\.current\)/);
+  assert.match(source, /if \(retainedSystemAudio\) \{[\s\S]*?setMediaStreamEnabled\(stream, true\)/);
+  assert.match(source, /else \{\s*stream = await mediaDevices\.getDisplayMedia/);
+  assert.match(source, /disposeMicrophoneRuntime\(runtime, !keepsRuntimeStream, keepsRuntimeStream\)/);
+  assert.match(source, /setMediaStreamEnabled\(retainedSystemAudio, false\)/);
+  assert.match(source, /await track\.applyConstraints\(audioConstraintsForMicrophoneMode\(mode\)\)/);
+  assert.doesNotMatch(source, /const replaceLiveMicrophoneStream/);
   assert.match(source, /const SYSTEM_AUDIO_INTRO_SESSION_KEY = "aura-system-audio-introduction-shown"/);
   assert.match(source, /sessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
   assert.match(source, /rememberSessionFlag\(SYSTEM_AUDIO_INTRO_SESSION_KEY\)/);
