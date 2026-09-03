@@ -61,8 +61,8 @@ export type MetalheartPulseOptions = {
 };
 
 const FORMATION_DURATION = 1900;
-const MAX_VISIBLE_GROWTHS = 8;
-const RENDER_PIXEL_BUDGET = 1_050_000;
+const MAX_VISIBLE_GROWTHS = 6;
+const RENDER_PIXEL_BUDGET = 3_200_000;
 const COMPOSITION_SEED = 0x6f726761;
 const TAU = Math.PI * 2;
 
@@ -83,9 +83,6 @@ type RibbonSpec = {
 
 type InkShape = {
   fill: Path2D;
-  edge: Path2D;
-  holes: Path2D[];
-  details: Path2D[];
   centers: Point[];
   widths: number[];
   tangentAngles: number[];
@@ -102,10 +99,6 @@ function lerp(from: number, to: number, amount: number) {
 function easeOutCubic(value: number) {
   const progress = clamp(value, 0, 1);
   return 1 - Math.pow(1 - progress, 3);
-}
-
-function easeInOutSine(value: number) {
-  return -(Math.cos(Math.PI * clamp(value, 0, 1)) - 1) / 2;
 }
 
 function smoothstep(edge0: number, edge1: number, value: number) {
@@ -141,19 +134,15 @@ function traceBoundary(points: readonly Point[], path = new Path2D()) {
 function localRibbonCenter(spec: RibbonSpec, progress: number): Point {
   const phase = hash(spec.seed, 3) * TAU;
   const envelope = Math.sin(progress * Math.PI);
-  const broadCurve = Math.pow(progress, 1.45) * spec.bend * spec.length;
+  const direction = hash(spec.seed, 11) > 0.5 ? 1 : -1;
+  const broadCurve = Math.pow(progress, 1.35) * spec.bend * spec.length;
   const primaryWave =
-    Math.sin(progress * Math.PI * lerp(0.72, 1.46, hash(spec.seed, 5)) + phase) *
+    Math.sin(progress * Math.PI * lerp(0.62, 1.08, hash(spec.seed, 5)) + phase) *
     spec.length *
     spec.wave *
     envelope;
-  const fineWave =
-    Math.sin(progress * Math.PI * 3.4 + phase * 0.61) *
-    spec.length *
-    spec.wave *
-    0.22 *
-    envelope *
-    envelope;
+  const firstElbow = Math.max(0, progress - 0.31) * spec.length * 0.052 * direction;
+  const secondElbow = Math.max(0, progress - 0.67) * spec.length * 0.085 * -direction;
   const hook =
     spec.hook *
     spec.length *
@@ -161,7 +150,7 @@ function localRibbonCenter(spec: RibbonSpec, progress: number): Point {
     Math.pow(smoothstep(0.68, 1, progress), 1.35);
   return {
     x: progress * spec.length,
-    y: broadCurve + primaryWave + fineWave + hook,
+    y: broadCurve + primaryWave + firstElbow + secondElbow + hook,
   };
 }
 
@@ -170,54 +159,24 @@ function worldRibbonCenter(spec: RibbonSpec, progress: number) {
 }
 
 function ribbonWidth(spec: RibbonSpec, normalized: number, edge: -1 | 1) {
-  const taper = Math.pow(Math.max(0.003, 1 - normalized), 0.43);
-  const firstLobe = Math.exp(-Math.pow((normalized - 0.23) / 0.16, 2)) * spec.lobe;
-  const secondLobe = Math.exp(-Math.pow((normalized - 0.58) / 0.19, 2)) * (0.32 + spec.lobe * 0.38);
-  const neck = Math.exp(-Math.pow((normalized - 0.42) / 0.08, 2)) * 0.24;
+  const taper = Math.pow(Math.max(0.002, 1 - normalized), 0.36);
+  const section = normalized < 0.16
+    ? 0.68
+    : normalized < 0.39
+      ? 1.08 + spec.lobe * 0.42
+      : normalized < 0.53
+        ? 0.62
+        : normalized < 0.79
+          ? 0.92 + spec.lobe * 0.28
+          : 0.5;
   const edgePhase = hash(spec.seed, edge > 0 ? 17 : 19) * TAU;
-  const erosion =
-    Math.sin(normalized * TAU * 2.6 + edgePhase) * 0.1 +
-    Math.sin(normalized * TAU * 7.1 + edgePhase * 0.72) * 0.045;
-  return Math.max(
-    0.28,
-    spec.width * (0.48 + firstLobe + secondLobe - neck + erosion) * taper,
-  );
-}
-
-function buildHole(
-  centers: readonly Point[],
-  widths: readonly number[],
-  tangentAngles: readonly number[],
-  start: number,
-  end: number,
-  scale: number,
-) {
-  const left: Point[] = [];
-  const right: Point[] = [];
-  const first = Math.max(1, Math.floor(start * (centers.length - 1)));
-  const last = Math.min(centers.length - 2, Math.ceil(end * (centers.length - 1)));
-  for (let index = first; index <= last; index += 1) {
-    const segmentProgress = (index - first) / Math.max(1, last - first);
-    const tipTaper = Math.pow(Math.max(0.03, Math.sin(segmentProgress * Math.PI)), 0.42);
-    const halfWidth = widths[index] * scale * tipTaper;
-    const normalX = -Math.sin(tangentAngles[index]);
-    const normalY = Math.cos(tangentAngles[index]);
-    left.push({ x: centers[index].x + normalX * halfWidth, y: centers[index].y + normalY * halfWidth });
-    right.push({ x: centers[index].x - normalX * halfWidth, y: centers[index].y - normalY * halfWidth });
-  }
-  const path = new Path2D();
-  if (left.length === 0 || right.length === 0) return path;
-  traceBoundary(left, path);
-  for (let index = right.length - 1; index >= 0; index -= 1) {
-    path.lineTo(right[index].x, right[index].y);
-  }
-  path.closePath();
-  return path;
+  const machinedVariance = Math.sin(normalized * TAU * 3 + edgePhase) * 0.022;
+  return Math.max(0.24, spec.width * (section + machinedVariance) * taper);
 }
 
 function buildRibbon(spec: RibbonSpec): InkShape {
   const reveal = clamp(spec.reveal, 0.025, 1);
-  const samples = Math.max(7, Math.ceil(30 * reveal));
+  const samples = Math.max(7, Math.ceil(24 * reveal));
   const left: Point[] = [];
   const right: Point[] = [];
   const centers: Point[] = [];
@@ -254,55 +213,7 @@ function buildRibbon(spec: RibbonSpec): InkShape {
   for (let index = right.length - 2; index >= 0; index -= 1) fill.lineTo(right[index].x, right[index].y);
   fill.closePath();
 
-  const edge = new Path2D();
-  traceBoundary(left, edge);
-  edge.quadraticCurveTo(
-    tip.x + Math.cos(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
-    tip.y + Math.sin(tangentAngles[tangentAngles.length - 1]) * spec.length * 0.025,
-    right[right.length - 1].x,
-    right[right.length - 1].y,
-  );
-  for (let index = right.length - 2; index >= 0; index -= 1) edge.lineTo(right[index].x, right[index].y);
-
-  const details: Path2D[] = [];
-  const detailCount = 2 + Math.floor(hash(spec.seed, 61) * 3);
-  for (let detailIndex = 0; detailIndex < detailCount; detailIndex += 1) {
-    const detail = new Path2D();
-    const start = lerp(0.12, 0.31, hash(spec.seed, 67 + detailIndex));
-    const end = lerp(0.58, 0.92, hash(spec.seed, 73 + detailIndex));
-    let started = false;
-    for (let index = 1; index < centers.length - 1; index += 1) {
-      const normalized = index / (centers.length - 1);
-      if (normalized < start || normalized > end) continue;
-      if (Math.sin(normalized * 38 + detailIndex * 2.7 + hash(spec.seed, 79) * TAU) > 0.86) {
-        started = false;
-        continue;
-      }
-      const side = detailIndex % 2 === 0 ? 1 : -1;
-      const offset = widths[index] * lerp(0.22, 0.66, (detailIndex + 1) / (detailCount + 1)) * side;
-      const point = {
-        x: centers[index].x - Math.sin(tangentAngles[index]) * offset,
-        y: centers[index].y + Math.cos(tangentAngles[index]) * offset,
-      };
-      if (!started) {
-        detail.moveTo(point.x, point.y);
-        started = true;
-      } else {
-        detail.lineTo(point.x, point.y);
-      }
-    }
-    details.push(detail);
-  }
-
-  const holes: Path2D[] = [];
-  if (spec.width > 5 && reveal > 0.72) {
-    holes.push(buildHole(centers, widths, tangentAngles, 0.2, 0.43, lerp(0.18, 0.33, hash(spec.seed, 89))));
-    if (spec.width > 11 && hash(spec.seed, 97) > 0.38) {
-      holes.push(buildHole(centers, widths, tangentAngles, 0.5, 0.72, lerp(0.14, 0.25, hash(spec.seed, 101))));
-    }
-  }
-
-  return { fill, edge, holes, details, centers, widths, tangentAngles };
+  return { fill, centers, widths, tangentAngles };
 }
 
 function sampleShape(shape: InkShape, progress: number) {
@@ -367,12 +278,12 @@ function drawInkComposition(
     origin: start,
     angle: trunkAngle,
     length: trunkLength,
-    width: shortSide * 0.058,
-    bend: -0.035,
-    wave: 0.028,
+    width: shortSide * 0.086,
+    bend: -0.025,
+    wave: 0.012,
     reveal: strongestArrival,
-    lobe: 0.82,
-    hook: 0.12,
+    lobe: 0.68,
+    hook: 0.08,
   });
   shapes.push(trunk);
 
@@ -390,23 +301,23 @@ function drawInkComposition(
     const primaryAngle = attachment.angle + departure;
     const primaryLength =
       shortSide *
-      lerp(0.27, 0.56, hash(seed, 17)) *
+      lerp(0.24, 0.48, hash(seed, 17)) *
       lerp(0.92, 1.08, particle.velocity);
     const primary = buildRibbon({
       seed,
       origin: attachment.point,
       angle: primaryAngle,
       length: primaryLength,
-      width: shortSide * lerp(0.014, 0.034, hash(seed, 19)) * (0.88 + particle.thickness * 0.28),
-      bend: particle.curvature * 0.085 + side * lerp(0.02, 0.13, hash(seed, 23)),
-      wave: lerp(0.018, 0.052, hash(seed, 29)),
+      width: shortSide * lerp(0.028, 0.062, hash(seed, 19)) * (0.9 + particle.thickness * 0.22),
+      bend: particle.curvature * 0.05 + side * lerp(0.015, 0.075, hash(seed, 23)),
+      wave: lerp(0.006, 0.02, hash(seed, 29)),
       reveal: arrival,
       lobe: lerp(0.48, 1.08, hash(seed, 31)),
-      hook: side * lerp(0.32, 1.04, hash(seed, 37)),
+      hook: side * lerp(0.18, 0.62, hash(seed, 37)),
     });
     shapes.push(primary);
 
-    const forkCount = 1 + Math.floor(hash(seed, 41) * 3);
+    const forkCount = 1 + Math.floor(hash(seed, 41) * 2);
     for (let forkIndex = 0; forkIndex < forkCount; forkIndex += 1) {
       const forkProgress = lerp(0.34, 0.76, (forkIndex + 1) / (forkCount + 1)) + (hash(seed, 43 + forkIndex) - 0.5) * 0.08;
       const forkAttachment = sampleShape(primary, forkProgress);
@@ -416,19 +327,19 @@ function drawInkComposition(
       const fork = buildRibbon({
         seed: seed + 101 + forkIndex * 47,
         origin: forkAttachment.point,
-        angle: forkAttachment.angle + forkSide * lerp(0.22, 0.72, hash(seed, 53 + forkIndex)),
-        length: primaryLength * lerp(0.26, 0.54, hash(seed, 59 + forkIndex)),
-        width: Math.max(1.2, forkAttachment.width * lerp(0.42, 0.78, hash(seed, 61 + forkIndex))),
-        bend: forkSide * lerp(0.04, 0.2, hash(seed, 67 + forkIndex)),
-        wave: lerp(0.016, 0.046, hash(seed, 71 + forkIndex)),
+        angle: forkAttachment.angle + forkSide * lerp(0.28, 0.66, hash(seed, 53 + forkIndex)),
+        length: primaryLength * lerp(0.3, 0.52, hash(seed, 59 + forkIndex)),
+        width: Math.max(2.4, forkAttachment.width * lerp(0.5, 0.74, hash(seed, 61 + forkIndex))),
+        bend: forkSide * lerp(0.025, 0.11, hash(seed, 67 + forkIndex)),
+        wave: lerp(0.004, 0.016, hash(seed, 71 + forkIndex)),
         reveal: forkReveal,
         lobe: lerp(0.3, 0.82, hash(seed, 73 + forkIndex)),
-        hook: forkSide * lerp(0.18, 0.86, hash(seed, 79 + forkIndex)),
+        hook: forkSide * lerp(0.12, 0.5, hash(seed, 79 + forkIndex)),
       });
       shapes.push(fork);
     }
 
-    const fragmentCount = 2 + Math.floor(hash(seed, 83) * 4);
+    const fragmentCount = 1 + Math.floor(hash(seed, 83) * 3);
     for (let fragmentIndex = 0; fragmentIndex < fragmentCount; fragmentIndex += 1) {
       const fragmentAnchor = sampleShape(primary, lerp(0.36, 0.88, hash(seed, 89 + fragmentIndex)));
       const offset = primaryLength * lerp(0.018, 0.065, hash(seed, 97 + fragmentIndex));
@@ -442,34 +353,19 @@ function drawInkComposition(
 
   context.save();
   context.lineCap = "round";
-  context.lineJoin = "round";
-  context.miterLimit = 2;
-  context.fillStyle = "rgba(255, 255, 255, 0.985)";
-  for (const shape of shapes) context.fill(shape.fill);
-  for (const fragment of fragments) context.fill(fragment);
-
-  context.save();
-  context.globalCompositeOperation = "destination-out";
-  context.fillStyle = "rgba(0, 0, 0, 1)";
-  for (const shape of shapes) {
-    for (const hole of shape.holes) context.fill(hole);
-  }
-  context.restore();
-
-  const outlineAlpha = clamp(0.72 + pulse * 0.2, 0.72, 0.94);
-  context.strokeStyle = `rgba(4, 5, 8, ${outlineAlpha})`;
-  context.lineWidth = clamp(shortSide * 0.00105, 0.72, 1.24);
-  for (const shape of shapes) {
-    context.stroke(shape.edge);
-    for (const hole of shape.holes) context.stroke(hole);
-  }
+  context.lineJoin = "miter";
+  context.miterLimit = 3;
+  const outlineAlpha = clamp(0.88 + pulse * 0.1, 0.88, 0.98);
+  context.strokeStyle = `rgba(0, 0, 0, ${outlineAlpha})`;
+  context.lineWidth = clamp(shortSide * 0.0023, 1.8, 2.9);
+  for (const shape of shapes) context.stroke(shape.fill);
   for (const fragment of fragments) context.stroke(fragment);
 
-  context.strokeStyle = `rgba(12, 13, 17, ${clamp(0.5 + pulse * 0.14, 0.5, 0.7)})`;
-  context.lineWidth = clamp(shortSide * 0.00072, 0.5, 0.82);
-  for (const shape of shapes) {
-    for (const detail of shape.details) context.stroke(detail);
-  }
+  // Filling every connected plate after every stroke hides all seams inside
+  // the union, leaving one clean exterior contour and no interior linework.
+  context.fillStyle = "#ffffff";
+  for (const shape of shapes) context.fill(shape.fill);
+  for (const fragment of fragments) context.fill(fragment);
 
   context.restore();
 }
@@ -490,7 +386,8 @@ class ContourCompositionRenderer {
   }
 
   private syncSize(width: number, height: number) {
-    const scale = Math.min(1, Math.sqrt(RENDER_PIXEL_BUDGET / Math.max(1, width * height)));
+    const displayScale = Math.min(1.5, window.devicePixelRatio || 1);
+    const scale = Math.min(displayScale, Math.sqrt(RENDER_PIXEL_BUDGET / Math.max(1, width * height)));
     const targetWidth = Math.max(1, Math.round(width * scale));
     const targetHeight = Math.max(1, Math.round(height * scale));
     if (targetWidth !== this.width || targetHeight !== this.height) {
@@ -598,28 +495,17 @@ export function drawMetalheartParticle(
     hook: hash(options.seed, 7) > 0.5 ? 0.72 : -0.72,
   });
   context.save();
-  context.fillStyle = `rgba(255, 255, 255, ${clamp(options.alpha, 0, 0.99)})`;
+  context.strokeStyle = `rgba(0, 0, 0, ${clamp(options.alpha * 0.94, 0, 0.96)})`;
+  context.lineWidth = clamp(options.radius * 0.013, 1.7, 2.7);
+  context.stroke(shape.fill);
+  context.fillStyle = "#ffffff";
   context.fill(shape.fill);
-  context.strokeStyle = `rgba(4, 5, 8, ${clamp(options.alpha * 0.82, 0, 0.9)})`;
-  context.lineWidth = clamp(options.radius * 0.006, 0.68, 1.2);
-  context.stroke(shape.edge);
-  for (const detail of shape.details) context.stroke(detail);
   context.restore();
 }
 
 export function drawMetalheartPulse(
-  context: CanvasRenderingContext2D,
+  _context: CanvasRenderingContext2D,
   options: MetalheartPulseOptions,
 ) {
-  const { centerX, centerY, width, height, progress, strength } = options;
-  if (progress < 0 || progress >= 1 || strength <= 0) return;
-  const envelope = Math.sin(progress * Math.PI) * Math.pow(1 - progress, 0.72) * clamp(strength, 0, 1);
-  const radius = Math.min(width, height) * lerp(0.022, 0.1, easeInOutSine(progress));
-  context.save();
-  context.beginPath();
-  context.ellipse(centerX, centerY, radius * 1.9, radius * 0.48, -0.12, 0, TAU);
-  context.strokeStyle = `rgba(4, 5, 8, ${envelope * 0.16})`;
-  context.lineWidth = Math.max(0.55, Math.min(width, height) * 0.0008);
-  context.stroke();
-  context.restore();
+  void options;
 }
