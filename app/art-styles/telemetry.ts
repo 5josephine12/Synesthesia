@@ -102,7 +102,7 @@ const MORPH_MS = 1280;
 const ENTRY_MORPH_MS = 920;
 const DISTANT_MORPH_MS = 1560;
 
-const MAX_PANELS = 4;
+const MAX_PANELS = 3;
 const MORPH_PROXIMITY_MIN = 68;
 const MORPH_PROXIMITY_MAX = 124;
 const DATA_GAP = 10;
@@ -495,11 +495,138 @@ function drawMorphConnector(
   context.restore();
 }
 
-/** One tracking box continuously reshapes and travels between visualizations. */
+function drawCornerBrackets(
+  context: CanvasRenderingContext2D,
+  frame: VisualizationFrame,
+) {
+  const left = -frame.halfWidth;
+  const right = frame.halfWidth;
+  const top = -frame.halfHeight;
+  const bottom = frame.halfHeight;
+  const cornerX = clamp(frame.width * 0.18, 8, 24);
+  const cornerY = clamp(frame.height * 0.18, 8, 24);
+
+  context.beginPath();
+  context.moveTo(left, top + cornerY);
+  context.lineTo(left, top);
+  context.lineTo(left + cornerX, top);
+  context.moveTo(right - cornerX, top);
+  context.lineTo(right, top);
+  context.lineTo(right, top + cornerY);
+  context.moveTo(right, bottom - cornerY);
+  context.lineTo(right, bottom);
+  context.lineTo(right - cornerX, bottom);
+  context.moveTo(left + cornerX, bottom);
+  context.lineTo(left, bottom);
+  context.lineTo(left, bottom - cornerY);
+  context.stroke();
+}
+
+function drawRoutedConnection(
+  context: CanvasRenderingContext2D,
+  from: VisualizationFrame,
+  to: VisualizationFrame,
+  seed: number,
+  reveal: number,
+  life: number,
+  focused: boolean,
+) {
+  if (life <= 0.001 || reveal <= 0.001) return;
+  const start = frameAnchor(from, to.centerX, to.centerY);
+  const end = frameAnchor(to, from.centerX, from.centerY);
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const direct = Math.abs(seed) % 4 === 0;
+  const points = [{ x: start.x, y: start.y }];
+  if (!direct) {
+    const bendBias = 0.42 + ((Math.abs(seed) % 5) - 2) * 0.035;
+    if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+      const bendX = start.x + deltaX * bendBias;
+      points.push({ x: bendX, y: start.y }, { x: bendX, y: end.y });
+    } else {
+      const bendY = start.y + deltaY * bendBias;
+      points.push({ x: start.x, y: bendY }, { x: end.x, y: bendY });
+    }
+  }
+  points.push({ x: end.x, y: end.y });
+
+  let length = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    length += Math.hypot(
+      points[index].x - points[index - 1].x,
+      points[index].y - points[index - 1].y,
+    );
+  }
+  const alpha = life * (focused ? 0.58 : 0.34);
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.lineCap = "square";
+  context.lineJoin = "miter";
+  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha);
+  context.shadowColor = glowColor(alpha * 0.82);
+  context.shadowBlur = focused ? 5 : 3;
+  context.lineWidth = focused ? 1 : 0.78;
+  context.setLineDash([Math.max(0.01, length * reveal), length + 1]);
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+  context.stroke();
+  context.setLineDash([]);
+
+  if (reveal > 0.72) {
+    context.shadowBlur = 3;
+    context.fillStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha * 1.15);
+    context.beginPath();
+    context.arc(start.x, start.y, focused ? 2.1 : 1.6, 0, Math.PI * 2);
+    context.moveTo(end.x + (focused ? 2.1 : 1.6), end.y);
+    context.arc(end.x, end.y, focused ? 2.1 : 1.6, 0, Math.PI * 2);
+    context.fill();
+    if (points.length > 2) {
+      const junction = points[Math.floor(points.length / 2)];
+      context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, alpha * 0.9);
+      context.lineWidth = 0.75;
+      context.strokeRect(junction.x - 2.5, junction.y - 2.5, 5, 5);
+    }
+  }
+  context.restore();
+}
+
+function drawFrameNetwork(
+  context: CanvasRenderingContext2D,
+  rendered: readonly {
+    state: OverlayMorphState;
+    progress: number;
+    current: FocusPresentation;
+    life: number;
+  }[],
+) {
+  const visible = rendered
+    .filter((item) => item.life > 0.015)
+    .sort((first, second) => first.state.to.node.createdAt - second.state.to.node.createdAt);
+  for (let index = 1; index < visible.length; index += 1) {
+    const from = visible[index - 1];
+    const to = visible[index];
+    drawRoutedConnection(
+      context,
+      from.current.frame,
+      to.current.frame,
+      from.state.to.node.id * 31 + to.state.to.node.id,
+      smootherStep(to.progress),
+      Math.min(from.life, to.life),
+      index === visible.length - 1,
+    );
+  }
+}
+
+/** One tracking frame continuously reshapes and travels between visualizations. */
 function drawVisualizationFrame(
   context: CanvasRenderingContext2D,
   frame: VisualizationFrame,
   life: number,
+  nodeId: number,
 ) {
   context.save();
   context.globalCompositeOperation = "source-over";
@@ -510,7 +637,20 @@ function drawVisualizationFrame(
   context.shadowColor = glowColor(0.9 * life);
   context.shadowBlur = 6;
   context.lineWidth = 1.15;
-  context.strokeRect(-frame.halfWidth, -frame.halfHeight, frame.width, frame.height);
+  if (Math.abs(nodeId) % 5 === 0) {
+    context.strokeRect(-frame.halfWidth, -frame.halfHeight, frame.width, frame.height);
+  } else {
+    drawCornerBrackets(context, frame);
+    if (Math.abs(nodeId) % 3 === 0) {
+      const tick = clamp(Math.min(frame.width, frame.height) * 0.08, 3, 8);
+      context.beginPath();
+      context.moveTo(-tick, -frame.halfHeight);
+      context.lineTo(tick, -frame.halfHeight);
+      context.moveTo(frame.halfWidth, -tick);
+      context.lineTo(frame.halfWidth, tick);
+      context.stroke();
+    }
+  }
 
   context.shadowBlur = 5;
   context.fillStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.9 * life);
@@ -1239,8 +1379,9 @@ export function drawTelemetryOverlay(
       );
     }
   }
+  drawFrameNetwork(context, rendered);
   for (const item of rendered) {
-    drawVisualizationFrame(context, item.current.frame, item.life);
+    drawVisualizationFrame(context, item.current.frame, item.life, item.state.to.node.id);
   }
   rendered.forEach((item, index) => {
     drawPanel(
