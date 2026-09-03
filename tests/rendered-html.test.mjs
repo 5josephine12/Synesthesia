@@ -497,7 +497,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.doesNotMatch(auraSource, /brightness\(1\.72\) sepia\(0\.32\) saturate\(1\.72\)/);
   assert.doesNotMatch(auraSource, /context\.filter = "sepia\(0\.28\) saturate\(1\.48\)"/);
   assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
-  assert.match(styleFourSource, /const MAX_HALFTONE_FIELDS = 8/);
+  assert.match(styleFourSource, /const MAX_HALFTONE_FIELDS = 12/);
   assert.match(styleFourSource, /const HALFTONE_PIXEL_BUDGET = 1_250_000/);
   assert.match(styleFourSource, /const HALFTONE_FRAME_INTERVAL = 1000 \/ 20/);
   assert.match(styleFourSource, /const pitch = clamp\(\(particle\.midi - 24\) \/ 83, 0, 1\)/);
@@ -506,6 +506,10 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleFourSource, /path\.arc\(px, py, radius, 0, Math\.PI \* 2\)/);
   assert.match(styleFourSource, /const bodyPath = new Path2D\(\)/);
   assert.match(styleFourSource, /const accentPath = new Path2D\(\)/);
+  assert.match(styleFourSource, /const occupiedDots = new Map/);
+  assert.match(styleFourSource, /overlapsExistingDot/);
+  assert.match(auraSource, /context\.globalCompositeOperation = blendsWithEarlierArtwork \? "multiply" : "source-over"/);
+  assert.match(auraSource, /context\.globalCompositeOperation = "color"/);
   assert.match(styleFourSource, /desynchronized: true/);
   assert.doesNotMatch(styleFourSource, /getImageData|createRadialGradient|shadowBlur|ShaderMaterial|from "three"/);
 });

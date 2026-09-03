@@ -26,7 +26,7 @@ export type LiquidMetalFrame = {
   forming: boolean;
 };
 
-const MAX_HALFTONE_FIELDS = 8;
+const MAX_HALFTONE_FIELDS = 12;
 const HALFTONE_FORMATION_DURATION = 1900;
 const HALFTONE_PIXEL_BUDGET = 1_250_000;
 const HALFTONE_FRAME_INTERVAL = 1000 / 20;
@@ -100,6 +100,7 @@ class HalftoneRenderer {
     particle: LiquidMetalParticleState,
     now: number,
     reducedMotion: boolean,
+    occupiedDots: Map<string, Array<{ x: number; y: number; radius: number }>>,
   ) {
     const effectiveNow = particle.frozenAt ?? now;
     const age = reducedMotion && particle.frozenAt === undefined
@@ -121,21 +122,21 @@ class HalftoneRenderer {
 
     // Strong bass notes occupy a broader, denser field. Higher and quieter
     // notes leave finer, airier screens, while every dot remains circular.
-    const fieldWidth = shortSide * lerp(0.32, 0.58, strength) * lerp(1.08, 0.84, pitch);
-    const fieldHeight = shortSide * lerp(0.2, 0.4, strength) * lerp(1.08, 0.86, pitch);
+    const fieldWidth = shortSide * lerp(0.105, 0.21, strength) * lerp(1.08, 0.86, pitch);
+    const fieldHeight = shortSide * lerp(0.072, 0.145, strength) * lerp(1.08, 0.88, pitch);
     const dotRadius = clamp(
-      shortSide * lerp(0.0045, 0.014, strength) * lerp(1.32, 0.72, pitch),
-      2.4 * scale,
-      14 * scale,
+      shortSide * lerp(0.0025, 0.0072, strength) * lerp(1.26, 0.76, pitch),
+      1.5 * scale,
+      7 * scale,
     );
-    const gridStep = clamp(dotRadius * lerp(2.18, 1.72, strength), 6 * scale, 27 * scale);
+    const gridStep = clamp(dotRadius * lerp(2.5, 1.92, strength), 4.5 * scale, 16 * scale);
     const centerX = particle.x * width;
     const centerY = particle.y * height;
     const drift = (1 - arrival) * shortSide * 0.055;
     const originX = centerX - cosine * drift;
     const originY = centerY - sine * drift;
-    const columns = Math.ceil((fieldWidth * 2.2) / gridStep);
-    const rows = Math.ceil((fieldHeight * 2.2) / gridStep);
+    const columns = Math.ceil((fieldWidth * 2.15) / gridStep);
+    const rows = Math.ceil((fieldHeight * 2.15) / gridStep);
     const bodyPath = new Path2D();
     const accentPath = new Path2D();
 
@@ -166,6 +167,25 @@ class HalftoneRenderer {
         const edgeScale = clamp((occupancy + 0.18) / 0.82, 0.16, 1.18);
         const pulseScale = lerp(0.72, 1, clamp((arrival - revealOrder) / 0.24, 0, 1));
         const radius = dotRadius * edgeScale * pulseScale * lerp(0.9, 1.08, grain);
+        const collisionCellSize = 9 * scale;
+        const cellX = Math.floor(px / collisionCellSize);
+        const cellY = Math.floor(py / collisionCellSize);
+        let overlapsExistingDot = false;
+        for (let offsetY = -2; offsetY <= 2 && !overlapsExistingDot; offsetY += 1) {
+          for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
+            const nearby = occupiedDots.get(`${cellX + offsetX}:${cellY + offsetY}`);
+            if (!nearby) continue;
+            if (nearby.some((dot) => Math.hypot(px - dot.x, py - dot.y) < (radius + dot.radius) * 0.74)) {
+              overlapsExistingDot = true;
+              break;
+            }
+          }
+        }
+        if (overlapsExistingDot) continue;
+        const cellKey = `${cellX}:${cellY}`;
+        const occupiedCell = occupiedDots.get(cellKey);
+        if (occupiedCell) occupiedCell.push({ x: px, y: py, radius });
+        else occupiedDots.set(cellKey, [{ x: px, y: py, radius }]);
         const path = hash(seed + row * 43 + column * 17, 67) > 0.82 ? accentPath : bodyPath;
         path.moveTo(px + radius, py);
         path.arc(px, py, radius, 0, Math.PI * 2);
@@ -176,9 +196,9 @@ class HalftoneRenderer {
     const accent = particle.accent ?? body;
     this.context.save();
     this.context.globalCompositeOperation = "source-over";
-    this.context.fillStyle = hsla(body, 0.9 * arrival, 5, 2);
+    this.context.fillStyle = hsla(body, 0.76 * arrival, 5, 4);
     this.context.fill(bodyPath);
-    this.context.fillStyle = hsla(accent, 0.72 * arrival, 4, 5);
+    this.context.fillStyle = hsla(accent, 0.6 * arrival, 4, 7);
     this.context.fill(accentPath);
     this.context.restore();
 
@@ -218,8 +238,9 @@ class HalftoneRenderer {
     this.context.setTransform(1, 0, 0, 1, 0, 0);
     this.context.clearRect(0, 0, this.width, this.height);
     let forming = false;
-    for (const particle of active) {
-      if (this.drawField(particle, now, reducedMotion)) forming = true;
+    const occupiedDots = new Map<string, Array<{ x: number; y: number; radius: number }>>();
+    for (let index = active.length - 1; index >= 0; index -= 1) {
+      if (this.drawField(active[index], now, reducedMotion, occupiedDots)) forming = true;
     }
     this.lastFrameAt = now;
     this.lastSignature = signature;

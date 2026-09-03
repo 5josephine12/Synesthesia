@@ -1996,7 +1996,7 @@ function drawChronologicalAuraLayers(
     blobs,
     fallbackArtStyle,
     "style-4",
-    8,
+    12,
     visibleLimit,
   );
   let runStart = 0;
@@ -2150,12 +2150,22 @@ function drawChronologicalAuraLayers(
             reducedMotion: reducedMotion && layerIsLive,
           });
           if (liquidMetalFrame) {
+            const blendsWithEarlierArtwork = runStart > 0 || hasEarlierArtwork;
             context.save();
-            context.globalCompositeOperation = "source-over";
+            context.globalCompositeOperation = blendsWithEarlierArtwork ? "multiply" : "source-over";
+            context.globalAlpha = blendsWithEarlierArtwork ? 0.72 : 0.9;
             context.imageSmoothingEnabled = true;
             context.imageSmoothingQuality = "high";
             context.drawImage(liquidMetalFrame.canvas, 0, 0, width, height);
             context.restore();
+            if (blendsWithEarlierArtwork) {
+              context.save();
+              context.globalCompositeOperation = "color";
+              context.globalAlpha = 0.24;
+              context.imageSmoothingEnabled = true;
+              context.drawImage(liquidMetalFrame.canvas, 0, 0, width, height);
+              context.restore();
+            }
           }
         }
         runStart = runEnd;
