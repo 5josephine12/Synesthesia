@@ -4641,17 +4641,6 @@ export function AuraToy() {
         context.restore();
       }
 
-      if (metalheartPulseIsActive && !metalheartRenderer) {
-        metalheartRenderer?.drawMetalheartPulse(context, {
-          centerX: metalheartPulse.x * width,
-          centerY: metalheartPulse.y * height,
-          width,
-          height,
-          progress: metalheartPulseProgress,
-          strength: metalheartPulse.strength,
-        });
-      }
-
       if (grainPattern) {
         drawGrainPattern(context, width, height, grainPattern, 0.055);
       }

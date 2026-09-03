@@ -435,7 +435,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const METALHEART_FORMATION_DURATION = 1900/);
   assert.match(auraSource, /const METALHEART_PULSE_DURATION = 920/);
   assert.match(auraSource, /const metalheartIsActive = artStyleRef\.current === "style-3"/);
-  assert.match(auraSource, /metalheartRenderer\?\.drawMetalheartPulse/);
+  assert.match(auraSource, /const currentMetalheartPulse = metalheartPulseIsActive/);
   assert.match(styleThreeSource, /export function drawMetalheartParticle/);
   assert.match(styleThreeSource, /export function drawMetalheartPulse/);
   assert.match(styleThreeSource, /export function drawMetalheartLayer/);
