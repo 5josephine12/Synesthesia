@@ -560,6 +560,24 @@ function drawConnectionNode(
   context.restore();
 }
 
+function drawFrameEdgePort(
+  context: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  alpha: number,
+) {
+  const halfSize = 3.4;
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  applyOverlayStroke(context, alpha);
+  context.strokeRect(
+    point.x - halfSize,
+    point.y - halfSize,
+    halfSize * 2,
+    halfSize * 2,
+  );
+  context.restore();
+}
+
 function secondaryPanelDock(
   pose: PanelPose,
   primaryDock: { x: number; y: number },
@@ -647,6 +665,9 @@ function drawVisualizerConnection(
     { x: endX, y: endY },
     cableAlpha,
   );
+  // Small ports belong to the frame edges, never the middle of a cable.
+  drawFrameEdgePort(context, edge, cableAlpha);
+  drawFrameEdgePort(context, dock, cableAlpha);
 }
 
 function drawPanelNodeNetwork(

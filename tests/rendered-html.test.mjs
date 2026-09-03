@@ -274,6 +274,7 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(telemetrySource, /NODE_NETWORK_ROUTES/);
   assert.doesNotMatch(telemetrySource, /function drawIndependentNodeNetwork/);
   assert.match(telemetrySource, /function drawConnectionNode/);
+  assert.match(telemetrySource, /function drawFrameEdgePort/);
   assert.doesNotMatch(telemetrySource, /function drawConnectionTerminal/);
   assert.doesNotMatch(telemetrySource, /function drawRelayNode/);
   assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.25/);
@@ -303,6 +304,8 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
   assert.match(telemetrySource, /const endX = dock\.x \+ directionX \* 2/);
   assert.match(telemetrySource, /drawConnectionCable\([\s\S]*?\{ x: startX, y: startY \},[\s\S]*?\{ x: endX, y: endY \}/);
+  assert.match(telemetrySource, /drawFrameEdgePort\(context, edge, cableAlpha\)/);
+  assert.match(telemetrySource, /drawFrameEdgePort\(context, dock, cableAlpha\)/);
   assert.doesNotMatch(telemetrySource, /drawCableRelayFrame|largeRelay|LONG_CONNECTION_THRESHOLD/);
   assert.match(telemetrySource, /const firstDock = rectAnchor\(first\.pose\.viewport, secondCenter\.x, secondCenter\.y\)/);
   assert.match(telemetrySource, /const secondDock = rectAnchor\(second\.pose\.viewport, firstCenter\.x, firstCenter\.y\)/);
