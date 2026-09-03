@@ -560,24 +560,6 @@ function drawConnectionNode(
   context.restore();
 }
 
-function drawFrameEdgePort(
-  context: CanvasRenderingContext2D,
-  point: { x: number; y: number },
-  alpha: number,
-) {
-  const halfSize = 3.4;
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  applyOverlayStroke(context, alpha);
-  context.strokeRect(
-    point.x - halfSize,
-    point.y - halfSize,
-    halfSize * 2,
-    halfSize * 2,
-  );
-  context.restore();
-}
-
 function secondaryPanelDock(
   pose: PanelPose,
   primaryDock: { x: number; y: number },
@@ -626,6 +608,26 @@ function drawConnectionCable(
   context.restore();
 }
 
+function traceTrackingFrame(
+  context: CanvasRenderingContext2D,
+  frame: VisualizationFrame,
+) {
+  const notchWidth = clamp(frame.width * 0.08, 12, 24);
+  const notchDepth = clamp(frame.height * 0.04, 4, 7);
+  const notchStart = frame.x + frame.width * 0.24;
+
+  context.beginPath();
+  context.moveTo(frame.x, frame.y);
+  context.lineTo(notchStart, frame.y);
+  context.lineTo(notchStart + notchWidth * 0.34, frame.y + notchDepth);
+  context.lineTo(notchStart + notchWidth * 0.66, frame.y + notchDepth);
+  context.lineTo(notchStart + notchWidth, frame.y);
+  context.lineTo(frame.x + frame.width, frame.y);
+  context.lineTo(frame.x + frame.width, frame.y + frame.height);
+  context.lineTo(frame.x, frame.y + frame.height);
+  context.closePath();
+}
+
 function drawVisualizerConnection(
   context: CanvasRenderingContext2D,
   frame: VisualizationFrame,
@@ -654,7 +656,8 @@ function drawVisualizerConnection(
     context.save();
     context.globalCompositeOperation = "source-over";
     applyOverlayStroke(context, life * frameMix);
-    context.strokeRect(frame.x, frame.y, frame.width, frame.height);
+    traceTrackingFrame(context, frame);
+    context.stroke();
     context.restore();
   }
 
@@ -665,9 +668,6 @@ function drawVisualizerConnection(
     { x: endX, y: endY },
     cableAlpha,
   );
-  // Small ports belong to the frame edges, never the middle of a cable.
-  drawFrameEdgePort(context, edge, cableAlpha);
-  drawFrameEdgePort(context, dock, cableAlpha);
 }
 
 function drawPanelNodeNetwork(
