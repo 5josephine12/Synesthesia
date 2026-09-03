@@ -240,6 +240,11 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   );
   assert.doesNotMatch(auraSource, /registerTelemetryBeat|telemetryBeatRef/);
   assert.doesNotMatch(telemetrySource, /TelemetryBeatClock|telemetryBeatPulse|telemetryActivationAt/);
+  assert.match(telemetrySource, /function smootherStep/);
+  assert.match(telemetrySource, /from: enteringPresentation\(presentation\)/);
+  assert.match(telemetrySource, /const current = presentationAt\(previous, now\)/);
+  assert.match(telemetrySource, /duration: morphDuration\(current, presentation, shortSide, true\)/);
+  assert.doesNotMatch(telemetrySource, /morphStates\[oldestIndex\] = nextState/);
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {

@@ -79,6 +79,7 @@ type OverlayMorphState = {
   from: FocusPresentation;
   to: FocusPresentation;
   startedAt: number;
+  duration: number;
   sessionStartedAt: number;
   width: number;
   height: number;
@@ -97,7 +98,9 @@ const ENTER_MS = 680;
 const HOLD_MS = 4300;
 const EXIT_MS = 1000;
 const LIFETIME_MS = ENTER_MS + HOLD_MS + EXIT_MS;
-const MORPH_MS = 820;
+const MORPH_MS = 1280;
+const ENTRY_MORPH_MS = 920;
+const DISTANT_MORPH_MS = 1560;
 
 const MAX_PANELS = 4;
 const MORPH_PROXIMITY_MIN = 68;
@@ -160,6 +163,12 @@ function easeInOutCubic(value: number) {
   return clamped < 0.5
     ? 4 * clamped * clamped * clamped
     : 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+}
+
+/** Zero velocity at both ends keeps consecutive panel handoffs from snapping. */
+function smootherStep(value: number) {
+  const clamped = clamp(value, 0, 1);
+  return clamped * clamped * clamped * (clamped * (clamped * 6 - 15) + 10);
 }
 
 function lerp(from: number, to: number, amount: number) {
@@ -696,6 +705,68 @@ function interpolatePresentation(
   };
 }
 
+function scaledFrame(frame: VisualizationFrame, scale: number): VisualizationFrame {
+  const halfWidth = frame.halfWidth * scale;
+  const halfHeight = frame.halfHeight * scale;
+  return {
+    ...frame,
+    x: frame.centerX - halfWidth,
+    y: frame.centerY - halfHeight,
+    width: halfWidth * 2,
+    height: halfHeight * 2,
+    halfWidth,
+    halfHeight,
+  };
+}
+
+function enteringPresentation(target: FocusPresentation): FocusPresentation {
+  const viewportCenterX = target.pose.viewport.x + target.pose.viewport.width / 2;
+  const viewportCenterY = target.pose.viewport.y + target.pose.viewport.height / 2;
+  const approachX = (target.frame.centerX - viewportCenterX) * 0.055;
+  const approachY = (target.frame.centerY - viewportCenterY) * 0.055;
+  const viewportScale = 0.86;
+  const viewportWidth = target.pose.viewport.width * viewportScale;
+  const viewportHeight = target.pose.viewport.height * viewportScale;
+  const viewport = {
+    x: viewportCenterX - viewportWidth / 2 + approachX,
+    y: viewportCenterY - viewportHeight / 2 + approachY,
+    width: viewportWidth,
+    height: viewportHeight,
+  };
+
+  return {
+    ...target,
+    frame: scaledFrame(target.frame, 0.7),
+    pose: {
+      viewport,
+      metadataX: target.pose.metadataX + approachX - target.pose.viewport.width * 0.07,
+      metadataY: target.pose.metadataY + approachY + target.pose.viewport.height * 0.03,
+      dockX: lerp(target.frame.centerX, target.pose.dockX, 0.84),
+      dockY: lerp(target.frame.centerY, target.pose.dockY, 0.84),
+    },
+  };
+}
+
+function presentationAt(state: OverlayMorphState, now: number) {
+  const progress = smootherStep((now - state.startedAt) / state.duration);
+  return interpolatePresentation(state.from, state.to, progress);
+}
+
+function morphDuration(
+  from: FocusPresentation,
+  to: FocusPresentation,
+  shortSide: number,
+  distant = false,
+) {
+  const distance = Math.hypot(
+    from.frame.centerX - to.frame.centerX,
+    from.frame.centerY - to.frame.centerY,
+  );
+  const travel = clamp(distance / Math.max(1, shortSide), 0, 1);
+  const ceiling = distant ? DISTANT_MORPH_MS : MORPH_MS;
+  return lerp(MORPH_MS * 0.78, ceiling, smootherStep(travel));
+}
+
 function nodeKey(node: TelemetryNode) {
   return `${node.id}:${node.createdAt}`;
 }
@@ -965,7 +1036,7 @@ function drawPanel(
 export function telemetryNextFrameAt(now: number) {
   let nextFrameAt = Number.POSITIVE_INFINITY;
   for (const state of morphStates) {
-    if (now - state.startedAt < MORPH_MS || now - state.sessionStartedAt < ENTER_MS) {
+    if (now - state.startedAt < state.duration || now - state.sessionStartedAt < ENTER_MS) {
       return now;
     }
     const exitStartsAt = state.to.node.createdAt + ENTER_MS + HOLD_MS;
@@ -1074,8 +1145,7 @@ export function drawTelemetryOverlay(
     );
     if (closestIndex >= 0) {
       const previous = morphStates[closestIndex];
-      const previousProgress = easeInOutCubic((now - previous.startedAt) / MORPH_MS);
-      const current = interpolatePresentation(previous.from, previous.to, previousProgress);
+      const current = presentationAt(previous, now);
       const anchoredTarget: FocusPresentation = {
         ...presentation,
         pose: anchoredMorphPose(current.pose, presentation.pose, presentation.frame, width, height),
@@ -1090,13 +1160,15 @@ export function drawTelemetryOverlay(
         },
         to: anchoredTarget,
         startedAt: now,
+        duration: morphDuration(current, anchoredTarget, shortSide),
       };
     } else {
       const nextState: OverlayMorphState = {
         targetKey,
-        from: presentation,
+        from: enteringPresentation(presentation),
         to: presentation,
         startedAt: now,
+        duration: ENTRY_MORPH_MS,
         sessionStartedAt: now,
         width,
         height,
@@ -1110,14 +1182,26 @@ export function drawTelemetryOverlay(
             oldestIndex = index;
           }
         }
-        morphStates[oldestIndex] = nextState;
+        const previous = morphStates[oldestIndex];
+        const current = presentationAt(previous, now);
+        morphStates[oldestIndex] = {
+          ...nextState,
+          from: {
+            ...current,
+            node: previous.to.node,
+            chord: previous.to.chord,
+          },
+          startedAt: now,
+          duration: morphDuration(current, presentation, shortSide, true),
+          sessionStartedAt: previous.sessionStartedAt,
+        };
       }
     }
   }
 
   const rendered = morphStates.map((state) => {
-    const rawProgress = clamp((now - state.startedAt) / MORPH_MS, 0, 1);
-    const progress = easeInOutCubic(rawProgress);
+    const rawProgress = clamp((now - state.startedAt) / state.duration, 0, 1);
+    const progress = smootherStep(rawProgress);
     const current = interpolatePresentation(state.from, state.to, progress);
     const targetAge = now - state.to.node.createdAt;
     const entrance = easeOutCubic((now - state.sessionStartedAt) / ENTER_MS);
