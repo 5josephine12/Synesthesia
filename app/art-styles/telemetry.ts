@@ -493,43 +493,14 @@ function drawMorphConnector(
   context.restore();
 }
 
-function drawCornerBrackets(
-  context: CanvasRenderingContext2D,
-  frame: VisualizationFrame,
-) {
-  const left = -frame.halfWidth;
-  const right = frame.halfWidth;
-  const top = -frame.halfHeight;
-  const bottom = frame.halfHeight;
-  const cornerX = clamp(frame.width * 0.18, 8, 24);
-  const cornerY = clamp(frame.height * 0.18, 8, 24);
-
-  context.beginPath();
-  context.moveTo(left, top + cornerY);
-  context.lineTo(left, top);
-  context.lineTo(left + cornerX, top);
-  context.moveTo(right - cornerX, top);
-  context.lineTo(right, top);
-  context.lineTo(right, top + cornerY);
-  context.moveTo(right, bottom - cornerY);
-  context.lineTo(right, bottom);
-  context.lineTo(right - cornerX, bottom);
-  context.moveTo(left + cornerX, bottom);
-  context.lineTo(left, bottom);
-  context.lineTo(left, bottom - cornerY);
-  context.stroke();
-}
-
 function drawRoutedConnection(
   context: CanvasRenderingContext2D,
   from: VisualizationFrame,
   to: VisualizationFrame,
-  seed: number,
   reveal: number,
   life: number,
   focused: boolean,
   now: number,
-  dotted = false,
 ) {
   if (life <= 0.001 || reveal <= 0.001) return;
   const start = frameAnchor(from, to.centerX, to.centerY);
@@ -539,8 +510,10 @@ function drawRoutedConnection(
   const distance = Math.max(1, Math.hypot(deltaX, deltaY));
   const normalX = -deltaY / distance;
   const normalY = deltaX / distance;
-  const curveDirection = Math.abs(seed) % 2 === 0 ? 1 : -1;
-  const curve = distance * (0.12 + (Math.abs(seed) % 7) * 0.018) * curveDirection;
+  // Keep every cable on the same restrained curve system. Its direction is
+  // derived from the node layout, never a random seed.
+  const curveDirection = deltaY >= 0 ? 1 : -1;
+  const curve = clamp(distance * 0.1, 10, 34) * curveDirection;
   const controlOne = {
     x: start.x + deltaX * 0.32 + normalX * curve,
     y: start.y + deltaY * 0.32 + normalY * curve,
@@ -551,14 +524,7 @@ function drawRoutedConnection(
   };
   const approximateLength = distance * (1.08 + Math.abs(curve) / distance * 0.34);
   const alpha = life * reveal * (focused ? 0.78 : 0.52);
-  const palettes = [
-    [126, 98, 255],
-    [79, 190, 255],
-    [255, 132, 204],
-    [103, 222, 190],
-  ] as const;
-  const wire = palettes[Math.abs(seed) % palettes.length];
-  const color = (opacity: number) => `rgba(${wire[0]}, ${wire[1]}, ${wire[2]}, ${opacity})`;
+  const color = (opacity: number) => `rgba(255, 255, 255, ${opacity})`;
 
   const pointAt = (amount: number) => {
     const inverse = 1 - amount;
@@ -593,12 +559,7 @@ function drawRoutedConnection(
   context.globalCompositeOperation = "source-over";
   context.lineCap = "round";
   context.lineJoin = "round";
-  if (dotted) {
-    context.setLineDash([2.4, 6.2]);
-    context.lineDashOffset = -now * 0.018;
-  } else {
-    context.setLineDash([Math.max(0.01, approximateLength * reveal), approximateLength + 1]);
-  }
+  context.setLineDash([Math.max(0.01, approximateLength * reveal), approximateLength + 1]);
   context.beginPath();
   context.moveTo(start.x, start.y);
   context.bezierCurveTo(
@@ -629,8 +590,7 @@ function drawRoutedConnection(
     context.arc(end.x, end.y, focused ? 2.5 : 2, 0, Math.PI * 2);
     context.fill();
 
-    const packetProgress =
-      ((now * 0.0002 + (Math.abs(seed) % 97) / 97) % 1) * clamp(reveal, 0, 1);
+    const packetProgress = (now * 0.0002 % 1) * clamp(reveal, 0, 1);
     const packet = pointAt(packetProgress);
     const tangent = tangentAt(packetProgress);
     const packetAngle = Math.atan2(tangent.y, tangent.x);
@@ -681,77 +641,17 @@ function drawFrameNetwork(
   for (let index = 1; index < visible.length; index += 1) {
     const from = visible[index - 1];
     const to = visible[index];
-    // Solid, colored family wires carry the primary operator data flow.
-    // Their curves follow the actual angle between each pair of nodes.
+    // A single chronological chain keeps the network readable and deliberate.
     drawRoutedConnection(
       context,
       viewportFrame(from.current.pose.viewport),
       viewportFrame(to.current.pose.viewport),
-      from.state.to.node.id * 137 + to.state.to.node.id * 79,
       smootherStep(to.progress),
       Math.min(from.life, to.life) * 0.88,
       index === visible.length - 1,
       now,
     );
-
   }
-
-  // Dotted parameter links use the other canonical TouchDesigner connection
-  // language and carry a moving arrowhead while the network is cooking.
-  if (visible.length === MAX_PANELS) {
-    const first = visible[0];
-    const last = visible[visible.length - 1];
-    drawRoutedConnection(
-      context,
-      viewportFrame(first.current.pose.viewport),
-      viewportFrame(last.current.pose.viewport),
-      first.state.to.node.id * 173 + last.state.to.node.id * 91,
-      smootherStep(last.progress),
-      Math.min(first.life, last.life) * 0.58,
-      false,
-      now,
-      true,
-    );
-  }
-}
-
-/** One tracking frame continuously reshapes and travels between visualizations. */
-function drawVisualizationFrame(
-  context: CanvasRenderingContext2D,
-  frame: VisualizationFrame,
-  life: number,
-  nodeId: number,
-) {
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.translate(frame.centerX, frame.centerY);
-  context.rotate(frame.angle);
-
-  context.strokeStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.78 * life);
-  context.shadowColor = glowColor(0.9 * life);
-  context.shadowBlur = 6;
-  context.lineWidth = 1.15;
-  if (Math.abs(nodeId) % 5 === 0) {
-    context.strokeRect(-frame.halfWidth, -frame.halfHeight, frame.width, frame.height);
-  } else {
-    drawCornerBrackets(context, frame);
-    if (Math.abs(nodeId) % 3 === 0) {
-      const tick = clamp(Math.min(frame.width, frame.height) * 0.08, 3, 8);
-      context.beginPath();
-      context.moveTo(-tick, -frame.halfHeight);
-      context.lineTo(tick, -frame.halfHeight);
-      context.moveTo(frame.halfWidth, -tick);
-      context.lineTo(frame.halfWidth, tick);
-      context.stroke();
-    }
-  }
-
-  context.shadowBlur = 5;
-  context.fillStyle = accentColor({ h: 0, s: 0, l: 100 }, 0.9 * life);
-  context.fillRect(-frame.halfWidth - 1.5, -frame.halfHeight - 1.5, 3, 3);
-  context.fillRect(frame.halfWidth - 1.5, frame.halfHeight - 1.5, 3, 3);
-
-  context.restore();
 }
 
 function measurePanel(
@@ -1122,57 +1022,6 @@ function drawMetadata(
   context.restore();
 }
 
-const OPERATOR_NAMES = ["noise", "level", "feedback", "composite", "transform", "null"] as const;
-
-function drawOperatorChrome(
-  context: TrackedContext,
-  presentation: FocusPresentation,
-  viewport: Rect,
-  alpha: number,
-) {
-  if (alpha <= 0.001) return;
-  const name = OPERATOR_NAMES[Math.abs(presentation.node.id) % OPERATOR_NAMES.length];
-  const suffix = Math.abs(presentation.node.midi + presentation.node.repeat) % 17 + 1;
-  const headerHeight = clamp(viewport.height * 0.16, 10, 15);
-  const portRadius = clamp(headerHeight * 0.18, 1.7, 2.4);
-
-  context.save();
-  context.globalCompositeOperation = "source-over";
-  context.globalAlpha = alpha;
-  context.fillStyle = "rgba(245, 246, 250, 0.9)";
-  context.fillRect(viewport.x, viewport.y, viewport.width, headerHeight);
-  context.fillStyle = "rgba(22, 23, 28, 0.88)";
-  context.font = "600 7px ui-monospace, SFMono-Regular, Menlo, monospace";
-  context.textBaseline = "middle";
-  context.textAlign = "left";
-  context.letterSpacing = "0.2px";
-  context.fillText(`${name}${suffix}`, viewport.x + 5, viewport.y + headerHeight * 0.53);
-
-  // TouchDesigner operators expose compact input/output ports and state flags.
-  context.fillStyle = "rgba(116, 92, 255, 0.95)";
-  context.beginPath();
-  context.arc(viewport.x, viewport.y + viewport.height * 0.48, portRadius, 0, Math.PI * 2);
-  context.fill();
-  context.fillStyle = "rgba(75, 190, 255, 0.95)";
-  context.beginPath();
-  context.arc(
-    viewport.x + viewport.width,
-    viewport.y + viewport.height * 0.52,
-    portRadius,
-    0,
-    Math.PI * 2,
-  );
-  context.fill();
-
-  const flagSize = clamp(headerHeight * 0.28, 2.8, 4.2);
-  const flagY = viewport.y + viewport.height - flagSize - 2;
-  context.fillStyle = "rgba(88, 199, 255, 0.9)";
-  context.fillRect(viewport.x + 3, flagY, flagSize, flagSize);
-  context.fillStyle = "rgba(245, 145, 198, 0.9)";
-  context.fillRect(viewport.x + 3 + flagSize + 2, flagY, flagSize, flagSize);
-  context.restore();
-}
-
 function drawPanel(
   context: TrackedContext,
   from: FocusPresentation,
@@ -1190,7 +1039,7 @@ function drawPanel(
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.strokeStyle = accentColor(to.node.color, 0.62 * life);
+  context.strokeStyle = glowColor(0.62 * life);
   context.shadowColor = glowColor(0.8 * life);
   context.shadowBlur = 6;
   context.lineWidth = 1.1;
@@ -1224,8 +1073,6 @@ function drawPanel(
   context.stroke();
   context.restore();
 
-  drawOperatorChrome(context, to, viewport, life);
-
   if (changing) {
     const oldAlpha = 1 - easeOutCubic(progress / 0.52);
     const newAlpha = easeOutCubic((progress - 0.38) / 0.62);
@@ -1237,7 +1084,7 @@ function drawPanel(
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  context.fillStyle = accentColor(to.node.color, 0.75 * life);
+  context.fillStyle = glowColor(0.75 * life);
   context.beginPath();
   context.arc(pose.dockX, pose.dockY, 1.7, 0, Math.PI * 2);
   context.fill();
@@ -1407,9 +1254,6 @@ export function drawTelemetryOverlay(
     }
   }
   drawFrameNetwork(context, rendered, now);
-  for (const item of rendered) {
-    drawVisualizationFrame(context, item.current.frame, item.life, item.state.to.node.id);
-  }
   rendered.forEach((item, index) => {
     drawPanel(
       trackedContext,

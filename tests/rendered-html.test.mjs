@@ -250,17 +250,16 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
   assert.match(telemetrySource, /function drawRoutedConnection/);
   assert.match(telemetrySource, /context\.bezierCurveTo\(/);
-  assert.match(telemetrySource, /context\.setLineDash\(\[2\.4, 6\.2\]\)/);
   assert.match(telemetrySource, /function drawFrameNetwork/);
-  assert.match(telemetrySource, /function drawCornerBrackets/);
   assert.match(telemetrySource, /function viewportFrame/);
-  assert.match(telemetrySource, /function drawOperatorChrome/);
+  assert.match(telemetrySource, /const color = \(opacity: number\) => `rgba\(255, 255, 255,/);
+  assert.match(telemetrySource, /const curve = clamp\(distance \* 0\.1, 10, 34\)/);
+  assert.doesNotMatch(telemetrySource, /const palettes =/);
+  assert.doesNotMatch(telemetrySource, /function drawCornerBrackets/);
+  assert.doesNotMatch(telemetrySource, /function drawVisualizationFrame/);
+  assert.doesNotMatch(telemetrySource, /function drawOperatorChrome/);
   assert.doesNotMatch(telemetrySource, /framesAreClose/);
   assert.match(telemetrySource, /drawFrameNetwork\(context, rendered, now\)/);
-  assert.match(
-    telemetrySource,
-    /drawVisualizationFrame\(context, item\.current\.frame, item\.life, item\.state\.to\.node\.id\)/,
-  );
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {
