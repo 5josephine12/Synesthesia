@@ -566,6 +566,33 @@ export function renderMetalheartFrame(options: MetalheartFrameOptions) {
   return getContourRenderer()?.render(options) ?? null;
 }
 
+export function drawMetalheartLayer(
+  context: CanvasRenderingContext2D,
+  options: MetalheartFrameOptions,
+) {
+  const active: MetalheartParticleState[] = [];
+  for (let index = options.particles.length - 1; index >= 0 && active.length < MAX_VISIBLE_GROWTHS; index -= 1) {
+    active.push(options.particles[index]);
+  }
+  active.reverse();
+  if (active.length === 0 || options.width <= 0 || options.height <= 0) return false;
+
+  const pulseProgress = options.pulse?.progress ?? 2;
+  const pulseEnvelope = pulseProgress >= 0 && pulseProgress < 1
+    ? Math.sin(pulseProgress * Math.PI) * Math.pow(1 - pulseProgress, 0.72) * clamp(options.pulse?.strength ?? 0, 0, 1)
+    : 0;
+  drawInkComposition(
+    context,
+    active,
+    options.width,
+    options.height,
+    options.now,
+    options.reducedMotion,
+    pulseEnvelope,
+  );
+  return true;
+}
+
 export function resetMetalheartRenderer() {
   contourRenderer?.reset();
 }

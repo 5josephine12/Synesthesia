@@ -438,7 +438,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /metalheartRenderer\?\.drawMetalheartPulse/);
   assert.match(styleThreeSource, /export function drawMetalheartParticle/);
   assert.match(styleThreeSource, /export function drawMetalheartPulse/);
+  assert.match(styleThreeSource, /export function drawMetalheartLayer/);
   assert.match(styleThreeSource, /export function renderMetalheartFrame/);
+  assert.match(auraSource, /const visibleMetalheartIds = new Set<number>\(\)/);
+  assert.match(auraSource, /metalheartRenderer\.drawMetalheartLayer\(context/);
+  assert.doesNotMatch(auraSource, /lastMetalheartIndex|metalheartCanvas/);
   assert.match(styleThreeSource, /function buildRibbon/);
   assert.match(styleThreeSource, /function buildLoop/);
   assert.match(styleThreeSource, /const strandCount = 9 \+ Math\.floor/);

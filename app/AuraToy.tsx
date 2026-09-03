@@ -1899,7 +1899,7 @@ function drawChronologicalAuraLayers(
   blurRadius: number,
   replayProgress?: number,
   hasEarlierArtwork = false,
-  metalheartCanvas?: CanvasImageSource | null,
+  metalheartPulse?: { progress: number; strength: number; x: number; y: number } | null,
   liquidMetalCanvas?: CanvasImageSource | null,
 ) {
   const replayPosition = replayProgress === undefined
@@ -1920,13 +1920,10 @@ function drawChronologicalAuraLayers(
       break;
     }
   }
-  let lastMetalheartIndex = -1;
-  if (metalheartCanvas) {
-    for (let index = visibleLimit - 1; index >= 0; index -= 1) {
-      if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-3") continue;
-      lastMetalheartIndex = index;
-      break;
-    }
+  const visibleMetalheartIds = new Set<number>();
+  for (let index = visibleLimit - 1; index >= 0 && visibleMetalheartIds.size < 6; index -= 1) {
+    if ((blobs[index].artStyle ?? fallbackArtStyle) !== "style-3") continue;
+    visibleMetalheartIds.add(blobs[index].id);
   }
   let lastLiquidMetalIndex = -1;
   if (liquidMetalCanvas) {
@@ -2024,13 +2021,21 @@ function drawChronologicalAuraLayers(
         context.restore();
       }
     } else if (runKind === "metalheart") {
-      if (metalheartCanvas) {
-        if (lastMetalheartIndex >= runStart && lastMetalheartIndex < runEnd) {
+      if (metalheartRenderer) {
+        const layerParticles = blobs
+          .slice(runStart, runEnd)
+          .filter((blob) => visibleMetalheartIds.has(blob.id));
+        if (layerParticles.length > 0) {
           context.save();
           context.globalCompositeOperation = "source-over";
-          context.imageSmoothingEnabled = true;
-          context.imageSmoothingQuality = "high";
-          context.drawImage(metalheartCanvas, 0, 0, width, height);
+          metalheartRenderer.drawMetalheartLayer(context, {
+            particles: layerParticles,
+            width,
+            height,
+            now: renderNow,
+            reducedMotion,
+            pulse: metalheartPulse ?? undefined,
+          });
           context.restore();
         }
         runStart = runEnd;
@@ -4502,23 +4507,14 @@ export function AuraToy() {
         !reducedMotionRef.current &&
         metalheartPulseProgress >= 0 &&
         metalheartPulseProgress < 1;
-      const metalheartFrame = hasMetalheartStyle
-        ? metalheartRenderer?.renderMetalheartFrame({
-            particles: blobsRef.current,
-            width,
-            height,
-            now,
-            reducedMotion: reducedMotionRef.current,
-            pulse: metalheartPulseIsActive
-              ? {
-                  progress: metalheartPulseProgress,
-                  strength: metalheartPulse.strength,
-                  x: metalheartPulse.x,
-                  y: metalheartPulse.y,
-                }
-              : undefined,
-          })
-        : null;
+      const currentMetalheartPulse = metalheartPulseIsActive
+        ? {
+            progress: metalheartPulseProgress,
+            strength: metalheartPulse.strength,
+            x: metalheartPulse.x,
+            y: metalheartPulse.y,
+          }
+        : undefined;
       const liquidMetalFrame = hasLiquidMetalStyle
         ? liquidMetalRenderer?.renderLiquidMetalFrame({
             particles: blobsRef.current,
@@ -4603,7 +4599,7 @@ export function AuraToy() {
           blurRadius,
           undefined,
           hasCompactedHistory,
-          metalheartFrame?.canvas,
+          currentMetalheartPulse,
           liquidMetalFrame?.canvas,
         );
       } else if (hasDottedStyle) {
@@ -4645,7 +4641,7 @@ export function AuraToy() {
         context.restore();
       }
 
-      if (metalheartPulseIsActive && !metalheartFrame) {
+      if (metalheartPulseIsActive && !metalheartRenderer) {
         metalheartRenderer?.drawMetalheartPulse(context, {
           centerX: metalheartPulse.x * width,
           centerY: metalheartPulse.y * height,
@@ -4719,7 +4715,7 @@ export function AuraToy() {
       }
       if (
         hasArrivingBlob ||
-        metalheartFrame?.forming ||
+        (hasMetalheartStyle && !reducedMotionRef.current) ||
         liquidMetalFrame?.forming ||
         metalheartPulseIsActive ||
         dottedMotionIsActive ||
@@ -4949,15 +4945,6 @@ export function AuraToy() {
     const containsOrganicStyle = blobsRef.current.some(
       (blob) => (blob.artStyle ?? artStyleRef.current) !== "style-2",
     );
-    const exportMetalheartFrame = hasMetalheartStyle
-      ? metalheartRenderer?.renderMetalheartFrame({
-          particles: blobsRef.current,
-          width: output.width,
-          height: output.height,
-          now: performance.now(),
-          reducedMotion: replayProgress === undefined,
-        })
-      : null;
     const exportLiquidMetalFrame = hasLiquidMetalStyle
       ? liquidMetalRenderer?.renderLiquidMetalFrame({
           particles: blobsRef.current,
@@ -4999,7 +4986,7 @@ export function AuraToy() {
         outputBlurRadius * layerScale,
         replayProgress,
         hasCompactedHistory,
-        exportMetalheartFrame?.canvas,
+        undefined,
         exportLiquidMetalFrame?.canvas,
       );
     } else if (hasDottedStyle) {
