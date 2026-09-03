@@ -373,10 +373,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.doesNotMatch(styleTwoSource, /sizeRoll|sizeRatio|maximumPixelSize/);
   assert.match(styleTwoSource, /const density = clamp\(0\.56 \+ velocity \* 0\.08/);
   assert.match(styleTwoSource, /const footprintGrowth = Math\.pow\(clamp\(expansion, 0, 1\), 0\.82\)/);
-  assert.match(styleTwoSource, /const compactWidth = lerp\(0\.09, 0\.145, hash\(seed, 211\)\)/);
-  assert.match(styleTwoSource, /const expandedWidth = lerp\(0\.32, 0\.5, hash\(seed, 211\)\)/);
-  assert.match(styleTwoSource, /const compactHeight = lerp\(0\.09, 0\.15, hash\(seed, 227\)\)/);
-  assert.match(styleTwoSource, /const expandedHeight = lerp\(0\.24, 0\.38, hash\(seed, 227\)\)/);
+  assert.match(styleTwoSource, /const footprintBasis = Math\.min\(viewportWidth, viewportHeight\)/);
+  assert.match(styleTwoSource, /const compactWidth = lerp\(0\.09, 0\.13, hash\(seed, 211\)\)/);
+  assert.match(styleTwoSource, /const expandedWidth = lerp\(0\.14, 0\.2, hash\(seed, 211\)\)/);
+  assert.match(styleTwoSource, /const compactHeight = lerp\(0\.065, 0\.09, hash\(seed, 227\)\)/);
+  assert.match(styleTwoSource, /const expandedHeight = lerp\(0\.1, 0\.145, hash\(seed, 227\)\)/);
   assert.match(auraSource, /const PIXEL_COMPOSITION_ANCHORS =/);
   assert.match(auraSource, /expansion: clamp\(blob\.compositionIndex \/ 12, 0, 1\)/);
   assert.match(auraSource, /const occupiedGridCells = new Set<string>\(\)/);

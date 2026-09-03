@@ -298,18 +298,18 @@ export function drawDottedSigil(
   const flip = hash(seed, 91) > 0.5 ? 1 : -1;
   const density = clamp(0.56 + velocity * 0.08 + Math.min(repeat, 7) * 0.008, 0.56, 0.72);
   const footprintGrowth = Math.pow(clamp(expansion, 0, 1), 0.82);
-  const compactWidth = lerp(0.09, 0.145, hash(seed, 211));
-  const expandedWidth = lerp(0.32, 0.5, hash(seed, 211));
-  const compactHeight = lerp(0.09, 0.15, hash(seed, 227));
-  const expandedHeight = lerp(0.24, 0.38, hash(seed, 227));
-  const fieldWidth = Math.max(
-    radius * (0.72 + (stretch - 1) * 0.18),
-    viewportWidth * lerp(compactWidth, expandedWidth, footprintGrowth),
-  );
-  const fieldHeight = Math.max(
-    radius * (archetype === "canopy" ? 0.86 : 0.7),
-    viewportHeight * lerp(compactHeight, expandedHeight, footprintGrowth),
-  );
+  // Match Halftone's compact, aspect-ratio-independent footprint. Basing both
+  // axes on the short side prevents a single Pixel note from spanning most of
+  // a wide display while preserving the exact-square pixel grid within it.
+  const footprintBasis = Math.min(viewportWidth, viewportHeight);
+  const compactWidth = lerp(0.09, 0.13, hash(seed, 211));
+  const expandedWidth = lerp(0.14, 0.2, hash(seed, 211));
+  const compactHeight = lerp(0.065, 0.09, hash(seed, 227));
+  const expandedHeight = lerp(0.1, 0.145, hash(seed, 227));
+  const widthVariation = lerp(0.96, 1.04, clamp((stretch - 0.78) / 0.54, 0, 1));
+  const heightVariation = archetype === "canopy" ? 1.04 : 1;
+  const fieldWidth = footprintBasis * lerp(compactWidth, expandedWidth, footprintGrowth) * widthVariation;
+  const fieldHeight = footprintBasis * lerp(compactHeight, expandedHeight, footprintGrowth) * heightVariation;
   const startColumn = Math.floor((centerX - fieldWidth) / gridStep);
   const endColumn = Math.ceil((centerX + fieldWidth) / gridStep);
   const startRow = Math.floor((centerY - fieldHeight) / gridStep);
