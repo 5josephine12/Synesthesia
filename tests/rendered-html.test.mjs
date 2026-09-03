@@ -442,6 +442,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /export function renderMetalheartFrame/);
   assert.match(auraSource, /const visibleMetalheartIds = new Set<number>\(\)/);
   assert.match(auraSource, /metalheartRenderer\.drawMetalheartLayer\(context/);
+  assert.match(auraSource, /styleEpoch: styleLayerEpochRef\.current/);
+  assert.match(auraSource, /\{ \.\.\.blob, metalheartFrozenAt: frozenAt \}/);
+  assert.match(auraSource, /const layerIsLive = layerParticles\.some/);
+  assert.match(auraSource, /pulse: layerIsLive \? metalheartPulse/);
+  assert.match(auraSource, /if \(blobStyle === "style-3"\) return blob\.metalheartFrozenAt !== undefined/);
   assert.doesNotMatch(auraSource, /lastMetalheartIndex|metalheartCanvas/);
   assert.match(styleThreeSource, /function buildRibbon/);
   assert.match(styleThreeSource, /function buildLoop/);
