@@ -46,8 +46,9 @@ test("server-renders the Synesthesia shell", async () => {
   assert.match(html, /<title>Synesthesia<\/title>/i);
   assert.match(
     html,
-    /A synesthesia simulator that turns melody into a luminous visual composition\./,
+    /What does sound look like\? Inspired by synesthesia, this work turns live audio into an ever-changing visual experience\./,
   );
+  assert.match(html, /DJ the visuals (?:<3|&lt;3)/);
   assert.match(html, /property="og:site_name" content="Synesthesia"/i);
   assert.match(html, /property="og:image" content="https:\/\/synesthesia\.josephines\.world\/synesthesia-thumbnail\.jpg"/i);
   assert.match(html, /name="twitter:card" content="summary_large_image"/i);
