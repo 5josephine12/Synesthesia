@@ -48,6 +48,10 @@ test("server-renders the Synesthesia shell", async () => {
     html,
     /A synesthesia simulator that turns melody into a luminous visual composition\./,
   );
+  assert.match(html, /property="og:site_name" content="Synesthesia"/i);
+  assert.match(html, /property="og:image" content="https:\/\/synesthesia\.josephines\.world\/synesthesia-thumbnail\.jpg"/i);
+  assert.match(html, /name="twitter:card" content="summary_large_image"/i);
+  assert.match(html, /name="twitter:image" content="https:\/\/synesthesia\.josephines\.world\/synesthesia-thumbnail\.jpg"/i);
   assert.match(html, /aria-label="Reset aura"/);
   assert.match(html, /aria-label="Sound mode: Piano"/);
   assert.match(html, /aria-label="Previous sound mode"/);
