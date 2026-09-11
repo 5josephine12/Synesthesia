@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { PitchDetector } from "pitchy";
+import { ParticleHistory } from "./particle-history";
 import { drawDottedSigil } from "./art-styles/style-2";
 
 type TelemetryRenderer = typeof import("./art-styles/telemetry");
@@ -135,7 +136,7 @@ type Mapping = {
 type AuraShape = "bloom" | "ribbon" | "beam" | "arc" | "prism" | "veil" | "wave" | "halo" | "flare" | "mesh";
 type AuraBlendMode = "lighter" | "source-over";
 
-type BlobParticle = {
+export type BlobParticle = {
   id: number;
   artStyle: ArtStyleId;
   color: Color;
@@ -290,6 +291,9 @@ type MicrophoneRuntime = {
   source: MediaStreamAudioSourceNode;
   processingNodes: AudioNode[];
   analyser: AnalyserNode;
+  onsetNode: AudioWorkletNode | null;
+  onsetAfter: number;
+  latestVisual: { midi: number; companion: number | null; level: number; harmonic: HarmonicContext | null };
   detector: PitchDetector<Float32Array>;
   timeDomain: Float32Array;
   frequencyData: Float32Array;
@@ -400,10 +404,7 @@ const COLOR_REBUILD_LAYERS = 18;
 const SATURATION_COVERAGE_THRESHOLD = 0.14;
 const MICROPHONE_ANALYSIS_INTERVAL = 1000 / 30;
 const MICROPHONE_FFT_SIZE = 4096;
-const AURA_FRAME_INTERVAL = 1000 / 30;
-const AURA_FRAME_TOLERANCE = 0.75;
-const DOTTED_RENDER_INTERVAL = 1000 / 20;
-const AURA_BACKING_PIXEL_BUDGET = 1_500_000;
+const AURA_BACKING_PIXEL_BUDGET = 8_294_400;
 const AURA_RENDER_PIXEL_BUDGET = 360_000;
 const AURA_SETTLE_BUDGET_MS = 4;
 const AURA_RENDER_BUDGET_MS = 12;
@@ -814,11 +815,11 @@ function calculateBandEnergy(
 }
 
 function normalizeBeatInterval(interval: number) {
-  // Fold fast subdivisions and slow bar accents into a deliberate quarter-note pulse.
+  // Retain fast beats instead of folding them into a slower visual pulse.
   let normalized = interval;
-  while (normalized < 360) normalized *= 2;
-  while (normalized > 760) normalized /= 2;
-  return clamp(normalized, 360, 760);
+  while (normalized < 180) normalized *= 2;
+  while (normalized > 1200) normalized /= 2;
+  return clamp(normalized, 180, 1200);
 }
 
 function trackMicrophoneBeat(
@@ -836,6 +837,12 @@ function trackMicrophoneBeat(
     Math.max(0, energyRise - 1) * 0.78 +
     Math.max(0, fluxRise - 1) * 0.14;
   const onsetThreshold = Math.max(0.16, runtime.onsetBaseline + runtime.onsetDeviation * 1.9);
+  // React to the leading edge; waiting for the falling edge adds an analysis frame.
+  const onsetAttack =
+    activeSignal &&
+    onsetStrength >= onsetThreshold &&
+    (runtime.previousOnsetStrength < onsetThreshold * 0.92 ||
+      onsetStrength >= runtime.previousOnsetStrength * 1.045);
   const onsetPeak =
     activeSignal &&
     runtime.onsetRising &&
@@ -859,8 +866,11 @@ function trackMicrophoneBeat(
   );
 
   let beatDetected = false;
-  if (onsetPeak) {
-    const onsetAt = now - MICROPHONE_ANALYSIS_INTERVAL;
+  if (onsetAttack || onsetPeak) {
+    const onsetAt = now;
+    const minimumSpacing = clamp(runtime.beatInterval * 0.28, 90, 180);
+    // The attack and its falling edge belong to the same beat.
+    if (onsetAt - runtime.lastOnsetAt < minimumSpacing) return false;
     const rawInterval = onsetAt - runtime.lastOnsetAt;
     if (rawInterval > Math.max(1800, runtime.beatInterval * 3)) {
       runtime.beatInterval = 500;
@@ -888,35 +898,12 @@ function trackMicrophoneBeat(
     runtime.lastOnsetAt = onsetAt;
 
     const sinceLastBeat = onsetAt - runtime.lastBeatAt;
-    const beatMultiple = Math.max(1, Math.round(sinceLastBeat / runtime.beatInterval));
-    const phaseError = Math.abs(sinceLastBeat - beatMultiple * runtime.beatInterval);
-    const phaseWindow = Math.max(70, runtime.beatInterval * 0.18);
-    const minimumSpacing = Math.max(300, runtime.beatInterval * 0.58);
-    const isOnGrid = phaseError <= phaseWindow;
-    const isOverdue = sinceLastBeat >= runtime.beatInterval * 1.6;
-
-    if (
-      !Number.isFinite(runtime.lastBeatAt) ||
-      (sinceLastBeat >= minimumSpacing && (runtime.beatConfidence < 1.5 || isOnGrid || isOverdue))
-    ) {
+    // A real onset takes precedence over the estimated tempo grid.
+    if (!Number.isFinite(runtime.lastBeatAt) || sinceLastBeat >= minimumSpacing) {
       beatDetected = true;
       runtime.lastBeatAt = onsetAt;
       runtime.nextBeatAt = onsetAt + runtime.beatInterval;
     }
-  }
-
-  const hasRecentPulse = now - runtime.lastOnsetAt <= runtime.beatInterval * 2.2;
-  // A confident tempo can carry one acoustically soft beat without chasing every transient.
-  if (
-    !beatDetected &&
-    activeSignal &&
-    runtime.beatConfidence >= 2 &&
-    hasRecentPulse &&
-    now >= runtime.nextBeatAt
-  ) {
-    beatDetected = true;
-    runtime.lastBeatAt = runtime.nextBeatAt;
-    runtime.nextBeatAt += runtime.beatInterval;
   }
 
   return beatDetected;
@@ -924,9 +911,9 @@ function trackMicrophoneBeat(
 
 function normalizeStyleThreeBeatInterval(interval: number) {
   let normalized = interval;
-  while (normalized < 240) normalized *= 2;
-  while (normalized > 900) normalized /= 2;
-  return clamp(normalized, 240, 900);
+  while (normalized < 180) normalized *= 2;
+  while (normalized > 1200) normalized /= 2;
+  return clamp(normalized, 180, 1200);
 }
 
 function trackStyleThreeBeat(
@@ -1017,22 +1004,6 @@ function trackStyleThreeBeat(
       runtime.lastStyleThreeBeatAt = now;
       runtime.nextStyleThreeBeatAt = now + runtime.styleThreeBeatInterval;
     }
-  }
-
-  const hasLiveRhythm =
-    now - runtime.lastStyleThreeSignalAt <=
-    Math.max(720, runtime.styleThreeBeatInterval * 1.75);
-  if (
-    !beatDetected &&
-    runtime.styleThreeBeatConfidence >= 1 &&
-    hasLiveRhythm &&
-    now >= runtime.nextStyleThreeBeatAt
-  ) {
-    beatDetected = true;
-    runtime.lastStyleThreeBeatAt = runtime.nextStyleThreeBeatAt;
-    do {
-      runtime.nextStyleThreeBeatAt += runtime.styleThreeBeatInterval;
-    } while (runtime.nextStyleThreeBeatAt <= now);
   }
 
   return beatDetected;
@@ -1364,6 +1335,9 @@ function configureMicrophonePipeline(runtime: MicrophoneRuntime, mode: Microphon
     runtime.detector.minVolumeDecibels = mode === "wide-spectrum" ? -66 : -62;
   }
 
+  runtime.onsetAfter = runtime.context.currentTime;
+  runtime.onsetNode?.port.postMessage({ type: "configure", minimumLevel: mode === "voice-isolation" ? 0.004 : 0.0012 });
+  runtime.onsetNode?.port.postMessage({ type: "reset" });
   runtime.previousSpectrum.fill(0);
   runtime.chroma.fill(0);
   runtime.chordChroma.fill(0);
@@ -1411,6 +1385,12 @@ function disposeMicrophoneRuntime(
   runtime.source.disconnect();
   for (const node of runtime.processingNodes) node.disconnect();
   runtime.analyser.disconnect();
+  if (runtime.onsetNode) {
+    runtime.onsetNode.port.onmessage = null;
+    runtime.onsetNode.port.close();
+    runtime.onsetNode.disconnect();
+    runtime.onsetNode = null;
+  }
   runtime.stream.getTracks().forEach((track) => {
     if (stopStream) track.stop();
     else if (pauseStream) track.enabled = false;
@@ -2369,7 +2349,8 @@ function drawChronologicalAuraLayers(
             context.drawImage(liquidMetalFrame.glowCanvas, 0, 0, width, height);
             context.restore();
             context.save();
-            context.globalCompositeOperation = blendsWithEarlierArtwork ? "screen" : "source-over";
+            // Keep the dot bodies on top, including over white Metalheart shapes.
+            context.globalCompositeOperation = "source-over";
             context.globalAlpha = blendsWithEarlierArtwork ? 0.88 : 0.9;
             context.imageSmoothingEnabled = true;
             context.imageSmoothingQuality = "high";
@@ -2553,7 +2534,7 @@ export function AuraToy() {
   const exportGrainPatternsRef = useRef<WeakMap<HTMLCanvasElement, CanvasPattern>>(new WeakMap());
   const replayRenderStatesRef = useRef<WeakMap<HTMLCanvasElement, ReplayRenderState>>(new WeakMap());
   const blobsRef = useRef<BlobParticle[]>([]);
-  const artworkHistoryRef = useRef<BlobParticle[]>([]);
+  const artworkHistoryRef = useRef(new ParticleHistory());
   const activeHistoryStartRef = useRef(0);
   const exportSnapshotRef = useRef<ArtworkExportSnapshot | null>(null);
   const blobIdRef = useRef(1);
@@ -2577,6 +2558,7 @@ export function AuraToy() {
   const microphoneRef = useRef<MicrophoneRuntime | null>(null);
   const audioInputSourceRef = useRef<AudioInputSource | null>(null);
   const microphoneBeatTimerRef = useRef<number | null>(null);
+  const runtimeCleanupTimerRef = useRef<number | null>(null);
   const resetFrameRef = useRef<number | null>(null);
   const previewFrameRef = useRef<number | null>(null);
   const previewCloseTimerRef = useRef<number | null>(null);
@@ -2586,6 +2568,7 @@ export function AuraToy() {
   const dialWheelTimerRef = useRef<number | null>(null);
   const microphoneModeWheelTimerRef = useRef<number | null>(null);
   const wakeRendererRef = useRef<(() => void) | null>(null);
+  const maintainHiddenHistoryRef = useRef<(() => void) | null>(null);
   const resetRendererRef = useRef<(() => void) | null>(null);
   const releaseTimersRef = useRef<Map<string, number>>(new Map());
   const soundModeRef = useRef<SoundModeId>(DEFAULT_SOUND_MODE);
@@ -2763,41 +2746,48 @@ export function AuraToy() {
     };
   }, []);
 
-  useEffect(
-    () => () => {
-      if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
-      if (previewFrameRef.current !== null) window.cancelAnimationFrame(previewFrameRef.current);
-      if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current);
-      if (microphonePromptCloseTimerRef.current !== null) {
-        window.clearTimeout(microphonePromptCloseTimerRef.current);
-      }
-      if (downloadFeedbackTimerRef.current !== null) {
-        window.clearTimeout(downloadFeedbackTimerRef.current);
-      }
-      if (dialWheelTimerRef.current !== null) window.clearTimeout(dialWheelTimerRef.current);
-      if (microphoneModeWheelTimerRef.current !== null) {
-        window.clearTimeout(microphoneModeWheelTimerRef.current);
-      }
-      releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-      releaseTimersRef.current.clear();
-      if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
-      microphoneGenerationRef.current += 1;
-      const activeMicrophoneStream = microphoneRef.current?.stream ?? null;
-      disposeMicrophoneRuntime(microphoneRef.current);
-      microphoneRef.current = null;
-      if (systemAudioStreamRef.current && systemAudioStreamRef.current !== activeMicrophoneStream) {
-        systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
-      }
-      systemAudioStreamRef.current = null;
-      if (externalMidiInputRef.current) externalMidiInputRef.current.onmidimessage = null;
-      if (externalMidiAccessRef.current) externalMidiAccessRef.current.onstatechange = null;
-      externalMidiInputRef.current = null;
-      externalMidiAccessRef.current = null;
-      externalMidiNotesRef.current.clear();
-      disposeToneEngine();
-    },
-    [disposeToneEngine],
-  );
+  useEffect(() => {
+    if (runtimeCleanupTimerRef.current !== null) {
+      window.clearTimeout(runtimeCleanupTimerRef.current);
+      runtimeCleanupTimerRef.current = null;
+    }
+    // React refresh/StrictMode immediately sets up this effect again. Actual
+    // unmounts still release capture on the next task, without a stale listening UI.
+    return () => {
+      runtimeCleanupTimerRef.current = window.setTimeout(() => {
+        if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
+        if (previewFrameRef.current !== null) window.cancelAnimationFrame(previewFrameRef.current);
+        if (previewCloseTimerRef.current !== null) window.clearTimeout(previewCloseTimerRef.current);
+        if (microphonePromptCloseTimerRef.current !== null) {
+          window.clearTimeout(microphonePromptCloseTimerRef.current);
+        }
+        if (downloadFeedbackTimerRef.current !== null) {
+          window.clearTimeout(downloadFeedbackTimerRef.current);
+        }
+        if (dialWheelTimerRef.current !== null) window.clearTimeout(dialWheelTimerRef.current);
+        if (microphoneModeWheelTimerRef.current !== null) {
+          window.clearTimeout(microphoneModeWheelTimerRef.current);
+        }
+        releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+        releaseTimersRef.current.clear();
+        if (microphoneBeatTimerRef.current !== null) window.clearTimeout(microphoneBeatTimerRef.current);
+        microphoneGenerationRef.current += 1;
+        const activeMicrophoneStream = microphoneRef.current?.stream ?? null;
+        disposeMicrophoneRuntime(microphoneRef.current);
+        microphoneRef.current = null;
+        if (systemAudioStreamRef.current && systemAudioStreamRef.current !== activeMicrophoneStream) {
+          systemAudioStreamRef.current.getTracks().forEach((track) => track.stop());
+        }
+        systemAudioStreamRef.current = null;
+        if (externalMidiInputRef.current) externalMidiInputRef.current.onmidimessage = null;
+        if (externalMidiAccessRef.current) externalMidiAccessRef.current.onstatechange = null;
+        externalMidiInputRef.current = null;
+        externalMidiAccessRef.current = null;
+        externalMidiNotesRef.current.clear();
+        disposeToneEngine();
+      }, 0);
+    };
+  }, [disposeToneEngine]);
 
   const openMicrophonePrompt = useCallback((inputSource: AudioInputSource = "microphone") => {
     if (microphonePromptCloseTimerRef.current !== null) {
@@ -2864,7 +2854,7 @@ export function AuraToy() {
       kind === "image" ? imagePreviewButtonRef.current : gifPreviewButtonRef.current;
     const capturedAt = performance.now();
     exportSnapshotRef.current = {
-      particles: artworkHistoryRef.current.slice(),
+      particles: artworkHistoryRef.current.snapshot(),
       capturedAt,
     };
     replayRenderStatesRef.current = new WeakMap();
@@ -2984,8 +2974,9 @@ export function AuraToy() {
     color: Color,
     velocity: number,
     isRhythmicStrike = false,
+    occurredAt = performance.now(),
   ) => {
-    const now = performance.now();
+    const now = occurredAt;
     const id = blobIdRef.current;
     blobIdRef.current += 1;
     const mode = soundModeRef.current;
@@ -3171,7 +3162,10 @@ export function AuraToy() {
       createdAt: now,
     };
     blobsRef.current.push(nextBlob);
-    artworkHistoryRef.current.push(nextBlob);
+    artworkHistoryRef.current.append(nextBlob);
+    if (document.hidden && blobsRef.current.length > HARD_MAX_LIVE_VISUAL_PARTICLES) {
+      maintainHiddenHistoryRef.current?.();
+    }
 
     if (currentArtStyle === "style-3" && isRhythmicStrike) {
       metalheartPulseRef.current = {
@@ -3376,6 +3370,9 @@ export function AuraToy() {
         source,
         processingNodes: [],
         analyser,
+        onsetNode: null,
+        onsetAfter: 0,
+        latestVisual: { midi: 60, companion: null, level: 0, harmonic: null },
         detector,
         timeDomain: new Float32Array(MICROPHONE_FFT_SIZE),
         frequencyData: new Float32Array(analyser.frequencyBinCount),
@@ -3471,11 +3468,64 @@ export function AuraToy() {
       );
       hapticFeedback("success");
 
+      const emitAudioBeat = (beatAt: number, inputLevel?: number) => {
+        if (generation !== microphoneGenerationRef.current || microphoneRef.current !== runtime) return;
+        const visual = runtime.latestVisual;
+        const level = Math.max(visual.level, clamp((inputLevel ?? 0) / 0.09, 0, 1));
+        const velocity = clamp(0.36 + level * 0.64, 0.26, 1);
+        const note = midiToNote(clamp(visual.midi, MIN_MIDI, MAX_MIDI));
+        spawnBlob(note, microphoneColor(AURA_MAPPING.pitches[note.pc], visual.harmonic), velocity, true, beatAt);
+        let count = 1;
+        if (artStyleRef.current !== "style-3" && visual.companion !== null && visual.companion !== visual.midi) {
+          const companion = midiToNote(clamp(visual.companion, MIN_MIDI, MAX_MIDI));
+          spawnBlob(companion, microphoneColor(AURA_MAPPING.pitches[companion.pc], visual.harmonic), velocity * 0.86, true, beatAt);
+          count++;
+        }
+        runtime.visualCursor += count;
+        runtime.lastVisualAt = beatAt;
+      };
+
+      // The audio thread observes every PCM block, even while Canvas or pitch
+      // analysis occupies the main thread. Messages retain their audio timestamp.
+      if (audioContext.audioWorklet && typeof AudioWorkletNode !== "undefined") {
+        void audioContext.audioWorklet.addModule("/audio-onset-worklet.js").then(() => {
+          if (generation !== microphoneGenerationRef.current || microphoneRef.current !== runtime) return;
+          const node = new AudioWorkletNode(runtime.context, "aura-onset", { outputChannelCount: [1] });
+          runtime.onsetAfter = runtime.context.currentTime;
+          node.port.onmessage = ({ data }: MessageEvent<{ type: string; audioTime: number; level: number }>) => {
+            if (runtime.onsetNode !== node || generation !== microphoneGenerationRef.current || microphoneRef.current !== runtime) return;
+            if (data.type !== "onset" || !Number.isFinite(data.audioTime) || !Number.isFinite(data.level) || data.audioTime <= runtime.onsetAfter) return;
+            const beatAt = performance.now() + (data.audioTime - runtime.context.currentTime) * 1000;
+            // Avoid duplicating the last fallback event during processor startup.
+            if (beatAt - runtime.lastVisualAt < 45) return;
+            runtime.lastBeatAt = beatAt;
+            runtime.lastStyleThreeBeatAt = beatAt;
+            runtime.beatConfidence = Math.min(5, runtime.beatConfidence + 1);
+            emitAudioBeat(beatAt, data.level);
+          };
+          node.onprocessorerror = () => {
+            if (runtime.onsetNode !== node) return;
+            runtime.analyser.disconnect(node);
+            node.disconnect();
+            node.port.close();
+            runtime.onsetNode = null;
+          };
+          runtime.onsetNode = node;
+          node.port.postMessage({ type: "configure", minimumLevel: microphoneModeRef.current === "voice-isolation" && inputSource === "microphone" ? 0.004 : 0.0012 });
+          runtime.analyser.connect(node);
+          // The processor writes silence: never monitor the captured audio.
+          node.connect(runtime.context.destination);
+        }).catch(() => { /* Older browsers retain the analyser fallback below. */ });
+      }
+
       const analyze = (now: number) => {
         if (generation !== microphoneGenerationRef.current || microphoneRef.current !== runtime) return;
         runtime.animationFrame = window.requestAnimationFrame(analyze);
-        if (now - runtime.lastAnalysisAt < MICROPHONE_ANALYSIS_INTERVAL) return;
-        runtime.lastAnalysisAt = now;
+        const analysisElapsed = now - runtime.lastAnalysisAt;
+        if (analysisElapsed < MICROPHONE_ANALYSIS_INTERVAL - 0.75) return;
+        runtime.lastAnalysisAt = Number.isFinite(runtime.lastAnalysisAt)
+          ? runtime.lastAnalysisAt + Math.max(1, Math.floor((analysisElapsed + 0.75) / MICROPHONE_ANALYSIS_INTERVAL)) * MICROPHONE_ANALYSIS_INTERVAL
+          : now;
 
         if (runtime.context.state !== "running" && now - runtime.lastResumeAttemptAt >= 1000) {
           runtime.lastResumeAttemptAt = now;
@@ -3570,7 +3620,7 @@ export function AuraToy() {
           240,
         );
         const metalheartIsActive = artStyleRef.current === "style-3";
-        const styleThreeBeatDetected = metalheartIsActive
+        const styleThreeBeatDetected = !runtime.onsetNode && metalheartIsActive
           ? trackStyleThreeBeat(
               runtime,
               now,
@@ -3580,7 +3630,7 @@ export function AuraToy() {
               beatBandEnergy,
             )
           : false;
-        const beatDetected = trackMicrophoneBeat(
+        const beatDetected = !runtime.onsetNode && trackMicrophoneBeat(
           runtime,
           now,
           activeSignal,
@@ -3934,46 +3984,22 @@ export function AuraToy() {
           }, 105);
         }
 
-        if (!activeSignal && !metalheartIsActive) return;
-        if (metalheartIsActive && !styleThreeBeatDetected) return;
-        const primaryVisualMidi = detectedMidi ??
-          (metalheartIsActive ? runtime.lastMidi ?? dominantMidi ?? bassMidi ?? 60 : null);
-        if (primaryVisualMidi === null) return;
-        const visualInterval = visualBeatDetected ? 60 : lerp(165, 72, level);
-        if (!metalheartIsActive && now - runtime.lastVisualAt < visualInterval) return;
-        if (!clearPitch && !visualBeatDetected && recentStableMidi === null && level < 0.1) return;
-
         const harmonicContext = isolatesVoice ? null : detectHarmonicContext(runtime.chroma);
-        const velocity = clamp(0.26 + level * 0.64 + (visualBeatDetected ? 0.1 : 0), 0.26, 1);
-        const beatCompanion =
-          !metalheartIsActive &&
-          !isolatesVoice &&
-          beatDetected &&
-          !monophonicFrame &&
-          noteCandidates.length > 1
-            ? noteCandidates[(runtime.visualCursor + 1) % noteCandidates.length]
-            : null;
+        const primaryVisualMidi = detectedMidi ?? runtime.lastMidi ?? dominantMidi ?? bassMidi ?? 60;
         const primaryVisualNote = midiToNote(clamp(primaryVisualMidi, MIN_MIDI, MAX_MIDI));
-        const primaryVisualColor = AURA_MAPPING.pitches[primaryVisualNote.pc];
-        spawnBlob(
-          primaryVisualNote,
-          microphoneColor(primaryVisualColor, harmonicContext),
-          velocity,
-          visualBeatDetected,
-        );
-        let visualCount = 1;
-        if (beatCompanion !== null && beatCompanion !== primaryVisualMidi) {
-          const companionNote = midiToNote(clamp(beatCompanion, MIN_MIDI, MAX_MIDI));
-          const companionColor = AURA_MAPPING.pitches[companionNote.pc];
-          spawnBlob(
-            companionNote,
-            microphoneColor(companionColor, harmonicContext),
-            velocity * 0.86,
-          );
-          visualCount = 2;
+        // Pitch controls appearance, but is not on the critical beat-to-visual path.
+        runtime.latestVisual = {
+          midi: primaryVisualMidi,
+          level,
+          harmonic: harmonicContext,
+          companion: !isolatesVoice && !monophonicFrame && noteCandidates.length > 1
+            ? noteCandidates[(runtime.visualCursor + 1) % noteCandidates.length]
+            : null,
+        };
+        if (visualBeatDetected) {
+          const visualBeatAt = metalheartIsActive ? runtime.lastStyleThreeBeatAt : runtime.lastBeatAt;
+          emitAudioBeat(visualBeatAt);
         }
-        runtime.visualCursor += visualCount;
-        runtime.lastVisualAt = now;
         let heardNotes = primaryVisualNote.name;
         if (detectedPitchClasses.length > 1) {
           heardNotes = NOTE_NAMES[detectedPitchClasses[0]];
@@ -4490,7 +4516,6 @@ export function AuraToy() {
     let dpr = 1;
     let frame = 0;
     let running = false;
-    let lastDrawAt = -Infinity;
     let settledCount = 0;
     let adaptiveRenderScale = 1;
     let overBudgetFrames = 0;
@@ -4498,8 +4523,8 @@ export function AuraToy() {
     let blurredSettledCount = -1;
     let blurredBlobCount = -1;
     let blurredFallbackArtStyle: ArtStyleId | null = null;
-    let lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
     let lastPixelBlobCount = -1;
+    let pixelWasMoving = false;
     let lastPixelFallbackArtStyle: ArtStyleId | null = null;
     let lastPixelReducedMotion = false;
     let hasCompactedHistory = false;
@@ -4557,14 +4582,13 @@ export function AuraToy() {
         pixelLayer.height = pixelHeight;
         pixelAccents.width = pixelWidth;
         pixelAccents.height = pixelHeight;
-        lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
         lastPixelBlobCount = -1;
       }
     };
 
     const syncHistorySize = () => {
-      const targetWidth = Math.max(1, Math.round(width));
-      const targetHeight = Math.max(1, Math.round(height));
+      const targetWidth = canvas.width;
+      const targetHeight = canvas.height;
       if (historyComposite.width === targetWidth && historyComposite.height === targetHeight) return;
 
       const canPreserveHistory =
@@ -4590,6 +4614,7 @@ export function AuraToy() {
           targetHeight,
         );
       }
+      historyCompositeContext.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
     const resize = () => {
@@ -4601,7 +4626,7 @@ export function AuraToy() {
       );
       const nextDpr = Math.max(
         1,
-        Math.min(window.devicePixelRatio || 1, 1.25, pixelBudgetRatio),
+        Math.min(window.devicePixelRatio || 1, pixelBudgetRatio),
       );
       const nextCanvasWidth = Math.round(nextWidth * nextDpr);
       const nextCanvasHeight = Math.round(nextHeight * nextDpr);
@@ -4645,7 +4670,6 @@ export function AuraToy() {
       blurredSettledCount = -1;
       blurredBlobCount = -1;
       blurredFallbackArtStyle = null;
-      lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
       lastPixelBlobCount = -1;
       lastPixelFallbackArtStyle = null;
       colorRebuildLayersRef.current = 0;
@@ -4782,10 +4806,34 @@ export function AuraToy() {
       blurredSettledCount = -1;
       blurredBlobCount = -1;
       blurredFallbackArtStyle = null;
-      lastPixelRenderedAt = Number.NEGATIVE_INFINITY;
       lastPixelBlobCount = -1;
       lastPixelFallbackArtStyle = null;
       replayRenderStatesRef.current = new WeakMap();
+    };
+
+    const maintainHiddenHistory = () => {
+      // requestAnimationFrame is suspended in background tabs, while capture can
+      // continue. Fold finished artwork there too instead of accumulating an
+      // hour of live objects and replaying the backlog on return.
+      const now = performance.now();
+      syncOffscreenSize(true);
+      const blurRadius = (reducedMotionRef.current ? 4 : 7) * offscreen.width / Math.max(1, width);
+      while (blobsRef.current.length > MAX_LIVE_VISUAL_PARTICLES) {
+        const previousLength = blobsRef.current.length;
+        const previousSettledCount = settledCount;
+        settledCount = 0;
+        for (const blob of blobsRef.current) {
+          const duration = blob.artStyle === "style-3" ? METALHEART_FORMATION_DURATION
+            : blob.artStyle === "style-4" ? LIQUID_METAL_FORMATION_DURATION : BLOB_ARRIVAL_DURATION;
+          if (blob.frozenAt === undefined && !reducedMotionRef.current && now - blob.createdAt < duration) break;
+          settledCount++;
+        }
+        compactVisualHistory(now, blurRadius);
+        if (blobsRef.current.length === previousLength) {
+          settledCount = previousSettledCount;
+          break;
+        }
+      }
     };
 
     const animate = (now: number) => {
@@ -4795,20 +4843,7 @@ export function AuraToy() {
         resize();
       }
 
-      const elapsed = now - lastDrawAt;
-      if (elapsed < AURA_FRAME_INTERVAL - AURA_FRAME_TOLERANCE) {
-        wakeRenderer();
-        return;
-      }
-      if (Number.isFinite(lastDrawAt)) {
-        const elapsedIntervals = Math.max(
-          1,
-          Math.floor((elapsed + AURA_FRAME_TOLERANCE) / AURA_FRAME_INTERVAL),
-        );
-        lastDrawAt += elapsedIntervals * AURA_FRAME_INTERVAL;
-      } else {
-        lastDrawAt = now;
-      }
+      // Draw on the display clock; a second timer drops frames and delays new notes.
       const renderStartedAt = performance.now();
       const currentArtStyle = artStyleRef.current;
 
@@ -4997,8 +5032,7 @@ export function AuraToy() {
           lastPixelBlobCount !== blobsRef.current.length ||
           lastPixelFallbackArtStyle !== currentArtStyle ||
           lastPixelReducedMotion !== reducedMotionRef.current ||
-          (dottedMotionIsActive &&
-            now - lastPixelRenderedAt >= DOTTED_RENDER_INTERVAL - AURA_FRAME_TOLERANCE);
+          dottedMotionIsActive || pixelWasMoving;
         if (pixelLayerNeedsRefresh) {
           pixelContext.clearRect(0, 0, pixelLayer.width, pixelLayer.height);
           drawDottedSigilFlowLayer(
@@ -5014,7 +5048,7 @@ export function AuraToy() {
             undefined,
             width,
           );
-          lastPixelRenderedAt = now;
+          pixelWasMoving = dottedMotionIsActive;
           lastPixelBlobCount = blobsRef.current.length;
           lastPixelFallbackArtStyle = currentArtStyle;
           lastPixelReducedMotion = reducedMotionRef.current;
@@ -5129,6 +5163,7 @@ export function AuraToy() {
 
     resize();
     wakeRendererRef.current = wakeRenderer;
+    maintainHiddenHistoryRef.current = maintainHiddenHistory;
     resetRendererRef.current = resetRenderer;
     window.addEventListener("resize", handleResize);
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -5137,6 +5172,7 @@ export function AuraToy() {
 
     return () => {
       wakeRendererRef.current = null;
+      maintainHiddenHistoryRef.current = null;
       resetRendererRef.current = null;
       if (compactedHistoryCanvasRef.current === historyComposite) {
         compactedHistoryCanvasRef.current = null;
@@ -5631,7 +5667,7 @@ export function AuraToy() {
     releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
     releaseTimersRef.current.clear();
     blobsRef.current = [];
-    artworkHistoryRef.current = [];
+    artworkHistoryRef.current.clear();
     activeHistoryStartRef.current = 0;
     exportSnapshotRef.current = null;
     blobIdRef.current = 1;
@@ -5649,6 +5685,8 @@ export function AuraToy() {
 
     const microphone = microphoneRef.current;
     if (microphone && microphone.stream.active && microphone.context.state !== "closed") {
+      microphone.onsetAfter = microphone.context.currentTime;
+      microphone.onsetNode?.port.postMessage({ type: "reset" });
       microphone.lastAnalysisAt = -Infinity;
       microphone.lastVisualAt = -Infinity;
       window.cancelAnimationFrame(microphone.animationFrame);
@@ -5684,12 +5722,7 @@ export function AuraToy() {
         }
       }
       const artworkHistory = artworkHistoryRef.current;
-      for (let index = activeHistoryStartRef.current; index < artworkHistory.length; index += 1) {
-        const blob = artworkHistory[index];
-        if (blob.artStyle === previousStyle && blob.frozenAt === undefined) {
-          artworkHistory[index] = { ...blob, frozenAt };
-        }
-      }
+      artworkHistory.freezeStyleFrom(activeHistoryStartRef.current, previousStyle, frozenAt);
       activeHistoryStartRef.current = artworkHistory.length;
       if (previousStyle === "style-3") {
         metalheartPulseRef.current.startedAt = Number.NEGATIVE_INFINITY;

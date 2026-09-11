@@ -136,15 +136,15 @@ test("exports GIFs at preview quality with a stable full palette", async () => {
   assert.match(source, /const indexedFrame = indexGifFrame\(rgba\)/);
   assert.match(source, /const rgb565Cache = new Int16Array\(65536\)/);
   assert.match(source, /palette: frame === 0 \? globalPalette : undefined/);
-  assert.match(source, /const artworkHistoryRef = useRef<BlobParticle\[\]>\(\[\]\)/);
+  assert.match(source, /const artworkHistoryRef = useRef\(new ParticleHistory\(\)\)/);
   assert.match(source, /const exportSnapshotRef = useRef<ArtworkExportSnapshot \| null>\(null\)/);
-  assert.match(source, /particles: artworkHistoryRef\.current\.slice\(\)/);
+  assert.match(source, /particles: artworkHistoryRef\.current\.snapshot\(\)/);
   assert.match(source, /const exportBlobs = exportSnapshot\?\.particles \?\? blobsRef\.current/);
   assert.match(source, /const exportNow = exportSnapshot\?\.capturedAt \?\? performance\.now\(\)/);
   assert.match(source, /exportSnapshot === null &&\s*compactedHistoryActiveRef\.current/);
-  assert.match(source, /artworkHistoryRef\.current\.push\(nextBlob\)/);
+  assert.match(source, /artworkHistoryRef\.current\.append\(nextBlob\)/);
   assert.match(source, /const activeHistoryStartRef = useRef\(0\)/);
-  assert.match(source, /for \(let index = activeHistoryStartRef\.current; index < artworkHistory\.length; index \+= 1\)/);
+  assert.match(source, /artworkHistory\.freezeStyleFrom\(activeHistoryStartRef\.current, previousStyle, frozenAt\)/);
   assert.match(source, /activeHistoryStartRef\.current = artworkHistory\.length/);
 });
 
@@ -434,7 +434,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /const overlapsNewerFormation = dottedIndices\.some/);
   assert.match(auraSource, /Math\.hypot\(candidate\.x - selected\.x, candidate\.y - selected\.y\) < 0\.16/);
   assert.match(auraSource, /const DOTTED_FORMATION_SETTLE_DURATION = 2200/);
-  assert.match(auraSource, /const DOTTED_RENDER_INTERVAL = 1000 \/ 20/);
+  assert.doesNotMatch(auraSource, /const DOTTED_RENDER_INTERVAL = 1000 \/ 20/);
   assert.match(auraSource, /const DOTTED_GLOW_MATURATION_DURATION = 7200/);
   assert.match(
     auraSource,
@@ -517,9 +517,9 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /drawPixelLayerAtBackingResolution\(context, pixelAccentLayer\)/);
   assert.match(auraSource, /const pixelWidth = Math\.max\(1, canvas\.width\)/);
   assert.match(auraSource, /pixelLayer\.width = output\.width/);
-  assert.match(auraSource, /const AURA_BACKING_PIXEL_BUDGET = 1_500_000/);
+  assert.match(auraSource, /const AURA_BACKING_PIXEL_BUDGET = 8_294_400/);
   assert.match(auraSource, /const AURA_RENDER_PIXEL_BUDGET = 360_000/);
-  assert.match(auraSource, /const nextDpr = Math\.max\([\s\S]*?Math\.min\(window\.devicePixelRatio \|\| 1, 1\.25, pixelBudgetRatio\)/);
+  assert.match(auraSource, /const nextDpr = Math\.max\([\s\S]*?Math\.min\(window\.devicePixelRatio \|\| 1, pixelBudgetRatio\)/);
   assert.match(styleTwoSource, /accentContext\.globalAlpha = clamp\(alpha \* \(0\.55 \+ emphasis \* 0\.3\)/);
   assert.match(auraSource, /const rgb565Cache = new Int16Array\(65536\)/);
   assert.doesNotMatch(auraSource, /const dottedBlobs = blobs\.slice/);
@@ -570,29 +570,21 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 12/);
   assert.match(auraSource, /const metalheartIsActive = artStyleRef\.current === "style-3"/);
   assert.match(auraSource, /const currentMetalheartPulse = metalheartPulseIsActive/);
-  assert.match(auraSource, /if \(metalheartIsActive && !styleThreeBeatDetected\) return/);
   assert.match(auraSource, /function trackStyleThreeBeat\(/);
   assert.match(auraSource, /const onsetAttack =/);
   assert.match(auraSource, /const onsetPeak =/);
   assert.match(auraSource, /runtime\.styleThreePreviousOnsetStrength/);
   assert.match(auraSource, /const minimumSpacing = clamp\(runtime\.styleThreeBeatInterval \* 0\.34, 150, 260\)/);
-  assert.match(auraSource, /runtime\.styleThreeBeatConfidence >= 1/);
-  assert.match(auraSource, /const hasLiveRhythm =/);
-  assert.match(auraSource, /now - runtime\.lastStyleThreeSignalAt/);
   assert.doesNotMatch(auraSource, /const hasRecentAttack =/);
+  assert.match(auraSource, /audioWorklet\.addModule\("\/audio-onset-worklet\.js"\)/);
   assert.match(auraSource, /const visualBeatDetected = metalheartIsActive \? styleThreeBeatDetected : beatDetected/);
-  assert.match(auraSource, /if \(!activeSignal && !metalheartIsActive\) return/);
   assert.match(auraSource, /const onsetPeak =/);
-  assert.match(auraSource, /const isOnGrid = phaseError <= phaseWindow/);
-  assert.match(auraSource, /const primaryVisualMidi = detectedMidi \?\?/);
-  assert.match(auraSource, /metalheartIsActive \? runtime\.lastMidi \?\? dominantMidi \?\? bassMidi \?\? 60 : null/);
-  assert.match(auraSource, /if \(primaryVisualMidi === null\) return/);
-  assert.match(auraSource, /if \(!metalheartIsActive && now - runtime\.lastVisualAt < visualInterval\) return/);
+  assert.match(auraSource, /const primaryVisualMidi = detectedMidi \?\? runtime\.lastMidi \?\? dominantMidi \?\? bassMidi \?\? 60/);
+  assert.doesNotMatch(auraSource, /now - runtime\.lastVisualAt < visualInterval/);
   assert.doesNotMatch(auraSource, /metalheartIsActive\s*\? 300/);
   assert.match(auraSource, /isRhythmicStrike = false/);
   assert.match(auraSource, /currentArtStyle === "style-3" && isRhythmicStrike/);
   assert.match(auraSource, /spawnBlob\(note, color, velocity, true\)/);
-  assert.match(auraSource, /microphoneColor\(primaryVisualColor, harmonicContext\),\s*velocity,\s*visualBeatDetected/);
   assert.match(styleThreeSource, /export function drawMetalheartParticle/);
   assert.match(styleThreeSource, /export function drawMetalheartPulse/);
   assert.match(styleThreeSource, /export function drawMetalheartLayer/);
@@ -603,7 +595,6 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(auraSource, /styleEpoch: styleLayerEpochRef\.current/);
   assert.match(auraSource, /blob\.artStyle === previousStyle && blob\.frozenAt === undefined/);
   assert.match(auraSource, /liveBlobs\[index\] = \{ \.\.\.blob, frozenAt \}/);
-  assert.match(auraSource, /artworkHistory\[index\] = \{ \.\.\.blob, frozenAt \}/);
   assert.match(auraSource, /const layerIsLive = layerParticles\.some/);
   assert.match(auraSource, /pulse: layerIsLive \? metalheartPulse/);
   assert.match(auraSource, /\(blobStyle === "style-3" \|\| blobStyle === "style-4"\)/);
@@ -620,13 +611,9 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /const COMPOSITION_ANCHORS =/);
   assert.match(styleThreeSource, /particle\.id \+ particle\.midi \* 2 \+ particle\.repeat \* 3/);
   assert.match(styleThreeSource, /const DENSITY_CORE_OFFSETS =/);
-  assert.match(styleThreeSource, /const MOTION_FRAME_INTERVAL = 1000 \/ 20/);
+  assert.doesNotMatch(styleThreeSource, /const MOTION_FRAME_INTERVAL = 1000 \/ 20/);
   assert.match(styleThreeSource, /const FORMATION_DURATION = 620/);
   assert.match(styleThreeSource, /function growAndRetract/);
-  assert.match(styleThreeSource, /const growthEnd = 0\.5/);
-  assert.match(styleThreeSource, /const retractionEnd = 0\.76/);
-  assert.match(styleThreeSource, /return lerp\(1, 0\.82, retraction\)/);
-  assert.match(styleThreeSource, /return lerp\(0\.82, 1, settle\)/);
   assert.match(styleThreeSource, /const arrival = growAndRetract\(age\)/);
   assert.match(styleThreeSource, /function beatAccent/);
   assert.match(styleThreeSource, /Math\.pow\(1 - progress, 2\.6\) \* strength/);
@@ -646,19 +633,19 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleThreeSource, /context\.fillStyle = "#ffffff"/);
   assert.match(styleThreeSource, /rgba\(0, 0, 0/);
   assert.match(styleThreeSource, /const MAX_VISIBLE_GROWTHS = 12/);
-  assert.match(styleThreeSource, /const RENDER_PIXEL_BUDGET = 5_000_000/);
+  assert.match(styleThreeSource, /const RENDER_PIXEL_BUDGET = 8_294_400/);
   assert.match(styleThreeSource, /desynchronized: true/);
   assert.match(styleThreeSource, /forming: forming \|\| continuouslyMoving/);
   assert.match(styleThreeSource, /Math\.pow\(Math\.max\(0\.002, 1 - normalized\), 0\.36\)/);
-  assert.match(styleThreeSource, /const displayScale = Math\.min\(1\.5, window\.devicePixelRatio \|\| 1\)/);
+  assert.match(styleThreeSource, /const displayScale = window\.devicePixelRatio \|\| 1/);
   assert.doesNotMatch(styleThreeSource, /destination-out|shape\.details|shape\.holes/);
   assert.match(auraSource, /context\.imageSmoothingQuality = "high"/);
   assert.doesNotMatch(auraSource, /brightness\(1\.72\) sepia\(0\.32\) saturate\(1\.72\)/);
   assert.doesNotMatch(auraSource, /context\.filter = "sepia\(0\.28\) saturate\(1\.48\)"/);
   assert.doesNotMatch(styleThreeSource, /shadowBlur|createPattern|getImageData/);
   assert.match(styleFourSource, /const MAX_HALFTONE_FIELDS = 12/);
-  assert.match(styleFourSource, /const HALFTONE_PIXEL_BUDGET = 1_250_000/);
-  assert.match(styleFourSource, /const HALFTONE_FRAME_INTERVAL = 1000 \/ 20/);
+  assert.match(styleFourSource, /const HALFTONE_PIXEL_BUDGET = 8_294_400/);
+  assert.doesNotMatch(styleFourSource, /const HALFTONE_FRAME_INTERVAL = 1000 \/ 20/);
   assert.match(styleFourSource, /const pitch = clamp\(\(particle\.midi - 24\) \/ 83, 0, 1\)/);
   assert.match(styleFourSource, /const strength = clamp\(particle\.velocity, 0, 1\)/);
   assert.match(styleFourSource, /const body = particle\.color/);
@@ -679,7 +666,11 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleFourSource, /const occupiedDots = new Map<number/);
   assert.match(styleFourSource, /gridCellKey\(cellX \+ offsetX, cellY \+ offsetY\)/);
   assert.match(styleFourSource, /overlapsExistingDot/);
-  assert.match(auraSource, /context\.globalCompositeOperation = blendsWithEarlierArtwork \? "screen" : "source-over"/);
+  assert.match(
+    auraSource,
+    /context\.globalCompositeOperation = "source-over";\s*context\.globalAlpha = blendsWithEarlierArtwork \? 0\.88 : 0\.9;[\s\S]*?context\.drawImage\(liquidMetalFrame\.canvas/,
+  );
+  assert.doesNotMatch(auraSource, /context\.globalCompositeOperation = blendsWithEarlierArtwork \? "screen" : "source-over"/);
   assert.match(auraSource, /context\.globalCompositeOperation = "color"/);
   assert.match(auraSource, /organicContext\.globalCompositeOperation = "destination-in"/);
   assert.match(auraSource, /context\.globalCompositeOperation = "destination-out"/);

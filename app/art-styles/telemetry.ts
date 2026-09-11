@@ -1271,6 +1271,13 @@ export function drawTelemetryOverlay(
     return;
   }
 
+  // A continuous input may never reach clearMorphStates(). Keep only IDs in
+  // the current visible window; old IDs can never be presented again here.
+  const activeKeys = new Set(active.map(nodeKey));
+  for (const key of processedNodeKeys) {
+    if (!activeKeys.has(key)) processedNodeKeys.delete(key);
+  }
+
   context.save();
   context.globalCompositeOperation = "source-over";
 

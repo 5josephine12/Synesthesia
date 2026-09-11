@@ -30,8 +30,7 @@ export type LiquidMetalFrame = {
 
 const MAX_HALFTONE_FIELDS = 12;
 const HALFTONE_FORMATION_DURATION = 1900;
-const HALFTONE_PIXEL_BUDGET = 1_250_000;
-const HALFTONE_FRAME_INTERVAL = 1000 / 20;
+const HALFTONE_PIXEL_BUDGET = 8_294_400;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -77,7 +76,7 @@ class HalftoneRenderer {
   private width = 0;
   private height = 0;
   private displayScale = 1;
-  private lastFrameAt = Number.NEGATIVE_INFINITY;
+  private wasForming = false;
   private lastSignature = "";
 
   constructor() {
@@ -106,7 +105,7 @@ class HalftoneRenderer {
   }
 
   private syncSize(width: number, height: number) {
-    const deviceScale = Math.min(1.5, window.devicePixelRatio || 1);
+    const deviceScale = window.devicePixelRatio || 1;
     const budgetScale = Math.sqrt(HALFTONE_PIXEL_BUDGET / Math.max(1, width * height));
     const scale = Math.max(0.75, Math.min(deviceScale, budgetScale));
     const targetWidth = Math.max(1, Math.round(width * scale));
@@ -297,7 +296,8 @@ class HalftoneRenderer {
     if (
       !resized &&
       signature === this.lastSignature &&
-      (!hasLiveFormation || now - this.lastFrameAt < HALFTONE_FRAME_INTERVAL)
+      !hasLiveFormation &&
+      !this.wasForming
     ) {
       return {
         canvas: this.canvas,
@@ -318,7 +318,7 @@ class HalftoneRenderer {
     for (let index = active.length - 1; index >= 0; index -= 1) {
       if (this.drawField(active[index], now, reducedMotion, occupiedDots)) forming = true;
     }
-    this.lastFrameAt = now;
+    this.wasForming = hasLiveFormation;
     this.lastSignature = signature;
     return {
       canvas: this.canvas,
@@ -332,7 +332,7 @@ class HalftoneRenderer {
     this.context.clearRect(0, 0, this.width, this.height);
     this.glowContext.clearRect(0, 0, this.width, this.height);
     this.regionContext.clearRect(0, 0, this.width, this.height);
-    this.lastFrameAt = Number.NEGATIVE_INFINITY;
+    this.wasForming = false;
     this.lastSignature = "";
   }
 

@@ -9,7 +9,7 @@
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
@@ -18,12 +18,10 @@
     "@vercel/analytics": "^2.0.1",
     "drizzle-orm": "0.45.2",
     "gifenc": "^1.0.3",
-    "lucide-react": "^1.28.0",
     "next": "16.2.6",
     "pitchy": "^4.1.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "three": "^0.185.1",
     "tone": "^15.1.22"
   },
   "devDependencies": {
@@ -32,7 +30,6 @@
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "@types/three": "^0.185.4",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",

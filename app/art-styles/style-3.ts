@@ -62,8 +62,7 @@ export type MetalheartPulseOptions = {
 
 const FORMATION_DURATION = 620;
 const MAX_VISIBLE_GROWTHS = 12;
-const RENDER_PIXEL_BUDGET = 5_000_000;
-const MOTION_FRAME_INTERVAL = 1000 / 20;
+const RENDER_PIXEL_BUDGET = 8_294_400;
 const TAU = Math.PI * 2;
 const COMPOSITION_FLOW_ANGLE = -0.67;
 const FLOW_DIRECTION_OFFSETS = [-1.08, -0.7, -0.42, -0.2, -0.07, 0, 0.12, 0.3, 0.54, 0.9, 1.68] as const;
@@ -142,13 +141,23 @@ function hash(seed: number, index: number) {
   return ((value ^ (value >>> 15)) >>> 0) / 4294967296;
 }
 
-function traceBoundary(points: readonly Point[], path = new Path2D()) {
-  if (points.length === 0) return path;
-  path.moveTo(points[0].x, points[0].y);
-  for (let index = 1; index < points.length; index += 1) {
-    path.lineTo(points[index].x, points[index].y);
+// Paths copy their coordinates, so sequential builders can reuse this workspace.
+// This avoids allocating hundreds of short-lived point objects per strand/frame.
+let boundaryLeft = new Float64Array(256);
+let boundaryRight = new Float64Array(256);
+function prepareBoundary(samples: number) {
+  const length = (samples + 1) * 2;
+  if (boundaryLeft.length < length) {
+    boundaryLeft = new Float64Array(length);
+    boundaryRight = new Float64Array(length);
   }
-  return path;
+}
+
+function traceBoundary(points: Float64Array, count: number, path: Path2D) {
+  path.moveTo(points[0], points[1]);
+  for (let index = 1; index < count; index += 1) {
+    path.lineTo(points[index * 2], points[index * 2 + 1]);
+  }
 }
 
 function ribbonWidth(spec: RibbonSpec, normalized: number, edgePhase: number) {
@@ -166,11 +175,23 @@ function ribbonWidth(spec: RibbonSpec, normalized: number, edgePhase: number) {
   return Math.max(0.24, spec.width * (section + machinedVariance) * taper);
 }
 
+type RibbonSample = { envelope: number; curve: number; wave: number; hook: number };
+const settledRibbonSamples = new Map<number, RibbonSample[]>();
+function ribbonSample(progress: number, phase: number, waveFrequency: number): RibbonSample {
+  return {
+    envelope: Math.sin(progress * Math.PI),
+    curve: Math.pow(progress, 1.35),
+    wave: Math.sin(progress * Math.PI * waveFrequency + phase),
+    hook: Math.pow(smoothstep(0.68, 1, progress), 1.35),
+  };
+}
+
 function buildRibbon(spec: RibbonSpec) {
   const reveal = clamp(spec.reveal, 0.025, 1);
   const samples = Math.max(12, Math.ceil(44 * reveal));
-  const left: Point[] = [];
-  const right: Point[] = [];
+  prepareBoundary(samples);
+  const left = boundaryLeft;
+  const right = boundaryRight;
   const phase = hash(spec.seed, 3) * TAU;
   const direction = hash(spec.seed, 11) > 0.5 ? 1 : -1;
   const waveFrequency = lerp(0.62, 1.08, hash(spec.seed, 5));
@@ -185,12 +206,31 @@ function buildRibbon(spec: RibbonSpec) {
   let tipY = spec.origin.y;
   let tipTangentAngle = spec.angle;
 
-  const centerAt = (progress: number, point: Point) => {
-    const envelope = Math.sin(progress * Math.PI);
+  // Settled strands still breathe, but their sampling basis never changes.
+  // Cache only that basis; positions, bends, and widths remain live every frame.
+  let profile = reveal === 1 ? settledRibbonSamples.get(spec.seed) : undefined;
+  if (reveal === 1 && !profile) {
+    profile = [];
+    for (let index = 0; index <= samples; index += 1) {
+      const progress = index / samples;
+      profile.push(
+        ribbonSample(progress, phase, waveFrequency),
+        ribbonSample(Math.max(0, progress - 0.0035), phase, waveFrequency),
+        ribbonSample(Math.min(1, progress + 0.0035), phase, waveFrequency),
+      );
+    }
+    if (settledRibbonSamples.size >= 256) {
+      settledRibbonSamples.delete(settledRibbonSamples.keys().next().value!);
+    }
+    settledRibbonSamples.set(spec.seed, profile);
+  }
+
+  const centerAt = (progress: number, point: Point, sample?: RibbonSample) => {
+    const envelope = sample?.envelope ?? Math.sin(progress * Math.PI);
     const localX = progress * spec.length;
-    const broadCurve = Math.pow(progress, 1.35) * spec.bend * spec.length;
+    const broadCurve = (sample?.curve ?? Math.pow(progress, 1.35)) * spec.bend * spec.length;
     const primaryWave =
-      Math.sin(progress * Math.PI * waveFrequency + phase) *
+      (sample?.wave ?? Math.sin(progress * Math.PI * waveFrequency + phase)) *
       spec.length *
       spec.wave *
       envelope;
@@ -200,7 +240,7 @@ function buildRibbon(spec: RibbonSpec) {
       spec.hook *
       spec.length *
       0.17 *
-      Math.pow(smoothstep(0.68, 1, progress), 1.35);
+      (sample?.hook ?? Math.pow(smoothstep(0.68, 1, progress), 1.35));
     const localY = broadCurve + primaryWave + firstElbow + secondElbow + hook;
     point.x = spec.origin.x + localX * cosine - localY * sine;
     point.y = spec.origin.y + localX * sine + localY * cosine;
@@ -209,30 +249,32 @@ function buildRibbon(spec: RibbonSpec) {
   for (let index = 0; index <= samples; index += 1) {
     const normalized = index / samples;
     const progress = normalized * reveal;
-    centerAt(progress, center);
-    centerAt(Math.max(0, progress - 0.0035), previous);
-    centerAt(Math.min(1, progress + 0.0035), next);
+    centerAt(progress, center, profile?.[index * 3]);
+    centerAt(Math.max(0, progress - 0.0035), previous, profile?.[index * 3 + 1]);
+    centerAt(Math.min(1, progress + 0.0035), next, profile?.[index * 3 + 2]);
     const tangentAngle = Math.atan2(next.y - previous.y, next.x - previous.x);
     const normalX = -Math.sin(tangentAngle);
     const normalY = Math.cos(tangentAngle);
     const leftWidth = ribbonWidth(spec, normalized, leftEdgePhase);
     const rightWidth = ribbonWidth(spec, normalized, rightEdgePhase);
-    left.push({ x: center.x + normalX * leftWidth, y: center.y + normalY * leftWidth });
-    right.push({ x: center.x - normalX * rightWidth, y: center.y - normalY * rightWidth });
+    left[index * 2] = center.x + normalX * leftWidth;
+    left[index * 2 + 1] = center.y + normalY * leftWidth;
+    right[index * 2] = center.x - normalX * rightWidth;
+    right[index * 2 + 1] = center.y - normalY * rightWidth;
     tipX = center.x;
     tipY = center.y;
     tipTangentAngle = tangentAngle;
   }
 
   const fill = new Path2D();
-  traceBoundary(left, fill);
+  traceBoundary(left, samples + 1, fill);
   fill.quadraticCurveTo(
     tipX + Math.cos(tipTangentAngle) * spec.length * 0.025,
     tipY + Math.sin(tipTangentAngle) * spec.length * 0.025,
-    right[right.length - 1].x,
-    right[right.length - 1].y,
+    right[samples * 2],
+    right[samples * 2 + 1],
   );
-  for (let index = right.length - 2; index >= 0; index -= 1) fill.lineTo(right[index].x, right[index].y);
+  for (let index = samples - 1; index >= 0; index -= 1) fill.lineTo(right[index * 2], right[index * 2 + 1]);
   fill.closePath();
 
   return fill;
@@ -251,8 +293,9 @@ function buildLoop(
 ): Path2D {
   const visibleSweep = sweep * clamp(reveal, 0.025, 1);
   const samples = Math.max(16, Math.ceil(Math.abs(visibleSweep) * 14));
-  const left: Point[] = [];
-  const right: Point[] = [];
+  prepareBoundary(samples);
+  const left = boundaryLeft;
+  const right = boundaryRight;
   const cosine = Math.cos(rotation);
   const sine = Math.sin(rotation);
   for (let index = 0; index <= samples; index += 1) {
@@ -273,13 +316,15 @@ function buildLoop(
     const localY = Math.sin(angle) * radiusY;
     const pointX = center.x + localX * cosine - localY * sine;
     const pointY = center.y + localX * sine + localY * cosine;
-    left.push({ x: pointX + normalX * halfWidth, y: pointY + normalY * halfWidth });
-    right.push({ x: pointX - normalX * halfWidth, y: pointY - normalY * halfWidth });
+    left[index * 2] = pointX + normalX * halfWidth;
+    left[index * 2 + 1] = pointY + normalY * halfWidth;
+    right[index * 2] = pointX - normalX * halfWidth;
+    right[index * 2 + 1] = pointY - normalY * halfWidth;
   }
   const fill = new Path2D();
-  traceBoundary(left, fill);
-  for (let index = right.length - 1; index >= 0; index -= 1) {
-    fill.lineTo(right[index].x, right[index].y);
+  traceBoundary(left, samples + 1, fill);
+  for (let index = samples; index >= 0; index -= 1) {
+    fill.lineTo(right[index * 2], right[index * 2 + 1]);
   }
   fill.closePath();
   return fill;
@@ -480,7 +525,6 @@ class ContourCompositionRenderer {
   private width = 0;
   private height = 0;
   private scale = 1;
-  private lastRenderedAt = Number.NEGATIVE_INFINITY;
 
   constructor() {
     this.canvas = document.createElement("canvas");
@@ -491,7 +535,7 @@ class ContourCompositionRenderer {
   }
 
   private syncSize(width: number, height: number) {
-    const displayScale = Math.min(1.5, window.devicePixelRatio || 1);
+    const displayScale = window.devicePixelRatio || 1;
     const scale = Math.min(displayScale, Math.sqrt(RENDER_PIXEL_BUDGET / Math.max(1, width * height)));
     const targetWidth = Math.max(1, Math.round(width * scale));
     const targetHeight = Math.max(1, Math.round(height * scale));
@@ -500,7 +544,6 @@ class ContourCompositionRenderer {
       this.height = targetHeight;
       this.canvas.width = targetWidth;
       this.canvas.height = targetHeight;
-      this.lastRenderedAt = Number.NEGATIVE_INFINITY;
     }
     this.scale = scale;
   }
@@ -516,15 +559,10 @@ class ContourCompositionRenderer {
     active.reverse();
     if (active.length === 0) {
       this.context.clearRect(0, 0, this.width, this.height);
-      this.lastRenderedAt = Number.NEGATIVE_INFINITY;
       return null;
     }
 
     const continuouslyMoving = !reducedMotion;
-    if (continuouslyMoving && now - this.lastRenderedAt < MOTION_FRAME_INTERVAL) {
-      return { canvas: this.canvas, forming: true };
-    }
-
     const accent = beatAccent(pulse);
     let forming = false;
     for (const particle of active) {
@@ -538,14 +576,12 @@ class ContourCompositionRenderer {
     this.context.clearRect(0, 0, this.width, this.height);
     this.context.setTransform(this.scale, 0, 0, this.scale, 0, 0);
     drawInkComposition(this.context, active, width, height, now, reducedMotion, accent);
-    this.lastRenderedAt = now;
     return { canvas: this.canvas, forming: forming || continuouslyMoving };
   }
 
   reset() {
     this.context.setTransform(1, 0, 0, 1, 0, 0);
     this.context.clearRect(0, 0, this.width, this.height);
-    this.lastRenderedAt = Number.NEGATIVE_INFINITY;
   }
 
   dispose() {
@@ -602,10 +638,12 @@ export function drawMetalheartLayer(
 }
 
 export function resetMetalheartRenderer() {
+  settledRibbonSamples.clear();
   contourRenderer?.reset();
 }
 
 export function disposeMetalheartRenderer() {
+  settledRibbonSamples.clear();
   contourRenderer?.dispose();
   contourRenderer = null;
   canvasUnavailable = false;

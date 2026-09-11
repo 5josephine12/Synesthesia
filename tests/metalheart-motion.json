@@ -1,0 +1,82 @@
+[
+  {
+    "now": 0,
+    "reducedMotion": false,
+    "hash": "3c19077e63b149c37b17f67299bc3b1bf7176da185ac3d25b9eebd9009c5f51e"
+  },
+  {
+    "now": 40,
+    "reducedMotion": false,
+    "hash": "8cb7e4db8ad1c020f882feb525cfc5c95b8f8096d5bf7b623b2cd371f31ac529"
+  },
+  {
+    "now": 155,
+    "reducedMotion": false,
+    "hash": "ee1768f520d86b6eae5d63b36f4de08b9e64470619d4cec5e2b2ff4a09f4f8f8"
+  },
+  {
+    "now": 310,
+    "reducedMotion": false,
+    "hash": "8f4a51cd7e7baf9d4a58282f258deb139c134731b5fb8b100b6755a5db48f941"
+  },
+  {
+    "now": 471,
+    "reducedMotion": false,
+    "hash": "236feb1cfcd489dcaf7ebda81f840464464ec668ecae8b2dda0f0396d3b36fda"
+  },
+  {
+    "now": 620,
+    "reducedMotion": false,
+    "hash": "b11bedf6879b8e06ce604dd97f0378c213aaa01dce5c3bae3f3e261cd7463498"
+  },
+  {
+    "now": 900,
+    "reducedMotion": false,
+    "hash": "520f29ab6744b6162ea413fbb7f250bb449550638584c9adfd2796afb4709dd2"
+  },
+  {
+    "now": 6000,
+    "reducedMotion": false,
+    "hash": "84ad355a5f916c9147e20d7e32aa2f92a5f5b195f6d943de47b7ecac72a4e7f3"
+  },
+  {
+    "now": 0,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  },
+  {
+    "now": 40,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  },
+  {
+    "now": 155,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  },
+  {
+    "now": 310,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  },
+  {
+    "now": 471,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  },
+  {
+    "now": 620,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  },
+  {
+    "now": 900,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  },
+  {
+    "now": 6000,
+    "reducedMotion": true,
+    "hash": "9117c9e60eb0581efeae40c1e8dc1e083aea81c20835fc76dd76b4393fb67c73"
+  }
+]
