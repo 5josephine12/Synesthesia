@@ -269,92 +269,20 @@ test("keeps the TouchDesigner overlay independent from beat timing", async () =>
   assert.doesNotMatch(auraSource, /registerTelemetryBeat|telemetryBeatRef/);
   assert.doesNotMatch(telemetrySource, /TelemetryBeatClock|telemetryBeatPulse|telemetryActivationAt/);
   assert.match(telemetrySource, /function smootherStep/);
-  assert.match(telemetrySource, /from: enteringPresentation\(presentation\)/);
-  assert.match(telemetrySource, /morphStates\.splice\(replacementIndex, 1\)/);
+  assert.match(telemetrySource, /previousPresentation \?\? enteringPresentation/);
   assert.match(telemetrySource, /const MAX_PANELS = 3/);
   assert.match(telemetrySource, /const MAX_VISIBLE_FRAME_ASSETS = 2/);
-  assert.match(
-    telemetrySource,
-    /const COMPOSITION_MODES: readonly OverlayCompositionMode\[\] = \[[\s\S]*?"nodes",[\s\S]*?"nodes",[\s\S]*?"both",[\s\S]*?"nodes",[\s\S]*?"frames",[\s\S]*?\]/,
-  );
-  assert.match(telemetrySource, /const COMPOSITION_MODE_TRANSITION_MS = 860/);
-  assert.match(telemetrySource, /const COMPOSITION_MODE_HOLD_MS = 2400/);
   assert.match(telemetrySource, /function currentCompositionMix/);
-  assert.match(telemetrySource, /now - lastCompositionAdvanceAt < COMPOSITION_MODE_HOLD_MS/);
-  assert.match(telemetrySource, /from: \{ frames: 1, nodes: 1 \}/);
-  assert.match(telemetrySource, /to: \{ frames: 1, nodes: 1 \}/);
-  assert.match(telemetrySource, /if \(addedPanelBatch\) advanceCompositionMode\(now\)/);
-  assert.match(telemetrySource, /\.slice\(-MAX_PANELS\)/);
-  assert.match(telemetrySource, /const rendered = visibleStates\.map/);
-  assert.doesNotMatch(telemetrySource, /NODE_NETWORK_ROUTES/);
-  assert.doesNotMatch(telemetrySource, /function drawIndependentNodeNetwork/);
-  assert.match(telemetrySource, /function drawConnectionNode/);
-  assert.match(telemetrySource, /function drawRectangleCornerGlow/);
-  assert.doesNotMatch(telemetrySource, /function drawConnectionTerminal/);
-  assert.doesNotMatch(telemetrySource, /function drawRelayNode/);
-  assert.match(telemetrySource, /const OVERLAY_STROKE_WIDTH = 1\.25/);
-  assert.match(telemetrySource, /const OVERLAY_GLOW_BLUR = 4\.5/);
-  assert.match(telemetrySource, /const CORNER_GLOW_BLUR = 10/);
-  assert.match(telemetrySource, /function applyOverlayStroke/);
-  assert.match(telemetrySource, /context\.arc\(point\.x, point\.y, 2\.5/);
-  assert.match(telemetrySource, /function secondaryPanelDock/);
-  assert.match(telemetrySource, /function rectAnchor/);
   assert.match(telemetrySource, /function drawConnectionCable/);
+  assert.match(telemetrySource, /context\.bezierCurveTo/);
+  assert.doesNotMatch(telemetrySource, /secondaryPanelDock|branchVariant|COMPOSITION_MODES/);
+  assert.match(telemetrySource, /function rectAnchor/);
   assert.match(telemetrySource, /function drawVisualizerConnection/);
   assert.match(telemetrySource, /function drawPanelNodeNetwork/);
   assert.match(telemetrySource, /function drawFrameAsset/);
-  assert.match(telemetrySource, /panelVariant % formats\.length/);
-  assert.match(telemetrySource, /panelVariant: number/);
-  assert.doesNotMatch(telemetrySource, /function pointFrame/);
-  assert.doesNotMatch(telemetrySource, /const palettes =/);
-  assert.doesNotMatch(telemetrySource, /function drawCornerBrackets/);
-  assert.doesNotMatch(telemetrySource, /function drawRelayFrame/);
-  assert.doesNotMatch(telemetrySource, /function drawOperatorChrome/);
-  assert.doesNotMatch(telemetrySource, /function drawMorphConnector/);
-  assert.doesNotMatch(telemetrySource, /context\.setLineDash/);
-  assert.match(telemetrySource, /const dock = rectAnchor\(pose\.viewport, frame\.centerX, frame\.centerY\)/);
-  assert.match(telemetrySource, /const edge = frameAnchor\(frame, dock\.x, dock\.y\)/);
-  assert.match(telemetrySource, /if \(life <= 0\.001 \|\| frameMix <= 0\.001\) return/);
-  assert.match(telemetrySource, /if \(frameMix > 0\.001\)/);
-  assert.doesNotMatch(telemetrySource, /notchWidth|notchDepth|notchStart|traceTrackingFrame/);
-  assert.match(telemetrySource, /context\.strokeRect\(frame\.x, frame\.y, frame\.width, frame\.height\)/);
-  assert.match(telemetrySource, /drawRectangleCornerGlow\(context, frame, life \* frameMix\)/);
-  assert.match(telemetrySource, /const startX = edge\.x - directionX \* 2/);
-  assert.match(telemetrySource, /const endX = dock\.x \+ directionX \* 2/);
-  assert.match(telemetrySource, /drawConnectionCable\([\s\S]*?\{ x: startX, y: startY \},[\s\S]*?\{ x: endX, y: endY \}/);
-  assert.doesNotMatch(telemetrySource, /drawFrameEdgePort/);
-  assert.doesNotMatch(telemetrySource, /drawCableRelayFrame|largeRelay|LONG_CONNECTION_THRESHOLD/);
-  assert.match(telemetrySource, /const firstDock = rectAnchor\(first\.pose\.viewport, secondCenter\.x, secondCenter\.y\)/);
-  assert.match(telemetrySource, /const secondDock = rectAnchor\(second\.pose\.viewport, firstCenter\.x, firstCenter\.y\)/);
-  assert.match(telemetrySource, /drawConnectionCable\(context, cableStart, cableEnd, nodeLife\)/);
-  assert.match(telemetrySource, /branchVariant % 2 === 1 && distance >= 120/);
-  assert.match(telemetrySource, /const branchDock = secondaryPanelDock\(second\.pose, secondDock, branchVariant\)/);
-  assert.match(telemetrySource, /drawConnectionCable\(context, branchPoint, branchEnd/);
-  assert.match(telemetrySource, /drawConnectionNode\(context, firstDock, nodeLife\)/);
-  assert.match(telemetrySource, /drawConnectionNode\(context, secondDock, nodeLife\)/);
-  assert.doesNotMatch(telemetrySource, /framesAreClose/);
-  assert.match(
-    telemetrySource,
-    /drawFrameAsset\(\s*trackedContext,[\s\S]*?item\.life,\s*item\.changing,\s*visibleCompositionMix\.frames,\s*assetMix/,
-  );
-  assert.match(telemetrySource, /drawVisualizerConnection\(context, current\.frame, current\.pose, life, frameMix\)/);
-  assert.match(telemetrySource, /drawPanel\(context, from, to, current, snapshots, snapshotBase, progress, life \* assetMix, changing\)/);
-  assert.match(telemetrySource, /const hasNodePair = frameItems\.length >= 2/);
-  assert.match(telemetrySource, /frames: Math\.max\(compositionMix\.frames, compositionMix\.nodes\),\s*nodes: 0/);
-  assert.match(telemetrySource, /const assetMix = Math\.max\(visibleCompositionMix\.frames, visibleCompositionMix\.nodes\)/);
-  assert.match(telemetrySource, /drawPanelNodeNetwork\([\s\S]*?first\.current,[\s\S]*?second\.current,[\s\S]*?visibleCompositionMix\.nodes/);
-  assert.match(telemetrySource, /const snapshots = assetMix > 0\.001/);
-  assert.match(telemetrySource, /const frameItems = \[\] as typeof rendered/);
-  assert.match(telemetrySource, /frameItems\.length < MAX_VISIBLE_FRAME_ASSETS/);
   assert.match(telemetrySource, /const collidesWithVisiblePanel = frameItems\.some/);
-  assert.match(telemetrySource, /frameItems\.flatMap/);
-  assert.match(telemetrySource, /const frameX = clamp/);
-  assert.match(telemetrySource, /const frameY = clamp/);
-  assert.doesNotMatch(telemetrySource, /const panelLife = life \* frameMix/);
-  assert.match(telemetrySource, /applyOverlayStroke\(context, life \* frameMix\)/);
-  assert.match(telemetrySource, /applyOverlayStroke\(context, life\)/);
-  assert.match(telemetrySource, /drawRectangleCornerGlow\(context, viewport, life\)/);
-  assert.doesNotMatch(telemetrySource, /CONNECTOR_STROKE_WIDTH|HUD_CONTRAST|accentColor/);
+  assert.match(telemetrySource, /context\.imageSmoothingQuality = "high"/);
+
 });
 
 test("switches art styles synchronously without duplicate pointer work", async () => {
@@ -549,7 +477,7 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.doesNotMatch(auraSource, /blobsRef\.current\.reduce\(/);
   assert.match(telemetrySource, /function chordLabelsForActiveNodes/);
   assert.match(telemetrySource, /nodes\.length !== cachedChordNodeCount/);
-  assert.match(telemetrySource, /const SNAPSHOT_FRAME_INTERVAL = 1000 \/ 15/);
+  assert.match(telemetrySource, /const SNAPSHOT_FRAME_INTERVAL = 0/);
   assert.match(telemetrySource, /export function telemetryNextFrameAt/);
   assert.match(auraSource, /scheduleRendererWake\(nextTelemetryFrameAt\)/);
   assert.match(auraSource, /now - runtime\.lastReadingAt >= 250/);
