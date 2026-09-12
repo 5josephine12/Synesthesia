@@ -7,7 +7,7 @@ import ts from 'typescript';
 const source = fs.readFileSync(new URL('../app/art-styles/telemetry.ts', import.meta.url), 'utf8');
 function harness() {
   const calls=[];
-  const context=new Proxy({canvas:{width:2880,height:1800},measureText:text=>({width:text.length*6})}, {
+  const context=new Proxy({canvas:{width:2880,height:1800},globalAlpha:1,createRadialGradient:()=>({addColorStop:()=>{}}),measureText:text=>{calls.push(["measureText",text]);return {width:text.length*6};}}, {
     get(target,key) {return target[key] ?? (target[key]=(...args)=>{calls.push([key,...args]);});},
   });
   const exports={};
@@ -64,7 +64,7 @@ test('continuous input keeps three distinct viewers, and bounded identifiers',()
     calls.length=0;draw(active,now);
     assert.ok(renderer.inspect().states.length<=3);
     assert.ok(renderer.inspect().keys<=60);
-    assert.ok(calls.filter(c=>c[0]==='drawImage').length<=8);
+    assert.ok(calls.filter(c=>c[0]==='drawImage'&&c.length===10).length<=8);
   }
   draw([],200000);
   assert.equal(renderer.inspect().states.length,0);
@@ -137,4 +137,25 @@ test('large tracking frames fade at their actual locations without crossing the 
         expected.every((value,index)=>value===outline[index])));
     }
   }
+});
+
+
+test('reused caller arrays admit new notes immediately and stationary panels skip measurement',()=>{
+  const {renderer,draw,calls}=harness();
+  const nodes=[node(1,0),node(2,1),node(3,2)];
+  draw(nodes,10);
+  assert.ok(calls.some(call=>call[0]==='measureText'));
+  // The caller mutates its scratch array in place on each animation frame.
+  nodes.push(node(4,300));
+  calls.length=0;draw(nodes,300);
+  assert.ok(renderer.inspect().states.some(state=>state.to.node.id===4));
+  assert.equal(calls.filter(call=>call[0]==='measureText').length,0);
+  nodes.shift();nodes.push(node(5,600));
+  draw(nodes,600);
+  assert.ok(renderer.inspect().states.some(state=>state.to.node.id===5));
+  const startedAt=renderer.inspect().states.find(state=>state.to.node.id===5).startedAt;
+  draw(nodes,616);
+  assert.equal(renderer.inspect().states.find(state=>state.to.node.id===5).startedAt,startedAt);
+  renderer.drawTelemetryOverlay(harness().context,nodes,800,600,700);
+  assert.ok(renderer.inspect().states.every(state=>state.width===800&&state.height===600));
 });

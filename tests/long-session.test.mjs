@@ -89,7 +89,7 @@ test(`90-minute ${style} session keeps live history bounded even without animati
 test('overlay identifiers remain bounded throughout continuous input', () => {
   const source=fs.readFileSync(new URL('../app/art-styles/telemetry.ts',import.meta.url),'utf8');
   const start=source.indexOf('  const activeKeys = new Set(active.map(nodeKey));');
-  const end=source.indexOf('  context.save();',start);
+  const end=source.indexOf('\n}\n',start);
   assert.ok(start>=0&&end>start);
   const prune=new Function('processedNodeKeys','active','nodeKey',source.slice(start,end));
   const processed=new Set();

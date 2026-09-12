@@ -591,7 +591,6 @@ test("keeps visual effects bounded and free of production diagnostics", async ()
   assert.match(styleFourSource, /glowGradient\.addColorStop\(0\.68/);
   assert.doesNotMatch(styleFourSource, /glowContext\.filter/);
   assert.doesNotMatch(styleFourSource, /Math\.cos\(angle\)|Math\.sin\(angle\)/);
-  assert.match(styleFourSource, /const occupiedDots = new Map<number/);
   assert.match(styleFourSource, /gridCellKey\(cellX \+ offsetX, cellY \+ offsetY\)/);
   assert.match(styleFourSource, /overlapsExistingDot/);
   assert.match(

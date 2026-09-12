@@ -130,13 +130,15 @@ const SNAPSHOT_FRAME_INTERVAL = 0;
 const HUD_GLOW = "255, 255, 255";
 const OVERLAY_STROKE_WIDTH = 1;
 const OVERLAY_GLOW_BLUR = 4.5;
-const CORNER_GLOW_BLUR = 6;
+const CORNER_HALO_SIZE = 40;
+let cornerHalo: HTMLCanvasElement | null = null;
 
 let snapshotStrip: HTMLCanvasElement | null = null;
 let lastSnapshotAt = Number.NEGATIVE_INFINITY;
 let lastSnapshotKey = "";
 let morphStates: OverlayMorphState[] = [];
 let processedNodeKeys = new Set<string>();
+const activeNodesScratch: TelemetryNode[] = [];
 let cachedChordLabels = new Map<number, string | null>();
 let cachedChordFirstId = -1;
 let cachedChordLastId = -1;
@@ -309,28 +311,68 @@ function applyOverlayStroke(context: CanvasRenderingContext2D, alpha: number) {
   context.lineWidth = OVERLAY_STROKE_WIDTH;
 }
 
-function drawRectangleCornerGlow(
-  context: CanvasRenderingContext2D,
-  rect: Rect,
-  alpha: number,
-) {
-  const size = Math.min(7, rect.width * 0.12, rect.height * 0.12);
-  context.save();
-  applyOverlayStroke(context, alpha);
-  context.shadowBlur = CORNER_GLOW_BLUR;
-  context.beginPath();
-  for (const [x, y, dx, dy] of [
-    [rect.x, rect.y, 1, 1],
-    [rect.x + rect.width, rect.y, -1, 1],
-    [rect.x + rect.width, rect.y + rect.height, -1, -1],
-    [rect.x, rect.y + rect.height, 1, -1],
-  ]) {
-    context.moveTo(x + dx * size, y);
-    context.lineTo(x, y);
-    context.lineTo(x, y + dy * size);
+/** A cached, diffuse light field; it contains no lines or corner segments. */
+function drawCornerHalos(context: CanvasRenderingContext2D, rect: Rect, alpha: number) {
+  if (!cornerHalo && typeof document !== "undefined") {
+    const tile = document.createElement("canvas");
+    // Four physical pixels per CSS pixel keeps this tiny shared texture smooth.
+    tile.width = tile.height = CORNER_HALO_SIZE * 4;
+    const light = tile.getContext("2d");
+    if (!light) return;
+    const pixelScale = tile.width / CORNER_HALO_SIZE;
+    light.scale(pixelScale, pixelScale);
+    light.translate(CORNER_HALO_SIZE / 2, CORNER_HALO_SIZE / 2);
+    const paintBloom = (x: number, y: number, radiusX: number, radiusY: number, strength: number) => {
+      light.save();
+      light.translate(x, y);
+      light.scale(radiusX, radiusY);
+      const gradient = light.createRadialGradient(0, 0, 0, 0, 0, 1);
+      // A smooth optical falloff avoids a visible disc or a hard bright center.
+      const edge = Math.exp(-4.5);
+      for (let stop = 0; stop <= 16; stop += 1) {
+        const distance = stop / 16;
+        const falloff = (Math.exp(-4.5 * distance * distance) - edge) / (1 - edge);
+        gradient.addColorStop(distance, glowColor(strength * falloff));
+      }
+      light.fillStyle = gradient;
+      light.fillRect(-1, -1, 2, 2);
+      light.restore();
+    };
+    paintBloom(0, 0, 16, 16, 0.12);
+    paintBloom(0, 0, 6, 6, 0.65);
+    // Gentle spill follows the two inward edges without drawing over the line.
+    paintBloom(3, 0, 12, 2.8, 0.18);
+    paintBloom(0, 3, 2.8, 12, 0.18);
+    cornerHalo = tile;
   }
-  context.stroke();
+  if (!cornerHalo) return;
+  context.save();
+  context.globalAlpha *= clamp(alpha, 0, 1);
+  context.shadowBlur = 0;
+  context.shadowColor = "transparent";
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  const half = CORNER_HALO_SIZE / 2;
+  for (let corner = 0; corner < 4; corner += 1) {
+    const right = (corner & 1) !== 0;
+    const bottom = (corner & 2) !== 0;
+    context.save();
+    context.translate(right ? rect.x + rect.width : rect.x, bottom ? rect.y + rect.height : rect.y);
+    context.scale(right ? -1 : 1, bottom ? -1 : 1);
+    context.drawImage(cornerHalo, -half, -half, CORNER_HALO_SIZE, CORNER_HALO_SIZE);
+    context.restore();
+  }
   context.restore();
+}
+
+/** Draw the outline once, independently of the soft corner light. */
+function applyRectangleStroke(context: CanvasRenderingContext2D, alpha: number) {
+  context.strokeStyle = glowColor(clamp(alpha, 0, 1));
+  context.lineWidth = OVERLAY_STROKE_WIDTH;
+  context.lineJoin = "round";
+  context.lineCap = "butt";
+  context.shadowColor = "transparent";
+  context.shadowBlur = 0;
 }
 
 function visualArrival(age: number) {
@@ -602,9 +644,9 @@ function drawVisualizerConnection(
   const edge = frameAnchor(frame, dock.x, dock.y);
   context.save();
   context.globalCompositeOperation = "source-over";
-  applyOverlayStroke(context, life * frameMix);
+  drawCornerHalos(context, frame, life * frameMix);
+  applyRectangleStroke(context, life * frameMix);
   context.strokeRect(frame.x, frame.y, frame.width, frame.height);
-  drawRectangleCornerGlow(context, frame, life * frameMix);
   context.restore();
   drawConnectionCable(context, edge, dock, life * frameMix);
 }
@@ -773,12 +815,14 @@ function interpolatePresentation(
   to: FocusPresentation,
   amount: number,
 ): FocusPresentation {
+  if (amount <= 0) return from;
+  if (amount >= 1) return to;
   return {
     node: amount < 0.5 ? from.node : to.node,
     chord: amount < 0.5 ? from.chord : to.chord,
     // Tracking boxes fade at their actual locations instead of sweeping across the art.
     frame: amount < 0.5 ? from.frame : to.frame,
-    pose: interpolatePose(from.pose, to.pose, amount),
+    pose: from.pose === to.pose ? to.pose : interpolatePose(from.pose, to.pose, amount),
   };
 }
 
@@ -1009,10 +1053,9 @@ function drawPanel(
 
   context.save();
   context.globalCompositeOperation = "source-over";
-  applyOverlayStroke(context, life);
+  applyRectangleStroke(context, life);
   traceViewport(context, viewport.x, viewport.y, viewport.width, viewport.height);
   context.stroke();
-  drawRectangleCornerGlow(context, viewport, life);
   context.restore();
 
   if (changing) {
@@ -1073,6 +1116,7 @@ export function telemetryNextFrameAt(now: number) {
 }
 
 function clearMorphStates() {
+  activeNodesScratch.length = 0;
   morphStates = [];
   lastSnapshotAt = Number.NEGATIVE_INFINITY;
   lastSnapshotKey = "";
@@ -1081,6 +1125,15 @@ function clearMorphStates() {
   cachedChordFirstId = -1;
   cachedChordLastId = -1;
   cachedChordNodeCount = -1;
+}
+
+function pruneProcessedNodeKeys(active: readonly TelemetryNode[]) {
+  // A continuous input may never reach clearMorphStates(). Keep only IDs in
+  // the current visible window; old IDs can never be presented again here.
+  const activeKeys = new Set(active.map(nodeKey));
+  for (const key of processedNodeKeys) {
+    if (!activeKeys.has(key)) processedNodeKeys.delete(key);
+  }
 }
 
 export function drawTelemetryOverlay(
@@ -1097,22 +1150,30 @@ export function drawTelemetryOverlay(
     return;
   }
 
+  // Invalidate before assembling the reused input window (the caller also
+  // reuses its array, so array identity alone cannot detect a new note).
+  if (morphStates.some((state) => state.width !== width || state.height !== height)) {
+    clearMorphStates();
+  }
   let firstActive = nodes.length;
   while (firstActive > 0 && now - nodes[firstActive - 1].createdAt < LIFETIME_MS) {
     firstActive -= 1;
   }
-  const active = nodes.slice(firstActive);
+  const active = activeNodesScratch;
+  const activeCount = nodes.length - firstActive;
+  let activeChanged = active.length !== activeCount;
+  for (let index = 0; index < activeCount; index += 1) {
+    const node = nodes[firstActive + index];
+    if (active[index] !== node) activeChanged = true;
+    active[index] = node;
+  }
+  active.length = activeCount;
   if (active.length === 0) {
     clearMorphStates();
     return;
   }
 
-  // A continuous input may never reach clearMorphStates(). Keep only IDs in
-  // the current visible window; old IDs can never be presented again here.
-  const activeKeys = new Set(active.map(nodeKey));
-  for (const key of processedNodeKeys) {
-    if (!activeKeys.has(key)) processedNodeKeys.delete(key);
-  }
+  if (activeChanged) pruneProcessedNodeKeys(active);
 
   context.save();
   context.globalCompositeOperation = "source-over";
@@ -1120,11 +1181,6 @@ export function drawTelemetryOverlay(
   const chords = chordLabelsForActiveNodes(active);
   const trackedContext = context as TrackedContext;
   const shortSide = Math.min(width, height);
-  const stateIsStale = morphStates.some(
-    (state) =>
-      state.width !== width || state.height !== height,
-  );
-  if (stateIsStale) clearMorphStates();
 
   for (let index = morphStates.length - 1; index >= 0; index -= 1) {
     if (now - morphStates[index].to.node.createdAt >= LIFETIME_MS) {
@@ -1132,67 +1188,68 @@ export function drawTelemetryOverlay(
     }
   }
 
-  for (const node of active) {
-    const targetKey = nodeKey(node);
-    if (processedNodeKeys.has(targetKey)) continue;
-    processedNodeKeys.add(targetKey);
+  if (activeChanged) {
+    for (const node of active) {
+      const targetKey = nodeKey(node);
+      if (processedNodeKeys.has(targetKey)) continue;
+      processedNodeKeys.add(targetKey);
 
-    let replacementIndex = -1;
-    if (morphStates.length >= MAX_PANELS) {
-      replacementIndex = 0;
-      for (let index = 1; index < morphStates.length; index += 1) {
-        if (morphStates[index].to.node.createdAt < morphStates[replacementIndex].to.node.createdAt) {
-          replacementIndex = index;
+      let replacementIndex = -1;
+      if (morphStates.length >= MAX_PANELS) {
+        replacementIndex = 0;
+        for (let index = 1; index < morphStates.length; index += 1) {
+          if (morphStates[index].to.node.createdAt < morphStates[replacementIndex].to.node.createdAt) {
+            replacementIndex = index;
+          }
         }
       }
-    }
-    const panelVariant =
-      replacementIndex >= 0 ? morphStates[replacementIndex].panelVariant : morphStates.length;
+      const panelVariant =
+        replacementIndex >= 0 ? morphStates[replacementIndex].panelVariant : morphStates.length;
 
-    const targetFrame = visualizationFrame(
-      node,
-      width,
-      height,
-      shortSide,
-      VISUAL_ARRIVAL_MS,
-      artStyle,
-    );
-    const previousState = replacementIndex >= 0 ? morphStates[replacementIndex] : undefined;
-    const obstacles = morphStates.filter((state) => state !== previousState).flatMap((state) =>
-      [expandRect(state.to.frame, 12), expandRect(presentationObstacle(state.to), 8)],
-    );
-    const presentation = createPresentation(
-      trackedContext,
-      node,
-      chords.get(node.id) ?? null,
-      panelVariant,
-      width,
-      height,
-      artStyle,
-      obstacles,
-      targetFrame,
-    );
-    const previousPresentation = previousState
-      ? interpolatePresentation(previousState.from, previousState.to,
-          smootherStep((now - previousState.startedAt) / previousState.duration))
-      : undefined;
-    if (previousState) presentation.pose = previousState.to.pose;
-    const nextState: OverlayMorphState = {
-      targetKey,
-      panelVariant,
-      from: previousPresentation ?? enteringPresentation(presentation),
-      to: presentation,
-      startedAt: now,
-      duration: previousState ? CONTENT_TRANSITION_MS : ENTRY_MORPH_MS,
-      sessionStartedAt: previousState?.sessionStartedAt ?? now,
-      width,
-      height,
-    };
-    if (morphStates.length < MAX_PANELS) {
-      morphStates.push(nextState);
-    } else {
-      morphStates.splice(replacementIndex, 1);
-      morphStates.push(nextState);
+      const targetFrame = visualizationFrame(
+        node,
+        width,
+        height,
+        shortSide,
+        VISUAL_ARRIVAL_MS,
+        artStyle,
+      );
+      const previousState = replacementIndex >= 0 ? morphStates[replacementIndex] : undefined;
+      // Persistent slots retain their exact geometry. Measure and place only a
+      // genuinely new panel; replacing its contents needs no layout search.
+      let presentation: FocusPresentation;
+      if (previousState) {
+        presentation = { node, chord: chords.get(node.id) ?? null, frame: targetFrame, pose: previousState.to.pose };
+      } else {
+        const obstacles = morphStates.flatMap((state) =>
+          [expandRect(state.to.frame, 12), expandRect(presentationObstacle(state.to), 8)],
+        );
+        presentation = createPresentation(
+          trackedContext, node, chords.get(node.id) ?? null, panelVariant,
+          width, height, artStyle, obstacles, targetFrame,
+        );
+      }
+      const previousPresentation = previousState
+        ? interpolatePresentation(previousState.from, previousState.to,
+            smootherStep((now - previousState.startedAt) / previousState.duration))
+        : undefined;
+      const nextState: OverlayMorphState = {
+        targetKey,
+        panelVariant,
+        from: previousPresentation ?? enteringPresentation(presentation),
+        to: presentation,
+        startedAt: now,
+        duration: previousState ? CONTENT_TRANSITION_MS : ENTRY_MORPH_MS,
+        sessionStartedAt: previousState?.sessionStartedAt ?? now,
+        width,
+        height,
+      };
+      if (morphStates.length < MAX_PANELS) {
+        morphStates.push(nextState);
+      } else {
+        morphStates.splice(replacementIndex, 1);
+        morphStates.push(nextState);
+      }
     }
   }
 

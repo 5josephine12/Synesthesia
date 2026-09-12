@@ -65,6 +65,45 @@ function gridCellKey(column: number, row: number) {
   return ((column & 0xffff) << 16) | (row & 0xffff);
 }
 
+/** Reused numeric collision storage avoids one object and array per rendered dot. */
+class DotCollisionGrid {
+  private readonly heads = new Map<number, number>();
+  private coordinates = new Float64Array(1024 * 3);
+  private next = new Int32Array(1024);
+  private count = 0;
+
+  clear() {
+    this.heads.clear();
+    this.count = 0;
+  }
+
+  overlaps(key: number, x: number, y: number, radius: number) {
+    for (let index = this.heads.get(key) ?? -1; index >= 0; index = this.next[index]) {
+      const offset = index * 3;
+      if (Math.hypot(x - this.coordinates[offset], y - this.coordinates[offset + 1]) <
+          (radius + this.coordinates[offset + 2]) * 0.74) return true;
+    }
+    return false;
+  }
+
+  add(key: number, x: number, y: number, radius: number) {
+    if (this.count === this.next.length) {
+      const coordinates = new Float64Array(this.coordinates.length * 2);
+      coordinates.set(this.coordinates);
+      this.coordinates = coordinates;
+      const next = new Int32Array(this.next.length * 2);
+      next.set(this.next);
+      this.next = next;
+    }
+    const index = this.count++;
+    this.coordinates[index * 3] = x;
+    this.coordinates[index * 3 + 1] = y;
+    this.coordinates[index * 3 + 2] = radius;
+    this.next[index] = this.heads.get(key) ?? -1;
+    this.heads.set(key, index);
+  }
+}
+
 class HalftoneRenderer {
   readonly canvas: HTMLCanvasElement;
 
@@ -78,6 +117,7 @@ class HalftoneRenderer {
   private displayScale = 1;
   private wasForming = false;
   private lastSignature = "";
+  private readonly occupiedDots = new DotCollisionGrid();
 
   constructor() {
     this.canvas = document.createElement("canvas");
@@ -127,7 +167,7 @@ class HalftoneRenderer {
     particle: LiquidMetalParticleState,
     now: number,
     reducedMotion: boolean,
-    occupiedDots: Map<number, Array<{ x: number; y: number; radius: number }>>,
+    occupiedDots: DotCollisionGrid,
   ) {
     const effectiveNow = particle.frozenAt ?? now;
     const age = reducedMotion && particle.frozenAt === undefined
@@ -178,13 +218,15 @@ class HalftoneRenderer {
     this.regionContext.fill();
     this.regionContext.restore();
 
+    const curlPhase = hash(seed, 19) * 6.28;
+    const collisionCellSize = 9 * scale;
     for (let row = -rows; row <= rows; row += 1) {
+      const localY = row * gridStep;
+      const normalizedY = localY / fieldHeight;
+      const curl = Math.sin(normalizedY * 4.2 + curlPhase) * 0.13;
       for (let column = -columns; column <= columns; column += 1) {
         const localX = column * gridStep;
-        const localY = row * gridStep;
         const normalizedX = localX / fieldWidth;
-        const normalizedY = localY / fieldHeight;
-        const curl = Math.sin(normalizedY * 4.2 + hash(seed, 19) * 6.28) * 0.13;
         const warpedX = normalizedX + curl * (0.35 + Math.abs(normalizedY));
         const lobeA = Math.hypot(warpedX + 0.27, normalizedY * 1.06 - 0.04);
         const lobeB = Math.hypot((warpedX - 0.38) * 1.12, normalizedY + 0.19);
@@ -205,15 +247,12 @@ class HalftoneRenderer {
         const edgeScale = clamp((occupancy + 0.18) / 0.82, 0.16, 1.18);
         const pulseScale = lerp(0.72, 1, clamp((arrival - revealOrder) / 0.24, 0, 1));
         const radius = dotRadius * edgeScale * pulseScale * lerp(0.9, 1.08, grain);
-        const collisionCellSize = 9 * scale;
         const cellX = Math.floor(px / collisionCellSize);
         const cellY = Math.floor(py / collisionCellSize);
         let overlapsExistingDot = false;
         for (let offsetY = -2; offsetY <= 2 && !overlapsExistingDot; offsetY += 1) {
           for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
-            const nearby = occupiedDots.get(gridCellKey(cellX + offsetX, cellY + offsetY));
-            if (!nearby) continue;
-            if (nearby.some((dot) => Math.hypot(px - dot.x, py - dot.y) < (radius + dot.radius) * 0.74)) {
+            if (occupiedDots.overlaps(gridCellKey(cellX + offsetX, cellY + offsetY), px, py, radius)) {
               overlapsExistingDot = true;
               break;
             }
@@ -221,9 +260,7 @@ class HalftoneRenderer {
         }
         if (overlapsExistingDot) continue;
         const cellKey = gridCellKey(cellX, cellY);
-        const occupiedCell = occupiedDots.get(cellKey);
-        if (occupiedCell) occupiedCell.push({ x: px, y: py, radius });
-        else occupiedDots.set(cellKey, [{ x: px, y: py, radius }]);
+        occupiedDots.add(cellKey, px, py, radius);
         const path = hash(seed + row * 43 + column * 17, 67) > 0.82 ? accentPath : bodyPath;
         path.moveTo(px + radius, py);
         path.arc(px, py, radius, 0, Math.PI * 2);
@@ -314,7 +351,8 @@ class HalftoneRenderer {
     this.regionContext.setTransform(1, 0, 0, 1, 0, 0);
     this.regionContext.clearRect(0, 0, this.width, this.height);
     let forming = false;
-    const occupiedDots = new Map<number, Array<{ x: number; y: number; radius: number }>>();
+    const occupiedDots = this.occupiedDots;
+    occupiedDots.clear();
     for (let index = active.length - 1; index >= 0; index -= 1) {
       if (this.drawField(active[index], now, reducedMotion, occupiedDots)) forming = true;
     }
@@ -329,6 +367,7 @@ class HalftoneRenderer {
   }
 
   reset() {
+    this.occupiedDots.clear();
     this.context.clearRect(0, 0, this.width, this.height);
     this.glowContext.clearRect(0, 0, this.width, this.height);
     this.regionContext.clearRect(0, 0, this.width, this.height);

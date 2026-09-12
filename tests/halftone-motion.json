@@ -1,0 +1,73 @@
+[
+  {
+    "now": 0,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "hash": "42676a69f81da673f6615e20e2775d5df759b671b8c11ebf81e6b71cf36c64d6"
+  },
+  {
+    "now": 80,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "hash": "a6edefbc2868ce8a8a2b5d8e55d954ad2dec8ba6ac0299a13c24a55eaf8d2026"
+  },
+  {
+    "now": 400,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "hash": "fd780971b22aeb49ae3f2d38ae6f0eec6991f97423667929ea83ca03d860fe7e"
+  },
+  {
+    "now": 900,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "hash": "b4daad878e2b27e918fbab5d9add71bb025b5ede5dc5dab93c386b66bd63685e"
+  },
+  {
+    "now": 1600,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "hash": "42b06f2dd12320ce24c1f692bf74f8c4fdcb5f95b914f4d3cd83e8cb2270e3ff"
+  },
+  {
+    "now": 2300,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "hash": "21f9e52f9ed26e1e73f9489f8dc974929ec907c2d1bd69fbf0bab58f86968836"
+  },
+  {
+    "now": 2400,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  {
+    "now": 400,
+    "width": 375,
+    "height": 812,
+    "reducedMotion": false,
+    "hash": "1fb3c1e03e8a0944904e3b4fada7f0021f4eeeef22b54cfa1d09bf62ca54e79f"
+  },
+  {
+    "now": 400,
+    "width": 375,
+    "height": 812,
+    "reducedMotion": true,
+    "hash": "d59eb8fffb39ddfecee6d8c67251b469fa81606ba0c2ddb7118aa3461793dfd2"
+  },
+  {
+    "now": 3000,
+    "width": 1440,
+    "height": 900,
+    "reducedMotion": false,
+    "frozen": true,
+    "hash": "e581e59f3c33ef9f4f0af3265586ab01115613710b245557f48f5b934b1c9780"
+  }
+]
