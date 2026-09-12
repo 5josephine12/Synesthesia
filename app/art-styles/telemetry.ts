@@ -1127,6 +1127,17 @@ function clearMorphStates() {
   cachedChordNodeCount = -1;
 }
 
+/** Clear old frames as well as artwork before the new composition's first note. */
+export function resetTelemetryRenderer() {
+  clearMorphStates();
+  compositionMode = null;
+  compositionTransition = {
+    from: { frames: 1, nodes: 1 },
+    to: { frames: 1, nodes: 1 },
+    startedAt: Number.NEGATIVE_INFINITY,
+  };
+}
+
 function pruneProcessedNodeKeys(active: readonly TelemetryNode[]) {
   // A continuous input may never reach clearMorphStates(). Keep only IDs in
   // the current visible window; old IDs can never be presented again here.

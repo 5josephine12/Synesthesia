@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import type { PitchDetector } from "pitchy";
 import { ParticleHistory } from "./particle-history";
+import { AutomaticComposition } from "./automatic-composition";
 import { drawDottedSigil } from "./art-styles/style-2";
 
 type TelemetryRenderer = typeof import("./art-styles/telemetry");
@@ -2546,6 +2548,11 @@ export function AuraToy() {
     "style-4": 0,
   });
   const styleLayerEpochRef = useRef(0);
+  const automaticCompositionRef = useRef<AutomaticComposition | null>(null);
+  const automaticNoteRef = useRef<((now: number, midi: number, velocity: number) => void) | null>(null);
+  const automaticDesktopRef = useRef(false);
+  const automaticSuspendedRef = useRef(false);
+  const telemetryRef = useRef(false);
   const compactedHistoryCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const compactedHistoryActiveRef = useRef(false);
   const grainRef = useRef<HTMLCanvasElement | null>(null);
@@ -2675,6 +2682,7 @@ export function AuraToy() {
   }, []);
 
   useEffect(() => {
+    telemetryRef.current = telemetry;
     const now = performance.now();
     const previous = telemetryTransitionRef.current;
     const previousProgress = easeInOutSmooth(
@@ -2977,6 +2985,7 @@ export function AuraToy() {
     occurredAt = performance.now(),
   ) => {
     const now = occurredAt;
+    if (automaticCompositionRef.current?.enabled) automaticNoteRef.current?.(now, note.midi, velocity);
     const id = blobIdRef.current;
     blobIdRef.current += 1;
     const mode = soundModeRef.current;
@@ -3606,6 +3615,9 @@ export function AuraToy() {
             runtime.context.sampleRate,
             runtime.analyser.fftSize,
           );
+        if (automaticDesktopRef.current && !automaticSuspendedRef.current && !document.hidden) {
+          automaticCompositionRef.current?.observeAudio(now, activeSignal, level, dominantMidi, bassMidi);
+        }
         for (let pitchClass = 0; pitchClass < runtime.chordChroma.length; pitchClass += 1) {
           runtime.chordChroma[pitchClass] =
             runtime.chordChroma[pitchClass] * 0.84 + runtime.frameChroma[pitchClass];
@@ -4678,6 +4690,7 @@ export function AuraToy() {
       metalheartPulseRef.current.strength = 0;
       metalheartRenderer?.resetMetalheartRenderer();
       liquidMetalRenderer?.resetLiquidMetalRenderer();
+      telemetryRenderer?.resetTelemetryRenderer();
       context.clearRect(0, 0, width, height);
       drawEmptyAura();
     };
@@ -5662,10 +5675,8 @@ export function AuraToy() {
     return () => window.removeEventListener("keydown", handleModeKeyboard);
   }, [cycleSoundMode, microphonePromptOpen, previewKind]);
 
-  const resetAura = useCallback(() => {
-    disposeToneEngine();
-    releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
-    releaseTimersRef.current.clear();
+  // Used by automatic fresh starts without touching held notes or audio capture.
+  const clearCanvasArtwork = useCallback(() => {
     blobsRef.current = [];
     artworkHistoryRef.current.clear();
     activeHistoryStartRef.current = 0;
@@ -5682,6 +5693,25 @@ export function AuraToy() {
     colorRebuildLayersRef.current = 0;
     additiveLayerStartRef.current = 0;
     resetRendererRef.current?.();
+  }, []);
+
+  const indicateCanvasReset = useCallback(() => {
+    if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
+    setResetting(true);
+    resetFrameRef.current = window.requestAnimationFrame(() => {
+      resetFrameRef.current = null;
+      setResetting(false);
+    });
+  }, []);
+
+  const resetAura = useCallback(() => {
+    if (automaticCompositionRef.current?.enabled) {
+      automaticCompositionRef.current.start(ART_STYLE_SLOTS.findIndex((style) => style.id === artStyleRef.current), telemetryRef.current);
+    }
+    disposeToneEngine();
+    releaseTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    releaseTimersRef.current.clear();
+    clearCanvasArtwork();
 
     const microphone = microphoneRef.current;
     if (microphone && microphone.stream.active && microphone.context.state !== "closed") {
@@ -5696,22 +5726,19 @@ export function AuraToy() {
       }
     }
 
-    if (resetFrameRef.current !== null) window.cancelAnimationFrame(resetFrameRef.current);
-    setResetting(true);
+    indicateCanvasReset();
     setLayerCount(0);
     setActiveKeys(new Set());
     setOctave(BASE_OCTAVE);
     wakeRendererRef.current?.();
-    resetFrameRef.current = window.requestAnimationFrame(() => {
-      resetFrameRef.current = null;
-      setResetting(false);
-    });
-  }, [disposeToneEngine]);
+  }, [clearCanvasArtwork, disposeToneEngine, indicateCanvasReset]);
 
   const selectArtStyleByIndex = useCallback(
-    (nextIndex: number) => {
+    (nextIndex: number, automaticChange = false) => {
       const nextStyle = ART_STYLE_SLOTS[nextIndex];
-      if (!nextStyle || nextStyle.id === artStyleRef.current) return;
+      if (!nextStyle) return;
+      if (!automaticChange) automaticCompositionRef.current?.manualStyle(nextIndex);
+      if (nextStyle.id === artStyleRef.current) return;
       const previousStyle = artStyleRef.current;
       const frozenAt = performance.now();
       const liveBlobs = blobsRef.current;
@@ -5743,10 +5770,78 @@ export function AuraToy() {
         });
       }
       wakeRendererRef.current?.();
-      hapticFeedback("confirm");
+      if (!automaticChange) hapticFeedback("confirm");
     },
     [],
   );
+
+  const toggleTelemetry = useCallback(() => {
+    const next = !telemetryRef.current;
+    telemetryRef.current = next;
+    automaticCompositionRef.current?.manualOverlay(next);
+    setTelemetry(next);
+    hapticFeedback("confirm");
+  }, []);
+
+  const toggleAutomaticComposition = useCallback(() => {
+    const director = automaticCompositionRef.current ??= new AutomaticComposition();
+    if (director.enabled) {
+      director.stop();
+      return;
+    }
+    director.start(ART_STYLE_SLOTS.findIndex((style) => style.id === artStyleRef.current), telemetryRef.current);
+    // Warm the existing renderers while the first passage plays, before a switch.
+    void loadMetalheartRenderer().then((renderer) => renderer.warmMetalheartRenderer()).catch(() => undefined);
+    void loadLiquidMetalRenderer().then((renderer) => renderer.warmLiquidMetalRenderer()).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1101px) and (hover: hover) and (pointer: fine)");
+    const updateDesktop = () => {
+      automaticDesktopRef.current = desktop.matches;
+      if (!desktop.matches) automaticCompositionRef.current?.pause();
+    };
+    const pauseWhenHidden = () => {
+      if (document.hidden) automaticCompositionRef.current?.pause();
+    };
+    updateDesktop();
+    desktop.addEventListener("change", updateDesktop);
+    document.addEventListener("visibilitychange", pauseWhenHidden);
+    return () => {
+      desktop.removeEventListener("change", updateDesktop);
+      document.removeEventListener("visibilitychange", pauseWhenHidden);
+      automaticCompositionRef.current?.stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    automaticSuspendedRef.current = previewKind !== null || microphonePromptOpen;
+    if (automaticSuspendedRef.current) automaticCompositionRef.current?.pause();
+  }, [previewKind, microphonePromptOpen]);
+
+  useEffect(() => {
+    automaticNoteRef.current = (now, midi, velocity) => {
+      if (!automaticDesktopRef.current || automaticSuspendedRef.current || document.hidden) return;
+      const style = ART_STYLE_SLOTS.findIndex((slot) => slot.id === artStyleRef.current);
+      const decision = automaticCompositionRef.current?.note(now, midi, velocity, style, telemetryRef.current);
+      if (!decision) return;
+      // Audio callbacks can run outside React events. Commit both indicators
+      // before the next graphic is rendered, using the same state as manual input.
+      // This runs only on a composition change, never on every audio frame.
+      flushSync(() => {
+        if (decision.reset) {
+          clearCanvasArtwork();
+          indicateCanvasReset();
+        }
+        if (decision.style !== style) selectArtStyleByIndex(decision.style, true);
+        if (decision.overlay !== telemetryRef.current) {
+          telemetryRef.current = decision.overlay;
+          setTelemetry(decision.overlay);
+        }
+      });
+    };
+    return () => { automaticNoteRef.current = null; };
+  }, [clearCanvasArtwork, indicateCanvasReset, selectArtStyleByIndex]);
 
   const enterFullscreenView = useCallback(() => {
     if (layerCount === 0 || exportState !== "idle") return;
@@ -5780,15 +5875,16 @@ export function AuraToy() {
 
       if (microphonePromptOpen) return;
 
-      if (event.key === "?" && window.matchMedia("(min-width: 1101px)").matches) {
+      if (event.shiftKey && key === "a") {
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])")) return;
+        if (automaticDesktopRef.current) run(toggleAutomaticComposition);
+      } else if (event.key === "?" && window.matchMedia("(min-width: 1101px)").matches) {
         run(() => setShortcutGuideVersion((current) => current + 1));
       } else if (key === "r") {
         run(resetAura);
       } else if (event.key === "T") {
-        run(() => {
-          setTelemetry((current) => !current);
-          hapticFeedback("confirm");
-        });
+        run(toggleTelemetry);
       } else if (/^[1-4]$/.test(key)) {
         run(() => selectArtStyleByIndex(Number(key) - 1));
       } else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
@@ -5833,6 +5929,8 @@ export function AuraToy() {
     systemAudioState,
     toggleMicrophone,
     toggleSystemAudio,
+    toggleAutomaticComposition,
+    toggleTelemetry,
   ]);
 
   const activeSoundMode = SOUND_MODES.find(({ id }) => id === soundMode) ?? SOUND_MODES[0];
@@ -6082,10 +6180,7 @@ export function AuraToy() {
                   role="switch"
                   aria-checked={telemetry}
                   title="Toggle TouchDesigner overlay"
-                  onClick={() => {
-                    setTelemetry((current) => !current);
-                    hapticFeedback("confirm");
-                  }}
+                  onClick={toggleTelemetry}
                 />
               </div>
               <div id="art-style-grid" className="art-style-grid" role="group" aria-label="Art styles">

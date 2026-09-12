@@ -159,3 +159,17 @@ test('reused caller arrays admit new notes immediately and stationary panels ski
   renderer.drawTelemetryOverlay(harness().context,nodes,800,600,700);
   assert.ok(renderer.inspect().states.every(state=>state.width===800&&state.height===600));
 });
+
+
+test('a fresh canvas discards old tracking frames before the first new note',()=>{
+  const {renderer,draw}=harness();
+  draw([node(1,0),node(2,100),node(3,200)],1000);
+  assert.equal(renderer.inspect().states.length,3);
+  renderer.resetTelemetryRenderer();
+  assert.equal(renderer.inspect().states.length,0);
+  assert.equal(renderer.inspect().keys,0);
+  assert.equal(renderer.telemetryNextFrameAt(1000),Infinity);
+  draw([node(1,1100)],1100);
+  assert.equal(renderer.inspect().states.length,1);
+  assert.equal(renderer.inspect().states[0].from.node.createdAt,1100);
+});
