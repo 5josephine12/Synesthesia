@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import VercelAnalytics from "./VercelAnalytics";
 
 const description = "What does sound look like? Inspired by synesthesia, this work turns live audio into an ever-changing visual experience. Play the piano, make a sound, or let the piece listen to music! Each sound leaves a different visual impression, creating a space where listening becomes a way of seeing. DJ the visuals <3";
 
@@ -8,8 +9,11 @@ export const metadata: Metadata = {
   title: "Synesthesia",
   description,
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: [
+      { url: "/favicon.ico?v=rainbow-1", sizes: "16x16 32x32 48x48", type: "image/x-icon" },
+      { url: "/favicon.svg?v=rainbow-1", sizes: "any", type: "image/svg+xml" },
+    ],
+    shortcut: "/favicon.ico?v=rainbow-1",
   },
   openGraph: {
     title: "Synesthesia",
@@ -43,6 +47,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         {children}
+        <VercelAnalytics />
       </body>
     </html>
   );

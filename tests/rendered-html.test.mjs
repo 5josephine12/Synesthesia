@@ -44,6 +44,9 @@ test("server-renders the Synesthesia shell", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Synesthesia<\/title>/i);
+  assert.match(html, /href="\/assets\/VercelAnalytics-[^"/]+\.js"/);
+  assert.match(html, /rel="icon"[^>]*href="(?:https:\/\/synesthesia\.josephines\.world)?\/favicon\.ico\?v=rainbow-1"/);
+  assert.match(html, /rel="icon"[^>]*href="(?:https:\/\/synesthesia\.josephines\.world)?\/favicon\.svg\?v=rainbow-1"/);
   assert.match(
     html,
     /What does sound look like\? Inspired by synesthesia, this work turns live audio into an ever-changing visual experience\./,
@@ -332,7 +335,7 @@ test("keeps every shipped client asset inside a kilobyte budget", async () => {
   assert.match(auraSource, /await import\("\.\/audio-engine"\)/);
   assert.match(auraSource, /await import\("gifenc"\)/);
   assert.match(auraSource, /const pitchDetectorModule = import\("pitchy"\)/);
-  assert.doesNotMatch(layoutSource, /VercelAnalytics|@fontsource\/inter\/400\.css/);
+  assert.doesNotMatch(layoutSource, /@fontsource\/inter\/400\.css/);
   assert.match(styles, /inter-latin-400-normal\.woff2/);
   assert.doesNotMatch(styles, /\.woff["')]/);
 });
